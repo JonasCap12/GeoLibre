@@ -1,0 +1,75 @@
+# Cloudflare header rules for the web build (Workers Static Assets; the same
+# file format Pages uses).
+#
+# Cloudflare has no server config, so the policies docker/nginx.conf applies to
+# this same build are restated here. Read that file alongside this one before
+# editing.
+#
+# Only headers live here. The SPA fallback is not a _redirects rule but
+# `not_found_handling: "single-page-application"` in workers/web/wrangler.jsonc,
+# which is the native mechanism for an assets Worker.
+#
+# Two deliberate differences from nginx.conf — not drift:
+#
+# 1. connect-src drops http://localhost:*, http://127.0.0.1:* and their ws://
+#    forms. nginx.conf and the Dockerfile both warn that those allowances exist
+#    for the local/single-user Docker image: in a browser "localhost" is the
+#    visitor's machine, so on a public host they let the served JS probe each
+#    visitor's own loopback. Pages is public.
+# 2. The __GEOLIBRE_*__ placeholders that entrypoint.sh substitutes at container
+#    boot are resolved to literals here. As written that means no Clerk and no
+#    Auth0 sign-in gate; enabling either also means adding its origins to
+#    script-src/frame-src below by hand.
+#
+# wss://collab.geolibre.app matches nginx.conf's base policy (the hosted relay).
+# A self-hosted relay needs its own origin added to connect-src: the directive
+# carries a bare `https:` but no bare `wss:`, so without that entry the app
+# advertises collaboration in the UI and the browser then blocks its WebSocket
+# with no other symptom.
+#
+# Note on Cache-Control below: the immutable rule is scoped to the /assets/
+# directory, not to file extensions the way nginx.conf's regex location is. That
+# is what keeps /sw.js, /plugins/* and index.html on the revalidating default
+# without needing their own rules. Do not broaden it to extensions — pinning
+# /sw.js for a year strands a stale service worker and the autoUpdate flow can
+# never pick up a redeploy.
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cache-Control: no-cache, must-revalidate
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https: data: blob: wss://collab.geolibre.app; img-src 'self' data: blob: https:; media-src 'self' blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://js.arcgis.com/; script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/pyodide/ https://js.arcgis.com/ https://accounts.google.com https://api.mapbox.com/mapbox-gl-js/; child-src 'self' https://accounts.google.com https://www.google.com; frame-src 'self' https://accounts.google.com https://www.google.com; worker-src blob: 'self'
+
+# Vite content-hashes every file it emits here, so a redeploy mints new
+# filenames and these are safe to pin.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The self-hosted JupyterLite site behind the Notebook panel is a separate app
+# in an iframe and needs its own policy: JupyterLab bootstraps from an inline
+# <script>, and under the app policy above the site loads its HTML and then
+# never boots (no shell, no launcher, one CSP violation and no other symptom).
+# Scoped to this prefix so the app itself keeps forbidding inline script.
+# Nothing here needs the Google or ArcGIS origins, so they are left out.
+#
+# Unlike nginx.conf, this does not split the prefix into immutable hashed assets
+# and revalidating stable ones — _headers cannot match a content hash. Every
+# file under the prefix revalidates instead: it costs conditional requests on a
+# Notebook panel open (the edge cache still serves them), and it can never
+# strand a stale JupyterLite service worker, which is the failure worth avoiding.
+/jupyterlite/*
+  Cache-Control: no-cache, must-revalidate
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https: data: blob:; img-src 'self' data: blob: https:; media-src 'self' blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' blob: 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/pyodide/ https://api.mapbox.com/mapbox-gl-js/; worker-src blob: 'self'
+
+# Deployment configuration, read at load before the bundle. Workbox already
+# excludes it from the precache; keep it off the HTTP cache too so a
+# configuration change never needs a rebuild to take effect.
+/geolibre-runtime-config.js
+  Cache-Control: no-store
+
+# nginx's default mime.types has no .webmanifest entry, so nginx.conf sets this
+# by hand. Set it here too rather than relying on Pages' type inference.
+/manifest.webmanifest
+  Content-Type: application/manifest+json

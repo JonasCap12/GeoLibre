@@ -1,0 +1,51 @@
+{
+  // Static-assets Worker that serves the GeoLibre web build.
+  //
+  // Deliberately an assets-only Worker: no "main", so no Worker script runs and
+  // no CPU is billed per request -- the asset server answers directly. Add a
+  // "main" only when server logic actually has to live same-origin with the app
+  // (the /ai proxy is the likely first case; see docker/entrypoint.sh for what
+  // nginx does there, and note the instance token must stay server-side).
+  //
+  // No package.json beside this file, on purpose. The root package.json globs
+  // "workers/*" as npm workspaces, so adding one would make this a workspace
+  // member and put a new entry in package-lock.json -- an upstream-tracked file,
+  // whose modification would break the fast-forward sync of this fork. Wrangler
+  // does not need the directory to be an npm package, and the wrangler binary is
+  // hoisted to the root node_modules by the other workers' devDependencies.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "geolibre-web",
+  "compatibility_date": "2026-07-26",
+
+  // Built by `npm run lite:build`, NOT `npm run build`. The default build emits
+  // duckdb-mvp.wasm (~40 MB) and duckdb-eh.wasm (~35 MB), the only two assets
+  // over Cloudflare's 25 MiB per-file ceiling, and Cloudflare rejects the upload
+  // outright rather than degrading. See scripts/lite-build.mjs, which also
+  // asserts on the way out that nothing else crossed the ceiling.
+  "assets": {
+    "directory": "../../apps/geolibre-desktop/dist",
+
+    // Replaces `try_files $uri /index.html` from docker/nginx.conf. The asset
+    // server resolves a real file first and only falls back for paths that match
+    // nothing, so this is the native equivalent of a `/* /index.html 200` rule
+    // without a _redirects file.
+    //
+    // nginx additionally refuses the fallback under /jupyterlite/ and /plugins/
+    // (`=404`), because answering a missing /jupyterlite/lab/index.html with the
+    // app is what made the Notebook panel render a second copy of GeoLibre
+    // instead of a notebook (GeoLibre#1851). That exclusion cannot be expressed
+    // here, so the deploy workflow asserts the JupyterLite site exists before
+    // uploading -- a broken build fails the deploy instead of shipping the bug.
+    "not_found_handling": "single-page-application"
+  }
+
+  // No "routes": this deploys to geolibre-web.<subdomain>.workers.dev. To bind a
+  // custom domain, add the block below and point the zone at this Cloudflare
+  // account, the way workers/tiles and workers/collab already do:
+  //
+  //   "routes": [{ "pattern": "map.example.com", "custom_domain": true }]
+  //
+  // Remember that a new app origin also belongs in the ALLOWED_ORIGINS var of
+  // workers/ai-proxy/wrangler.jsonc, and in GEOLIBRE_CORS_ORIGINS on the
+  // projects API, or those two will refuse requests from it.
+}
