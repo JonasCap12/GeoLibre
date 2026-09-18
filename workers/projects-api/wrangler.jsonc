@@ -1,0 +1,101 @@
+{
+  // GeoLibre projects and identity API on Workers.
+  //
+  // A port of backend/geolibre_server_api (FastAPI + SQLAlchemy + boto3) to the
+  // Workers runtime: D1 replaces the SQL database and R2 replaces filesystem/S3
+  // object storage. The HTTP contract is docs/server-api.md, which is
+  // implementation-independent by design ("A compatible server may use any
+  // implementation or storage engine"); that document, not the Python module, is
+  // the authority for behaviour.
+  //
+  // Object keys are unchanged from the Python implementation
+  // (projects/<id>/versions/<n>.json, projects/<id>/thumbnail), so an existing
+  // S3 bucket can be copied into R2 as-is. Password hashes are unchanged too
+  // (scrypt, same parameters and same `scrypt$salt$digest` encoding), so an
+  // imported accounts table keeps working and nobody has to reset a password.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "geolibre-projects-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-26",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "geolibre-projects",
+      "database_id": "da951668-c6b3-47f3-bde0-a88bfec4b516"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "OBJECTS",
+      // Replace with the name used by `wrangler r2 bucket create …`.
+      "bucket_name": "geolibre-projects"
+    }
+  ],
+
+  "vars": {
+    // Externally reachable origin of THIS API. It is what rawJsonUrl and
+    // projectUrl are built from, so a wrong value ships broken links in every
+    // project response.
+    "GEOLIBRE_PUBLIC_URL": "https://geolibre-projects-api.jonasnguyen886.workers.dev",
+    // Where GET /{username}/{slug} redirects, and the base of viewerUrl. Points
+    // at the workers/web deployment (same account subdomain, different Worker
+    // name) — update this if a custom domain is bound to either Worker later.
+    "GEOLIBRE_VIEWER_URL": "https://geolibre-web.jonasnguyen886.workers.dev",
+    // Comma-separated browser origins allowed to call this API. Unlike the
+    // Python default of "*", this has no wildcard default: the app and the API
+    // are on different hostnames here, so an operator has to name the app
+    // origin anyway, and a deployment that forgets should fail visibly in the
+    // browser rather than quietly accept every origin on the internet.
+    "GEOLIBRE_CORS_ORIGINS": "https://geolibre-web.jonasnguyen886.workers.dev",
+    "GEOLIBRE_MAX_PROJECT_BYTES": "52428800",
+    "GEOLIBRE_MAX_THUMBNAIL_BYTES": "5242880",
+    "GEOLIBRE_ACTIVITY_RETENTION_DAYS": "90"
+  },
+
+  // docs/server-api.md lists rate limiting as something "the reference server
+  // leaves to the operator", and names the two routes that need it: both are
+  // unauthenticated and both run scrypt on every call, so without a limiter they
+  // allow password brute-forcing, username enumeration through the 409/401
+  // distinction, and a cheap CPU burn. Unlike the Python deployment, which needs
+  // a reverse proxy or WAF for this, the platform offers it directly — so it is
+  // configured here and enforced in src/index.ts.
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      // Unlike D1/R2, a rate-limit namespace id is not a resource you create in
+      // advance — it is an arbitrary string you pick yourself to scope the
+      // binding, the same way workers/ai-proxy picked "54701". Any value works
+      // as long as it doesn't collide with another ratelimits binding in this
+      // account; there is no `wrangler` command that allocates or registers one.
+      "namespace_id": "54702",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
+
+  // scrypt at n=2^14 costs roughly 100-200 ms of CPU per call in WASM/JS, and
+  // POST /api/accounts and POST /api/auth/token each pay for exactly one. The
+  // 10 ms free-tier ceiling cannot fit that, so this Worker requires a paid
+  // plan; the sibling workers/tiles has the same requirement for its
+  // reprojection path.
+  "limits": {
+    "cpu_ms": 1000
+  },
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
+  }
+
+  // No "routes": deploys to geolibre-projects-api.<subdomain>.workers.dev. Bind a
+  // custom domain the way workers/tiles and workers/collab do, and set
+  // GEOLIBRE_PUBLIC_URL above to the same hostname:
+  //
+  //   "routes": [{ "pattern": "projects.example.com", "custom_domain": true }]
+}

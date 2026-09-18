@@ -1,0 +1,50 @@
+name: Deploy projects API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/projects-api/**"
+      - ".github/workflows/deploy-projects-api.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-projects-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy projects and identity API to Cloudflare Workers
+    runs-on: ubuntu-latest
+    # workflow_dispatch can target any branch; only ever deploy main to
+    # production so a manual run cannot publish unmerged code.
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # This worker has a real runtime dependency (scrypt-js) that wrangler must
+      # bundle, so the workspace deps have to be installed before deploy, the
+      # way deploy-tiles.yml does for upng-js.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck -w geolibre-projects-api-worker
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/projects-api

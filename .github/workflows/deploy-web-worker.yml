@@ -1,0 +1,128 @@
+name: Deploy web app to Cloudflare Workers
+
+# Publishes the browser app as a static-assets Worker (workers/web).
+#
+# Built here rather than in Cloudflare's own build environment: the build needs
+# Node 22 and Python 3.12 (geolibre-desktop's prebuild hook runs
+# scripts/build-jupyterlite.mjs) plus an `npm ci` over the whole monorepo, and
+# Cloudflare uploads a prebuilt directory just as happily. Same shape as
+# deploy-tiles.yml, which deploys the sibling workers.
+#
+# Uses `npm run lite:build`, NOT `npm run build`. The default build emits
+# duckdb-mvp.wasm (~40 MB) and duckdb-eh.wasm (~35 MB), the only two assets over
+# Cloudflare's 25 MiB per-file ceiling, and Cloudflare rejects such an upload
+# outright rather than degrading. lite:build resolves DuckDB-WASM from jsDelivr
+# instead of emitting it (~251 MB -> ~176 MB of output) and asserts on the way
+# out that nothing else crossed the ceiling. See scripts/lite-build.mjs.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Ref to build and publish (branch, tag, or SHA)
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Python for the JupyterLite build
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/geolibre-desktop/jupyterlite/requirements.txt
+
+      - name: Install JupyterLite build dependencies
+        run: python -m pip install -r apps/geolibre-desktop/jupyterlite/requirements.txt
+
+      - name: Install frontend dependencies
+        # Also what puts the hoisted `wrangler` binary in the root node_modules
+        # that the deploy step below runs; workers/web has no package.json of its
+        # own (see the comment in its wrangler.jsonc).
+        run: npm ci
+
+      - name: Build the web app for a size-capped host
+        run: npm run lite:build
+        env:
+          # Served from the root of its own hostname, so no GEOLIBRE_APP_BASE.
+          #
+          # Runtime configuration is baked in at build time: Cloudflare has no
+          # container boot step, so docker/entrypoint.sh — which rewrites
+          # geolibre-runtime-config.js from GEOLIBRE_* variables on every start —
+          # has no equivalent here. Changing any of these means rerunning this
+          # workflow. Unset values leave the corresponding feature off, exactly
+          # as an unset ARG does in the Dockerfile.
+          VITE_GEOLIBRE_COLLAB_URL: ${{ vars.VITE_GEOLIBRE_COLLAB_URL }}
+          VITE_GEOLIBRE_SHARE_URL: ${{ vars.VITE_GEOLIBRE_SHARE_URL }}
+          VITE_GEOLIBRE_EMBED_ORIGINS: ${{ vars.VITE_GEOLIBRE_EMBED_ORIGINS }}
+          VITE_GEOLIBRE_CAPABILITIES: ${{ vars.VITE_GEOLIBRE_CAPABILITIES }}
+          VITE_GEE_OAUTH_CLIENT_ID: ${{ secrets.VITE_GEE_OAUTH_CLIENT_ID }}
+          VITE_MAPILLARY_ACCESS_TOKEN: ${{ secrets.VITE_MAPILLARY_ACCESS_TOKEN }}
+          VITE_CESIUM_TOKEN: ${{ secrets.VITE_CESIUM_TOKEN }}
+          VITE_PROTOMAPS_API_KEY: ${{ secrets.VITE_PROTOMAPS_API_KEY }}
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          # The JupyterLite site is generated, not committed. Without this the
+          # build script warns and exits 0, and the SPA fallback then answers the
+          # Notebook panel's iframe with index.html — the panel renders a second
+          # copy of GeoLibre instead of a notebook (GeoLibre#1851).
+          GEOLIBRE_JUPYTERLITE_REQUIRED: "1"
+
+      - name: Check the build against Cloudflare's asset limits
+        working-directory: apps/geolibre-desktop/dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f index.html
+          # wrangler.jsonc's not_found_handling cannot express nginx.conf's
+          # `=404` under /jupyterlite/, so this is where a missing notebook site
+          # has to fail the deploy rather than ship GeoLibre#1851.
+          test -f jupyterlite/lab/index.html
+          # Vite copies apps/geolibre-desktop/public/ to the output root; without
+          # this the app would be served with no CSP and no cache policy at all.
+          test -f _headers
+          # Cloudflare caps a single deployment at 20,000 assets. The JupyterLite
+          # site alone is a few hundred files, so report the number rather than
+          # discovering it at upload time.
+          files=$(find . -type f | wc -l)
+          echo "Assets in deployment: ${files}"
+          if [ "$files" -gt 20000 ]; then
+            echo "::error::${files} files exceeds Cloudflare's 20,000-asset limit per deployment."
+            exit 1
+          fi
+          # The 25 MiB per-file ceiling is already asserted by
+          # scripts/lite-build.mjs, which fails the build above rather than
+          # letting the upload fail. Reported here for the deploy log.
+          echo "Largest assets:"
+          find . -type f -printf '%s\t%p\n' | sort -rn | head -5 |
+            awk -F'\t' '{ printf "  %.1f MiB  %s\n", $1/1048576, $2 }'
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/web
