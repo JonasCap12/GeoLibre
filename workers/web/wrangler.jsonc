@@ -15,6 +15,7 @@
   // hoisted to the root node_modules by the other workers' devDependencies.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "geolibre-web",
+  "main": "src/index.ts",
   "compatibility_date": "2026-07-26",
 
   // Built by `npm run lite:build`, NOT `npm run build`. The default build emits
@@ -36,7 +37,21 @@
     // instead of a notebook (GeoLibre#1851). That exclusion cannot be expressed
     // here, so the deploy workflow asserts the JupyterLite site exists before
     // uploading -- a broken build fails the deploy instead of shipping the bug.
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+
+    // src/index.ts needs this binding to fetch the asset it then re-headers.
+    "binding": "ASSETS",
+
+    // The ONLY paths that invoke the Worker script. Everything else is answered
+    // by the asset server directly, with no Worker invocation and no CPU billed,
+    // so the app keeps the serving profile of an assets-only Worker.
+    //
+    // This prefix has to go through code because _headers appends overlapping
+    // rules instead of letting the specific one win, and an appended CSP is
+    // enforced as a second policy rather than a replacement -- which left
+    // JupyterLab's inline bootstrap blocked by the app policy. See
+    // src/index.ts for the full explanation.
+    "run_worker_first": ["/jupyterlite/*"]
   }
 
   // No "routes": this deploys to geolibre-web.<subdomain>.workers.dev. To bind a
