@@ -117,8 +117,12 @@ jobs:
           # scripts/lite-build.mjs, which fails the build above rather than
           # letting the upload fail. Reported here for the deploy log.
           echo "Largest assets:"
-          find . -type f -printf '%s\t%p\n' | sort -rn | head -5 |
-            awk -F'\t' '{ printf "  %.1f MiB  %s\n", $1/1048576, $2 }'
+          # awk does the truncating rather than `head -5`: head exits after five
+          # lines, sort then dies of SIGPIPE, and under `pipefail` that failed
+          # the whole step even though the build was fine. awk reads the stream
+          # to the end, so nothing upstream of it ever sees a closed pipe.
+          find . -type f -printf '%s\t%p\n' | sort -rn |
+            awk -F'\t' 'NR <= 5 { printf "  %.1f MiB  %s\n", $1/1048576, $2 }'
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
