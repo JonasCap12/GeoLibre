@@ -19,14 +19,6 @@ concurrency:
 jobs:
   build:
     name: Build website and demo
-    # This workflow publishes to GitHub Pages, which this fork does not use —
-    # deployment here goes to Cloudflare instead (see deploy-web-worker.yml and
-    # deploy-projects-api.yml). Unlike web-deploy.yml, upstream ships this
-    # workflow with no repository guard, so it fires on every fork's push to
-    # main. Scoped the same way web-deploy.yml scopes itself, so a future
-    # `git merge --ff-only upstream/main` only has to re-apply this one line if
-    # upstream ever touches this job.
-    if: github.repository == 'opengeos/GeoLibre'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
