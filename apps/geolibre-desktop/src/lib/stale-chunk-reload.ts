@@ -20,7 +20,13 @@ import { useAppStore } from "@geolibre/core";
 import { appendDiagnostic, getDiagnosticsSnapshot } from "./diagnostics";
 import { isTauri } from "./is-tauri";
 
-const DEFERRED_RELOAD_MESSAGE =
+/**
+ * Shown when a chunk failed and the reload was withheld to protect unsaved
+ * work. Exported so {@link import("./lazy-module").loadLazyModule} reports the
+ * same wording when it catches the other half of that deferral: an `import()`
+ * that resolves to `undefined` because this module cancelled the event.
+ */
+export const DEFERRED_RELOAD_MESSAGE =
   "A component could not be loaded because the app was updated. Save your project, then reload the page to finish loading it.";
 const STALE_CHUNK_DIAGNOSTIC_SOURCE = "stale-chunk-reload";
 

@@ -20,6 +20,7 @@ import {
   serviceRequestErrorMessage,
 } from "../helpers";
 import { AddDataSourceForm, useAddDataSource } from "../shared";
+import { loadLazyModule } from "../../../../lib/lazy-module";
 
 /** Download budget for a whole KML/KMZ document (matches the vector loader's). */
 const KML_DOWNLOAD_TIMEOUT_SECS = 180;
@@ -43,7 +44,7 @@ async function fetchKmlImportFile(url: string, t: TFunction): Promise<File> {
   let bytes: Uint8Array;
   if (isTauri()) {
     try {
-      const { fetchUrlBytes } = await import("../../../../lib/native-http");
+      const { fetchUrlBytes } = await loadLazyModule(() => import("../../../../lib/native-http"));
       // The native default timeout suits a tile; a whole document (possibly
       // with embedded overlay imagery) needs the vector-download budget.
       const raw = await fetchUrlBytes(url, {

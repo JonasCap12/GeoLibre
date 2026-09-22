@@ -44,6 +44,7 @@ import {
   type ServiceFields,
   type ServiceLibraryEntry,
 } from "./service-library";
+import { loadLazyModule } from "../../../lib/lazy-module";
 
 /**
  * Parses a tile-size field, falling back to the MapLibre default of 256 for a
@@ -466,7 +467,7 @@ export async function applyServiceEntry(
       if (!request.url.trim()) throw new Error("This service has no tile URL.");
       // xyz-url imports maplibre-gl at module load, so import it lazily to keep
       // this module's pure exports usable outside the browser (unit tests).
-      const xyzUrl = await import("../../../lib/xyz-url");
+      const xyzUrl = await loadLazyModule(() => import("../../../lib/xyz-url"));
       if (request.shortUrl) xyzUrl.registerXyzTileProtocol();
       const tileUrl = await xyzUrl.resolveXyzTileUrlTemplate(request.url);
       addLayer(
@@ -492,7 +493,9 @@ export async function applyServiceEntry(
       if (isTauri() && !isHttpWmsUrl(params.endpoint)) {
         throw new Error("The desktop app needs an absolute http(s) WMS endpoint.");
       }
-      const { routeWmsLayerThroughNativeProtocol } = await import("../../../lib/xyz-url");
+      const { routeWmsLayerThroughNativeProtocol } = await loadLazyModule(
+        () => import("../../../lib/xyz-url"),
+      );
       addLayer(routeWmsLayerThroughNativeProtocol(buildWmsLayer(params)), beforeLayerId);
       return;
     }
@@ -504,8 +507,8 @@ export async function applyServiceEntry(
     }
     case "arcgis": {
       const options = arcgisFieldsToOptions(entry);
-      const { createAppAPI } = await import("../../../hooks/usePlugins");
-      const { addArcGISLayer } = await import("@geolibre/plugins");
+      const { createAppAPI } = await loadLazyModule(() => import("../../../hooks/usePlugins"));
+      const { addArcGISLayer } = await loadLazyModule(() => import("@geolibre/plugins"));
       await addArcGISLayer(createAppAPI(mapControllerRef), {
         beforeLayerId,
         itemId: options.itemId,
@@ -536,7 +539,7 @@ export async function applyServiceEntry(
       if (request.maxFeatures && !Number.isFinite(Number(request.maxFeatures))) {
         throw new Error("This service's max features value is not numeric.");
       }
-      const { fetchWfsGeoJson } = await import("../../../lib/layer-refresh");
+      const { fetchWfsGeoJson } = await loadLazyModule(() => import("../../../lib/layer-refresh"));
       const { data, url, outputFormat } = await fetchWfsGeoJson(
         {
           endpoint: request.endpoint,

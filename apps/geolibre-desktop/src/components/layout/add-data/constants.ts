@@ -178,6 +178,45 @@ export const LAST_GEODATABASE_STORAGE_KEY = "geolibre.lastGeodatabase";
 // columns may be in any CRS). The labels are CRS proper names and stay
 // untranslated; selecting one fills the free-text EPSG field, which remains the
 // source of truth.
+/**
+ * VN-2000, the Vietnamese national system, ordered by central meridian.
+ *
+ * Kept as its own list rather than mixed into {@link COMMON_CRS_PRESETS} so the
+ * upstream set stays a clean block to merge, and so the reason for these is
+ * visible: CAD drawings carry no CRS, and Vietnamese survey drawings are drawn
+ * on a TM-3 grid whose central meridian is chosen **per province**. Picking the
+ * wrong meridian lands the drawing a few hundred metres off rather than failing,
+ * so guessing is worse than choosing from a list.
+ *
+ * Every code here was checked against the PROJ inside the app's own DuckDB
+ * spatial extension (`ST_Transform` round-trip), not just the EPSG registry:
+ * the 9xxx block is a recent EPSG addition and a preset that the renderer then
+ * refuses would be worse than no preset. All share k=0.9999, x_0=500000.
+ */
+export const VN2000_CRS_PRESETS: readonly { label: string; value: string }[] = [
+  { label: "VN-2000 / TM-3 102°00′ (EPSG:5896)", value: "EPSG:5896" },
+  { label: "VN-2000 / TM-3 103°00′ (EPSG:9205)", value: "EPSG:9205" },
+  { label: "VN-2000 / TM-3 104°00′ (EPSG:9206)", value: "EPSG:9206" },
+  { label: "VN-2000 / TM-3 104°30′ (EPSG:9207)", value: "EPSG:9207" },
+  { label: "VN-2000 / TM-3 104°45′ (EPSG:9208)", value: "EPSG:9208" },
+  { label: "VN-2000 / TM-3 105°00′ (EPSG:5897)", value: "EPSG:5897" },
+  { label: "VN-2000 / TM-3 105°30′ (EPSG:9209)", value: "EPSG:9209" },
+  { label: "VN-2000 / TM-3 105°45′ (EPSG:9210)", value: "EPSG:9210" },
+  { label: "VN-2000 / TM-3 106°00′ (EPSG:9211)", value: "EPSG:9211" },
+  { label: "VN-2000 / TM-3 106°15′ (EPSG:9212)", value: "EPSG:9212" },
+  { label: "VN-2000 / TM-3 106°30′ (EPSG:9213)", value: "EPSG:9213" },
+  { label: "VN-2000 / TM-3 107°00′ (EPSG:9214)", value: "EPSG:9214" },
+  { label: "VN-2000 / TM-3 107°15′ (EPSG:9215)", value: "EPSG:9215" },
+  { label: "VN-2000 / TM-3 107°30′ (EPSG:9216)", value: "EPSG:9216" },
+  { label: "VN-2000 / TM-3 107°45′ (EPSG:5899)", value: "EPSG:5899" },
+  { label: "VN-2000 / TM-3 108°00′ (EPSG:5898)", value: "EPSG:5898" },
+  { label: "VN-2000 / TM-3 108°15′ (EPSG:9217)", value: "EPSG:9217" },
+  { label: "VN-2000 / TM-3 108°30′ (EPSG:9218)", value: "EPSG:9218" },
+  { label: "VN-2000 / UTM zone 48N (EPSG:3405)", value: "EPSG:3405" },
+  { label: "VN-2000 / UTM zone 49N (EPSG:3406)", value: "EPSG:3406" },
+  { label: "VN-2000 geographic (EPSG:4756)", value: "EPSG:4756" },
+];
+
 export const COMMON_CRS_PRESETS: readonly { label: string; value: string }[] = [
   { label: "WGS 84 (EPSG:4326)", value: "EPSG:4326" },
   { label: "Web Mercator (EPSG:3857)", value: "EPSG:3857" },
@@ -186,6 +225,7 @@ export const COMMON_CRS_PRESETS: readonly { label: string; value: string }[] = [
   { label: "NAD83 / Conus Albers (EPSG:5070)", value: "EPSG:5070" },
   { label: "British National Grid (EPSG:27700)", value: "EPSG:27700" },
   { label: "ETRS89 / UTM zone 32N (EPSG:25832)", value: "EPSG:25832" },
+  ...VN2000_CRS_PRESETS,
 ];
 
 // Sample CAD drawings offered in the Add CAD Layer dialog's "Load sample data"
