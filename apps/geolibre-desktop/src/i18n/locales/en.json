@@ -647,6 +647,8 @@
       "layerPlaceholder": "Choose a CAD file first",
       "readingLayers": "Reading layers...",
       "layerOption": "{{name}} ({{type}}, {{count}} features)",
+      "allLayersOption": "All layers ({{count}} features)",
+      "fallbackNotice": "This drawing could not be read by the built-in CAD engine, so it was read directly. Pick a single CAD layer if the whole drawing is slow to load.",
       "crs": "Source CRS",
       "crsPlaceholder": "e.g. EPSG:26915",
       "crsPresetLabel": "Common coordinate systems...",
