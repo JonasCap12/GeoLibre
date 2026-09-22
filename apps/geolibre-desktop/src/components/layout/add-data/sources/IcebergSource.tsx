@@ -22,6 +22,7 @@ import {
 } from "../../../../lib/iceberg";
 import { createBaseLayer, errorMessage } from "../helpers";
 import { AddDataSourceForm, useAddDataSource } from "../shared";
+import { loadLazyModule } from "../../../../lib/lazy-module";
 
 /**
  * A connection the table list was fetched with. Held as a snapshot so the submit
@@ -176,7 +177,9 @@ export function IcebergSource() {
   ) => {
     if (connection.mode === "catalog" && !table) return;
     setStatus(t("addData.iceberg.statusInspecting"));
-    const { inspectIcebergTable } = await import("../../../../lib/iceberg-loader");
+    const { inspectIcebergTable } = await loadLazyModule(
+      () => import("../../../../lib/iceberg-loader"),
+    );
     const info = await inspectIcebergTable({
       mode: connection.mode,
       location: connection.location,
@@ -266,7 +269,9 @@ export function IcebergSource() {
         endpoint: mode === "catalog" ? normalizedEndpoint : "",
       };
       setStatus(t("addData.iceberg.statusConnecting"));
-      const { listIcebergTables } = await import("../../../../lib/iceberg-loader");
+      const { listIcebergTables } = await loadLazyModule(
+        () => import("../../../../lib/iceberg-loader"),
+      );
       const listed = await listIcebergTables({
         mode: connection.mode,
         location: connection.location,
@@ -334,7 +339,9 @@ export function IcebergSource() {
     if (!config) {
       throw new Error(t("addData.iceberg.errorConnectFirst"));
     }
-    const { loadIcebergTable } = await import("../../../../lib/iceberg-loader");
+    const { loadIcebergTable } = await loadLazyModule(
+      () => import("../../../../lib/iceberg-loader"),
+    );
     const result = await loadIcebergTable(config);
     const name = source.layerName.trim() || selectedTable?.name || t("addData.iceberg.defaultName");
     const layer = {

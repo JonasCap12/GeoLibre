@@ -18,6 +18,7 @@ import {
 import type { FeatureCollection } from "geojson";
 import type { TFunction } from "i18next";
 import { classifyFetchFailure } from "../../../lib/fetch-error";
+import { loadLazyModule } from "../../../lib/lazy-module";
 import { isTauri } from "../../../lib/is-tauri";
 import {
   DELIMITED_TEXT_DELIMITERS,
@@ -360,7 +361,7 @@ export async function fetchCapabilitiesText(
     // but race it against the caller's abort + a 30s cap so this call still
     // returns promptly (matching the browser fetch branch below) rather than
     // hanging on a slow host or a superseded request.
-    const { fetchUrlBytes } = await import("../../../lib/native-http");
+    const { fetchUrlBytes } = await loadLazyModule(() => import("../../../lib/native-http"));
     const timeout = AbortSignal.timeout(30_000);
     const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const bytesPromise = fetchUrlBytes(requestUrl, {
