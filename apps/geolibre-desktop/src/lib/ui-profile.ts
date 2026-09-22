@@ -79,6 +79,12 @@ export const DATA_SOURCE_CATALOG: readonly DataSourceCatalogEntry[] = [
     tier: "basic",
   },
   { id: "cad", section: "files", labelKey: "toolbar.item.cadLayer", tier: "intermediate" },
+  {
+    id: "shared-data",
+    section: "files",
+    labelKey: "toolbar.item.sharedData",
+    tier: "intermediate",
+  },
   { id: "gdb", section: "files", labelKey: "toolbar.item.gdbLayer", tier: "intermediate" },
   { id: "photos", section: "files", labelKey: "toolbar.layerType.photos", tier: "intermediate" },
   { id: "gpx", section: "files", labelKey: "toolbar.layerType.gpx", tier: "intermediate" },

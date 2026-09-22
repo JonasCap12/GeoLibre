@@ -30,6 +30,17 @@ import {
   type ProjectRow,
   type Visibility,
 } from "./model";
+import {
+  DATASET_SELECT,
+  datasetJson,
+  datasetKey,
+  datasetVisibility,
+  type DatasetRow,
+  ownedDataset,
+  safeContentType,
+  safeFilename,
+  visibleDataset,
+} from "./datasets";
 import { objectStorage, thumbnailKey, versionKey, type Objects } from "./storage";
 
 interface Env {
@@ -40,6 +51,7 @@ interface Env {
   GEOLIBRE_CORS_ORIGINS?: string;
   GEOLIBRE_MAX_PROJECT_BYTES?: string;
   GEOLIBRE_MAX_THUMBNAIL_BYTES?: string;
+  GEOLIBRE_MAX_DATASET_BYTES?: string;
   GEOLIBRE_ACTIVITY_RETENTION_DAYS?: string;
   AUTH_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
 }
@@ -58,6 +70,9 @@ function readConfig(env: Env): Config {
     viewerUrl: `${(env.GEOLIBRE_VIEWER_URL ?? "https://app.geolibre.org").replace(/\/+$/, "")}/`,
     maxProjectBytes: integer(env.GEOLIBRE_MAX_PROJECT_BYTES, 50 * 1024 * 1024),
     maxThumbnailBytes: integer(env.GEOLIBRE_MAX_THUMBNAIL_BYTES, 5 * 1024 * 1024),
+    // Cloudflare caps a Worker request body at 100 MiB, so a larger value here
+    // could never be reached; the default leaves room under that for headers.
+    maxDatasetBytes: integer(env.GEOLIBRE_MAX_DATASET_BYTES, 90 * 1024 * 1024),
     activityRetentionDays: integer(env.GEOLIBRE_ACTIVITY_RETENTION_DAYS, 90),
     corsOrigins: (env.GEOLIBRE_CORS_ORIGINS ?? "")
       .split(",")
@@ -846,6 +861,143 @@ async function apiRoute(
           .run();
         return empty(204);
       }
+    }
+  }
+
+  // --- Shared dataset library --------------------------------------------
+  //
+  // The source files behind a map, shared the way projects share the map
+  // itself. One person converts a drawing once and the rest of the team adds it
+  // as a layer, instead of each keeping a private copy in browser storage that
+  // nobody else can see. See schema-datasets.sql.
+  if (path.length === 1 && path[0] === "datasets") {
+    if (method === "GET") {
+      const account = await optionalAccount(request, db);
+      const limit = positiveInt(url, "limit", 50, 1, 200);
+      const offset = positiveInt(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
+      // Public rows, plus the caller's own private ones. Binding the account id
+      // (rather than branching the SQL) keeps one prepared statement for both
+      // the signed-in and anonymous cases.
+      const rows = await db
+        .prepare(
+          `${DATASET_SELECT}
+           WHERE d.visibility = 'public' OR d.owner_id = ?
+           ORDER BY d.created_at DESC
+           LIMIT ? OFFSET ?`,
+        )
+        .bind(account?.id ?? null, limit, offset)
+        .all<DatasetRow>();
+      return json({ datasets: (rows.results ?? []).map((row) => datasetJson(row, config)) });
+    }
+
+    if (method === "POST") {
+      const account = requireAccount(await optionalAccount(request, db));
+      await rateLimit(env, request, "datasets");
+
+      // Metadata rides in the query string so the body stays the raw file:
+      // multipart would force the whole upload into memory to be parsed, and
+      // base64 in JSON would inflate a 45 MB drawing past the body limit.
+      const filename = safeFilename(url.searchParams.get("filename") ?? "");
+      const name = (url.searchParams.get("name") ?? "").trim().slice(0, 200) || filename;
+      const description = (url.searchParams.get("description") ?? "").trim().slice(0, 2000);
+      const visibility = datasetVisibility(url.searchParams.get("visibility") ?? undefined);
+      const contentType = safeContentType(request.headers.get("Content-Type"));
+
+      const data = await readCapped(
+        request,
+        config.maxDatasetBytes,
+        () => new ApiError(413, `dataset exceeds the ${config.maxDatasetBytes} byte limit`),
+      );
+      if (data.byteLength === 0) throw new ApiError(422, "dataset is empty");
+
+      const id = crypto.randomUUID();
+      const key = datasetKey(id);
+      // R2 first: an orphaned object is recoverable and invisible, whereas a
+      // row whose bytes are missing is a listing entry that fails on download.
+      await objects.put(key, data, contentType);
+      const timestamp = now();
+      try {
+        await db
+          .prepare(
+            `INSERT INTO datasets
+               (id, owner_id, name, description, filename, content_type,
+                size_bytes, object_key, visibility, downloads, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+          )
+          .bind(
+            id,
+            account.id,
+            name,
+            description,
+            filename,
+            contentType,
+            data.byteLength,
+            key,
+            visibility,
+            timestamp,
+            timestamp,
+          )
+          .run();
+      } catch (error) {
+        await objects.delete(key);
+        throw error;
+      }
+
+      const row = await db
+        .prepare(`${DATASET_SELECT} WHERE d.id = ?`)
+        .bind(id)
+        .first<DatasetRow>();
+      return json({ dataset: datasetJson(visibleDataset(row, account.id), config) }, 201);
+    }
+  }
+
+  if (path.length >= 2 && path[0] === "datasets") {
+    const datasetId = path[1];
+    const load = async (): Promise<DatasetRow | null> =>
+      await db.prepare(`${DATASET_SELECT} WHERE d.id = ?`).bind(datasetId).first<DatasetRow>();
+
+    if (path.length === 2) {
+      if (method === "GET") {
+        const account = await optionalAccount(request, db);
+        return json({ dataset: datasetJson(visibleDataset(await load(), account?.id ?? null), config) });
+      }
+      if (method === "DELETE") {
+        const account = requireAccount(await optionalAccount(request, db));
+        const row = ownedDataset(await load(), account.id);
+        await db.prepare(`DELETE FROM datasets WHERE id = ?`).bind(row.id).run();
+        // After the row, so a failed object delete cannot leave a listing entry
+        // pointing at bytes that are already gone.
+        await objects.delete(row.object_key);
+        return empty(204);
+      }
+    }
+
+    if (path.length === 3 && path[2] === "content" && method === "GET") {
+      const account = await optionalAccount(request, db);
+      const row = visibleDataset(await load(), account?.id ?? null);
+      const body = await objects.get(row.object_key);
+      if (body === null) throw new ApiError(404, "dataset content not found");
+
+      // Awaited rather than backgrounded, matching how a project read counts a
+      // view: the handler has no ExecutionContext to hand work to, and one D1
+      // update is cheap next to streaming the object out of R2.
+      await db
+        .prepare(`UPDATE datasets SET downloads = downloads + 1 WHERE id = ?`)
+        .bind(row.id)
+        .run();
+
+      return new Response(body, {
+        headers: {
+          "Content-Type": row.content_type,
+          // `attachment` is deliberate: the API origin must never render an
+          // uploaded file as a document, whatever safeContentType let through.
+          "Content-Disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`,
+          "X-Content-Type-Options": "nosniff",
+          // Content is immutable -- a replaced file is a new id -- but the row
+          // can be deleted, so revalidate rather than cache for a year.
+          "Cache-Control": "private, max-age=300, must-revalidate",
+        },
+      });
     }
   }
 

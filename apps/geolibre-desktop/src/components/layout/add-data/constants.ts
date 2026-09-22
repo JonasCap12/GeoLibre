@@ -35,7 +35,8 @@ export type KindI18nKey =
   | "video"
   | "cesiumIon"
   | "czml"
-  | "kml";
+  | "kml"
+  | "sharedData";
 
 /**
  * Maps each Add Data kind to its `addData.kind.<key>` i18n segment. The dialog
@@ -70,6 +71,7 @@ export const KIND_I18N_KEY: Record<
   "cesium-ion": "cesiumIon",
   czml: "czml",
   kml: "kml",
+  "shared-data": "sharedData",
 };
 
 export const DEFAULT_XYZ_URL =

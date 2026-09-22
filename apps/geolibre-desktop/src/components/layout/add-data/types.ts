@@ -29,7 +29,8 @@ export type AddDataKind =
   | "video"
   | "cesium-ion"
   | "czml"
-  | "kml";
+  | "kml"
+  | "shared-data";
 
 /** A data source loadable either from a remote URL or a local file. */
 export type FeedMode = "url" | "file";

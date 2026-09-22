@@ -1,0 +1,49 @@
+{
+  // Self-hosting config for the live-collaboration Worker.
+  //
+  // WHY THIS FILE EXISTS, instead of editing wrangler.toml beside it:
+  // wrangler.toml binds the custom domain collab.geolibre.app, which only the
+  // upstream project's Cloudflare account can provision — a deploy from any
+  // other account fails on it. wrangler.toml is also an upstream-tracked file,
+  // and this fork fast-forwards from upstream, so editing it would put a
+  // conflict in the path of every future sync. A second config, passed with
+  // `wrangler deploy -c`, keeps that path clean.
+  //
+  // Deploy with:
+  //   npx wrangler deploy -c workers/collab/wrangler.selfhost.jsonc
+  //
+  // KEEP IN SYNC with wrangler.toml. The Durable Object binding name, the class
+  // name and the migration tag are part of the deployed state: renaming a class
+  // or skipping a migration tag orphans existing session objects. Everything
+  // below except "routes" is copied from there verbatim, and a drift check runs
+  // in tests/collab-selfhost-config.test.ts.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "geolibre-collab",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-01",
+
+  // No "routes": this deploys to geolibre-collab.<subdomain>.workers.dev.
+  // Point VITE_GEOLIBRE_COLLAB_URL at that address. To use a custom domain
+  // later, add the block wrangler.toml has, with a zone this account manages:
+  //
+  //   "routes": [{ "pattern": "collab.example.com", "custom_domain": true }]
+
+  // Each live session is one Durable Object instance (addressed by its session
+  // code via idFromName), so all participants' sockets land on the same actor
+  // and can be fanned out to.
+  "durable_objects": {
+    "bindings": [{ "name": "COLLAB_SESSION", "class_name": "CollabSession" }]
+  },
+
+  // SQLite-backed Durable Object: cheaper, and required for the WebSocket
+  // Hibernation API used to keep idle sessions' sockets open without holding
+  // the actor in memory.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CollabSession"] }]
+
+  // COLLAB_IDENTITY_SECRET is deliberately not set here. Without it the Worker
+  // runs open sessions (anyone with the 8-character code can join), which is
+  // what a small internal deployment wants. To require signed identities, set
+  // it as a secret rather than a var, so it never lands in this file:
+  //
+  //   npx wrangler secret put COLLAB_IDENTITY_SECRET -c workers/collab/wrangler.selfhost.jsonc
+}
