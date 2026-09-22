@@ -18,6 +18,7 @@ import { GeoRssSource } from "./add-data/sources/GeoRssSource";
 import { GpxSource } from "./add-data/sources/GpxSource";
 import { IcebergSource } from "./add-data/sources/IcebergSource";
 import { RasterSource } from "./add-data/sources/RasterSource";
+import { SharedDataSource } from "./add-data/sources/SharedDataSource";
 import { ZarrSource } from "./add-data/sources/ZarrSource";
 import { PmtilesSource } from "./add-data/sources/PmtilesSource";
 import { MbtilesSource } from "./add-data/sources/MbtilesSource";
@@ -94,6 +95,8 @@ function renderSource(
       return <CzmlSource initialUrl={initialUrl} />;
     case "kml":
       return <KmlSource initialUrl={initialUrl} />;
+    case "shared-data":
+      return <SharedDataSource />;
     case "wcs":
       return <WcsSource initialUrl={initialUrl} />;
     case "wms":

@@ -364,6 +364,10 @@
       "wcs": {
         "label": "WCS Layer",
         "description": "Load a numerical GeoTIFF subset from a WCS 1.0.0 service."
+      },
+      "sharedData": {
+        "label": "Add Data from the Shared Library",
+        "description": "Add a dataset someone on your team uploaded, or upload one so the rest of the team can use it without converting the file again."
       }
     },
     "shared": {
@@ -1010,6 +1014,28 @@
         "metadata": "The service returned more metadata than GeoLibre can load. Metadata responses are limited to 32 MB.",
         "response": "The service did not return a valid GeoTIFF."
       }
+    },
+    "sharedData": {
+      "defaultName": "Shared Layer",
+      "dataset": "Shared dataset",
+      "datasetOption": "{{name}} — {{size}}, by {{owner}}",
+      "datasetDetail": "File: {{filename}} · added to a map {{downloads}} times",
+      "unknownOwner": "unknown",
+      "loading": "Loading the library…",
+      "emptyLibrary": "Nothing has been shared yet",
+      "refresh": "Refresh",
+      "upload": "Upload a file",
+      "uploading": "Uploading…",
+      "uploaded": "Uploaded {{name}}. Everyone on this deployment can now add it.",
+      "delete": "Delete",
+      "help": "Files here are stored on your deployment, not in this browser, so everyone can add them. Only the person who uploaded a file can delete it.",
+      "helpAnonymous": "Add a share API token in Settings to upload files or to see your own private uploads.",
+      "tokenRequired": "Add a share API token in Settings before uploading.",
+      "listError": "Could not read the shared data library.",
+      "uploadError": "Could not upload that file.",
+      "deleteError": "Could not delete that dataset.",
+      "errorChoose": "Choose a dataset to add.",
+      "fileFilter": "Any data file"
     }
   },
   "offline": {
@@ -3064,7 +3090,8 @@
       "storymapEllipsis": "Story Map...",
       "pointerElevationNoticeTitle": "Elevation uses a public elevation service",
       "pointerElevationNoticeDesc": "The status bar's elevation readout is resolved from the map's own 3D terrain when that is enabled, which sends nothing anywhere. Without 3D terrain it falls back to the public Open-Meteo elevation API, and the coordinates under your pointer leave your device for those requests.",
-      "batchTools": "Batch tools"
+      "batchTools": "Batch tools",
+      "sharedData": "Shared Data Library"
     },
     "plugin": {
       "maplibre-gl-annotations": "Annotations",

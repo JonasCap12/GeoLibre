@@ -12,6 +12,7 @@ export interface Config {
   viewerUrl: string;
   maxProjectBytes: number;
   maxThumbnailBytes: number;
+  maxDatasetBytes: number;
   activityRetentionDays: number;
   corsOrigins: string[];
 }
