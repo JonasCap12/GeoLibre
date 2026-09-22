@@ -7,7 +7,9 @@ import {
   type DuckDbVectorFile,
   loadDuckDbVectorFile,
   readCadLayers,
+  reprojectFeatureCollectionToWgs84,
 } from "../../../../lib/duckdb-vector-loader";
+import { ALL_LAYERS, type DxfDrawing, parseDxfDrawing } from "../../../../lib/dxf-loader";
 import { openLocalDataFileWithFallback } from "../../../../lib/tauri-io";
 import { COMMON_CRS_PRESETS, CAD_SAMPLES } from "../constants";
 import {
@@ -58,6 +60,9 @@ export function CadSource() {
   // `null` = nothing chosen yet; "" is a real selection (an unnamed OGR layer,
   // which ST_Read reads as the first layer), so the two must stay distinct.
   const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
+  // Set only when GDAL could not read the drawing and the in-process DXF reader
+  // took over; it holds the parse so the picker and the load do not repeat it.
+  const [fallbackDrawing, setFallbackDrawing] = useState<DxfDrawing | null>(null);
   const [crs, setCrs] = useState("");
   const [isReadingLayers, setIsReadingLayers] = useState(false);
   // Bumped on every file pick / sample load so a slow probe that resolves after
@@ -86,17 +91,47 @@ export function CadSource() {
     setSelectedFile(file);
     setLayers([]);
     setSelectedLayer(null);
+    setFallbackDrawing(null);
     source.setLayerName((current) =>
       current.trim() && current !== defaultName ? current : layerNameFromPath(path, defaultName),
     );
 
-    const cadLayers = await readCadLayers(buildVectorFile(file));
+    // GDAL first: it reads DWG as well as DXF, and its layer list is what the
+    // rest of the CAD path expects.
+    let cadLayers: CadLayerInfo[] = [];
+    try {
+      cadLayers = await readCadLayers(buildVectorFile(file));
+    } catch (err) {
+      // A DXF that trips the bundled GDAL's DXF driver can throw here rather
+      // than return nothing; either way the in-process reader gets a turn.
+      if (extensionFromPath(path) !== "dxf") throw err;
+      console.warn("[GeoLibre] GDAL could not read this CAD file; trying the DXF reader", err);
+    }
     if (requestId !== loadSeq.current) return; // superseded by a newer load
-    if (cadLayers.length === 0) {
+
+    if (cadLayers.length > 0) {
+      setLayers(cadLayers);
+      setSelectedLayer(cadLayers[0].name);
+      return;
+    }
+
+    // Zero layers with no error is the bundled GDAL's silent DXF failure.
+    if (extensionFromPath(path) !== "dxf") {
       throw new Error(t("addData.cad.errorNoLayers"));
     }
-    setLayers(cadLayers);
-    setSelectedLayer(cadLayers[0].name);
+    const drawing = await parseDxfDrawing(new Uint8Array(data));
+    if (requestId !== loadSeq.current) return;
+    if (drawing.featureCount === 0) {
+      throw new Error(t("addData.cad.errorNoLayers"));
+    }
+    // "All layers" leads, then each CAD layer, so a drawing too heavy to load
+    // whole can still be brought in a layer at a time.
+    setFallbackDrawing(drawing);
+    setLayers([
+      { name: ALL_LAYERS, featureCount: drawing.featureCount, geometryType: "Mixed" },
+      ...drawing.layers,
+    ]);
+    setSelectedLayer(ALL_LAYERS);
   };
 
   const handleChooseFile = async () => {
@@ -160,18 +195,27 @@ export function CadSource() {
     const overrideSourceCrs = normalizeCrs(crs);
 
     let featureCollection;
-    try {
-      featureCollection = await loadDuckDbVectorFile(buildVectorFile(selectedFile), {
-        layer: selectedLayer,
-        overrideSourceCrs,
-      });
-    } catch (err) {
-      if (isUnsupportedGeometryError(err)) {
-        // Keep the raw cause in DevTools while showing the friendly message.
-        console.warn("[GeoLibre] CAD layer geometry could not be decoded", err);
-        throw new Error(t("addData.cad.errorUnsupportedGeometry"));
+    if (fallbackDrawing) {
+      // The in-process reader emits the drawing's own coordinates, so it goes
+      // through the same reprojection step GDAL's output does.
+      featureCollection = await reprojectFeatureCollectionToWgs84(
+        fallbackDrawing.toFeatureCollection(selectedLayer),
+        overrideSourceCrs || null,
+      );
+    } else {
+      try {
+        featureCollection = await loadDuckDbVectorFile(buildVectorFile(selectedFile), {
+          layer: selectedLayer,
+          overrideSourceCrs,
+        });
+      } catch (err) {
+        if (isUnsupportedGeometryError(err)) {
+          // Keep the raw cause in DevTools while showing the friendly message.
+          console.warn("[GeoLibre] CAD layer geometry could not be decoded", err);
+          throw new Error(t("addData.cad.errorUnsupportedGeometry"));
+        }
+        throw err;
       }
-      throw err;
     }
 
     source.addAndClose(
@@ -245,15 +289,20 @@ export function CadSource() {
             ) : (
               layers.map((layer) => (
                 <option key={layer.name} value={layer.name}>
-                  {t("addData.cad.layerOption", {
-                    name: layer.name || "(unnamed)",
-                    type: layer.geometryType || "?",
-                    count: layer.featureCount,
-                  })}
+                  {fallbackDrawing && layer.name === ALL_LAYERS
+                    ? t("addData.cad.allLayersOption", { count: layer.featureCount })
+                    : t("addData.cad.layerOption", {
+                        name: layer.name || "(unnamed)",
+                        type: layer.geometryType || "?",
+                        count: layer.featureCount,
+                      })}
                 </option>
               ))
             )}
           </Select>
+          {fallbackDrawing ? (
+            <p className="text-xs text-muted-foreground">{t("addData.cad.fallbackNotice")}</p>
+          ) : null}
         </div>
 
         <div className="space-y-1.5">
