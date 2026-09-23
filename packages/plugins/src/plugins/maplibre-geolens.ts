@@ -23,6 +23,7 @@
 import {
   DEFAULT_LAYER_STYLE,
   parseJsonExpression,
+  resolveGeoLensServers,
   styleValue,
   useAppStore,
   type GeoLibreLayer,
@@ -86,10 +87,23 @@ export interface GeoLensSampleServer {
  * The labels are the deployments' own names rather than translatable strings:
  * they identify a specific server, the way a bookmark does.
  */
-export const GEOLENS_SAMPLE_SERVERS: readonly GeoLensSampleServer[] = [
+const DEFAULT_GEOLENS_SAMPLE_SERVERS: readonly GeoLensSampleServer[] = [
   { label: "GeoLibre datasets", baseUrl: "https://datasets.geolibre.app" },
   { label: "GeoLens demo", baseUrl: "https://demo.getgeolens.com" },
 ];
+
+/**
+ * Replaced by `VITE_GEOLIBRE_GEOLENS_SERVERS` so a deployment can offer its own
+ * catalog servers, or `none` to offer no bookmarks at all. A self-hosted
+ * GeoLibre otherwise suggests servers run by someone else, which is a broken
+ * link waiting to happen rather than a useful default.
+ *
+ * `geolens-fetch.ts` derives the desktop build's native-fetch hosts from this
+ * list, so replacing it also narrows that set — a replacement server correctly
+ * falls back to browser `fetch` rather than needing a Tauri capability entry.
+ */
+export const GEOLENS_SAMPLE_SERVERS: readonly GeoLensSampleServer[] =
+  resolveGeoLensServers(DEFAULT_GEOLENS_SAMPLE_SERVERS);
 
 /** Number of datasets requested per catalog search. */
 const SEARCH_LIMIT = 50;

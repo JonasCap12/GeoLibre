@@ -1,42 +1,19 @@
 // Standalone "Export as interactive HTML" builder; the in-app counterpart of the
 // Python widget's `Map.to_html()`. See `docs/python.md` and `embedHost.ts`.
 
-import { getBuildEnvironment, redactCredentials, type GeoLibreProject } from "@geolibre/core";
+import { redactCredentials, type GeoLibreProject } from "@geolibre/core";
+export { DEFAULT_VIEWER_BASE_URL, resolveViewerBaseUrl } from "./viewer-base-url";
+import { resolveViewerBaseUrl } from "./viewer-base-url";
 import {
   encodeInlineProjectFragment,
   INLINE_PROJECT_FRAGMENT_KEY,
   INLINE_VIEWER_FRAGMENT_KEY,
 } from "./inline-project-fragment";
 
-// Hosted viewer used as the default embed target (matches Python's default).
-export const DEFAULT_VIEWER_BASE_URL = "https://web.geolibre.app/";
-
 // Excludes the structural CSS chars ("{};:") so a width/height can't close the
 // <style> rule and inject CSS; "/" is allowed so calc() divisions pass (extends
 // the Python _CSS_DIMENSION_RE, which does not allow "/").
 const CSS_DIMENSION_RE = /^[\w%.+\-/\s()]+$/;
-
-// Resolve the viewer URL from the env, accepting only HTTPS (or loopback HTTP)
-// and matching the hostname exactly; mirrors resolveShareBaseUrl.
-export function resolveViewerBaseUrl(
-  configured: unknown = getBuildEnvironment().VITE_GEOLIBRE_VIEWER_URL,
-): string {
-  if (typeof configured === "string" && configured.trim()) {
-    const trimmed = configured.trim();
-    try {
-      const url = new URL(trimmed);
-      if (
-        url.protocol === "https:" ||
-        (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1"))
-      ) {
-        return trimmed;
-      }
-    } catch {
-      // Invalid URL; fall through to the production default.
-    }
-  }
-  return DEFAULT_VIEWER_BASE_URL;
-}
 
 function escapeHtml(value: string): string {
   return value

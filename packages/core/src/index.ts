@@ -140,6 +140,17 @@ export {
   getRuntimeEnvironment,
   getSpatialExtensionPath,
 } from "./runtime-env";
+export {
+  DEFAULT_TILES_BASE_URL,
+  GEOLENS_SERVERS_ENV,
+  TILES_URL_ENV,
+  type GeoLensServerBookmark,
+  parseGeoLensServers,
+  resolveGeoLensServers,
+  normalizeTilesBaseUrl,
+  resolveTilesBaseUrl,
+  tilesUrl,
+} from "./tiles-base";
 export { isIpadDesktopUserAgent } from "./platform";
 export {
   CESIUM_ION_QUICK_PICKS,

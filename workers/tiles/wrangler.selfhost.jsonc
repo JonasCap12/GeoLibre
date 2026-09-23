@@ -1,0 +1,51 @@
+{
+  // Self-host deployment of the tiles Worker.
+  //
+  // Mirrors wrangler.toml without the `tiles.geolibre.app` custom domain, which
+  // only the upstream Cloudflare account can provision — a deploy carrying it
+  // fails. Kept as a separate file rather than an edit to wrangler.toml because
+  // that file is upstream-tracked and every sync fast-forwards it; a local edit
+  // there would conflict on each pull. tests/tiles-selfhost-config.test.ts fails
+  // the build if the two drift.
+  //
+  // Deploy:
+  //   npx wrangler deploy -c workers/tiles/wrangler.selfhost.jsonc
+  //
+  // The deploy prints geolibre-tiles.<subdomain>.workers.dev. Put that URL in
+  // the repo variable VITE_GEOLIBRE_TILES_URL (Settings -> Secrets and
+  // variables -> Actions -> Variables) and re-run the web deploy. Until that
+  // variable is set the app keeps calling tiles.geolibre.app, so deploying this
+  // Worker on its own changes nothing and breaks nothing.
+  //
+  // This Worker needs no bindings and no secrets: every route proxies a public
+  // upstream (OpenPlanetaryMap, USGS Astrogeology, Protomaps, OpenAerialMap,
+  // Overpass, Source.coop, CKAN, raw.githubusercontent.com). `interface Env {}`
+  // in src/index.ts is empty and must stay that way for this config to be
+  // complete.
+  //
+  // No package.json beside this file, on purpose — see workers/web/wrangler.jsonc
+  // for why adding one would mutate the upstream-tracked package-lock.json.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "geolibre-tiles",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-01",
+
+  // WARNING: this raised CPU budget applies only on a PAID Workers plan. The
+  // free tier is capped at 10 ms regardless of what is written here, which is
+  // far too low for the /wms route -- it decodes a PNG, warps it to Web
+  // Mercator and re-encodes it, all in pure JS. On the free tier expect /wms
+  // (Mercury, Venus, Io, Europa, Ganymede, Callisto basemaps) to time out.
+  // Every other route forwards bytes and stays well inside 10 ms.
+  "limits": {
+    "cpu_ms": 200
+  }
+
+  // No "routes": this deploys to geolibre-tiles.<subdomain>.workers.dev.
+  //
+  // Before binding a custom domain, read isAllowedProxyOrigin in src/index.ts.
+  // Five routes (/oam, /overpass, /source-coop, /ckan, /github-raw) refuse any
+  // Origin that is not *.geolibre.app, *.workers.dev or localhost. Serving the
+  // app from a custom domain therefore 403s all five until that allowlist also
+  // names the new origin -- which, once this Worker is yours, is a change you
+  // can make, unlike on the upstream deployment.
+}

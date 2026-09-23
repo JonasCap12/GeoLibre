@@ -1,3 +1,4 @@
+import { tilesUrl } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import type { GeoLibreAppAPI, GeoLibrePlugin } from "../types";
 
@@ -14,7 +15,7 @@ const CKAN_PAGE_SIZE = 20;
 // HDX does not send Access-Control-Allow-Origin on browser-issued requests, so
 // the search only works through the tiles-worker route that fronts it (see
 // workers/tiles CKAN_SEARCH_PATH). There is no usable direct fallback.
-const CKAN_SEARCH_PROXY = "https://tiles.geolibre.app/ckan/search";
+const CKAN_SEARCH_PROXY = tilesUrl("/ckan/search");
 
 function boundedSignal(signal: AbortSignal, timeoutMs = FETCH_TIMEOUT_MS): AbortSignal {
   return AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
