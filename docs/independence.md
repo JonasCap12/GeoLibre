@@ -56,6 +56,24 @@ Two things to know before you do:
   Overpass, Source.coop, CKAN and GitHub-raw routes until that function also
   names your origin. Once the Worker is yours, that is a change you can make.
 
+## The deploy workflows
+
+`deploy-tiles.yml` and `deploy-collab.yml` are upstream-tracked and run a bare
+`wrangler deploy`, which picks up each Worker's `wrangler.toml` and the
+`*.geolibre.app` custom domain in it. Only the upstream Cloudflare account can
+provision those hostnames, so on a fork both workflows fail every time they run.
+
+`deploy-tiles-selfhost.yml` and `deploy-collab-selfhost.yml` deploy the same two
+Workers from their `wrangler.selfhost.jsonc` configs instead.
+
+**Disable the two upstream workflows in the Actions tab** (select the workflow →
+`...` → Disable). That is a repository setting rather than a file change, so it
+survives every upstream sync without leaving a conflict in a tracked file —
+which editing or deleting those files would not.
+
+`deploy-projects-api.yml` and `deploy-web-worker.yml` were written for this fork
+and need no replacement.
+
 ## How this is kept true
 
 `tests/upstream-independence.test.ts` walks the source tree and fails if a new

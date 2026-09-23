@@ -1,0 +1,56 @@
+name: Deploy collab (self-host)
+
+# Fork-specific replacement for deploy-collab.yml.
+#
+# That workflow is upstream-tracked and runs a bare `wrangler deploy`, which
+# picks up workers/collab/wrangler.toml and its `collab.geolibre.app` custom
+# domain. Only the upstream Cloudflare account can provision that hostname, so
+# on this fork the upstream workflow fails every time it runs. This one deploys
+# the same Worker and the same Durable Object from wrangler.selfhost.jsonc
+# instead, to geolibre-collab.<subdomain>.workers.dev.
+#
+# Disable "Deploy collab" in the Actions tab (workflow -> ... -> Disable) rather
+# than editing or deleting it: that is a repository setting, so it survives
+# every upstream sync without a merge conflict in a tracked file.
+#
+# Two things this workflow deliberately does NOT do:
+#
+#   - It does not set COLLAB_IDENTITY_SECRET. That gates whether sessions
+#     require signed identities, and it belongs in `wrangler secret put`, not
+#     in a file or a workflow variable. Without it, anyone holding an 8-character
+#     session code can join.
+#   - It does not point the app at the deployed relay. Set the repo variable
+#     VITE_GEOLIBRE_COLLAB_URL to the wss:// address this prints and re-run the
+#     web deploy; until then collaboration stays dark.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/collab/**"
+      - ".github/workflows/deploy-collab-selfhost.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-collab-selfhost-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy collaboration relay to Cloudflare Workers
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/collab
+          command: deploy -c wrangler.selfhost.jsonc
