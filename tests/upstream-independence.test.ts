@@ -167,6 +167,34 @@ describe("upstream independence", () => {
     }
   });
 
+  it("passes every override variable through the deploy workflow", () => {
+    // A variable the code reads but CI never sets is worse than no variable:
+    // the repo setting exists, an operator sets it, and nothing changes, with
+    // no error anywhere. This is exactly how VITE_GEOLIBRE_VIEWER_URL shipped
+    // unplumbed — the code honoured it, the workflow never passed it, and the
+    // deployed bundle simply had no such key.
+    const workflow = readFileSync(
+      join(REPO_ROOT, ".github/workflows/deploy-web-worker.yml"),
+      "utf8",
+    );
+    const allowlist = readFileSync(
+      join(REPO_ROOT, "apps/geolibre-desktop/vite.config.ts"),
+      "utf8",
+    );
+    for (const variable of new Set(Object.values(SERVICE_DEFAULTS))) {
+      assert.ok(
+        workflow.includes(`${variable}: \${{ vars.${variable} }}`),
+        `${variable} is read by the app but deploy-web-worker.yml never passes it`,
+      );
+      // BUILD_ENV_KEYS prunes anything not listed, so an unlisted name is
+      // deleted from the bundle even when the workflow does pass it.
+      assert.ok(
+        allowlist.includes(`"${variable}"`),
+        `${variable} is missing from BUILD_ENV_KEYS and would be stripped`,
+      );
+    }
+  });
+
   it("routes every tiles-Worker service through the shared resolver", () => {
     // The eight browser-facing tiles routes are the dependency that matters:
     // one variable moves them all, but only while they all go through it.
