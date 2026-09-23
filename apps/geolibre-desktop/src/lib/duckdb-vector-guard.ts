@@ -104,3 +104,30 @@ export async function confirmLargeDataset(
 export function shouldRouteToDuckDb(sizeBytes: number | undefined): boolean {
   return sizeBytes !== undefined && sizeBytes >= DUCKDB_VECTOR_ROUTE_BYTES;
 }
+
+/**
+ * Whether a GDAL read of a CAD file should be retried with the in-process
+ * reader.
+ *
+ * GDAL 3.8.5 — pinned inside DuckDB Spatial, so not separately upgradable —
+ * cannot open some DXF BLOCKS sections. It fails two ways: loudly, with
+ * `Invalid Error: osBlockName` out of `DESCRIBE ST_Read(...)`, and silently,
+ * by reporting zero features for a drawing full of geometry.
+ *
+ * Lives here rather than beside the loader so it can be tested at all: the
+ * loader imports DuckDB-WASM, which Node cannot load, and the cancellation
+ * branch is the one a test most needs to pin — re-reading a file the user just
+ * declined would defeat the large-file guard entirely.
+ *
+ * @param extension - The file's lowercase extension.
+ * @param outcome - The thrown error, or the feature count on success.
+ * @returns `true` when the in-process reader should take over.
+ */
+export function shouldUseDxfFallback(
+  extension: string,
+  outcome: { error: unknown } | { featureCount: number },
+): boolean {
+  if (extension !== "dxf") return false;
+  if ("error" in outcome) return !(outcome.error instanceof VectorLoadCancelledError);
+  return outcome.featureCount === 0;
+}
