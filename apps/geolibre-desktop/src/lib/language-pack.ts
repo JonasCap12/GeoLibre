@@ -193,9 +193,17 @@ export function parseLanguagePack(text: string): GeoLibreLanguagePack {
   return raw as unknown as GeoLibreLanguagePack;
 }
 
-function configuredLanguagePackBaseUrl(): string {
-  const configured = getBuildEnvironment().VITE_LANGUAGE_PACK_BASE_URL;
-  if (configured?.trim()) return configured.trim().replace(/\/+$/, "");
+function configuredLanguagePackBaseUrl(
+  env: Record<string, string | undefined> = getBuildEnvironment(),
+): string {
+  const configured = env.VITE_LANGUAGE_PACK_BASE_URL?.trim();
+  // `none` turns the feature off without the blast radius of
+  // `__NO_EXTERNAL_CDN__`, which also strips Pyodide, the 3D Tiles decoders and
+  // the rest. A deployment that wants no traffic to the upstream project, but
+  // still wants those CDNs, had no way to say so: an empty value falls through
+  // to the default host, so there was no "off" short of the build-wide flag.
+  if (configured?.toLowerCase() === "none") return "";
+  if (configured) return configured.replace(/\/+$/, "");
   const noExternalCdn = typeof __NO_EXTERNAL_CDN__ !== "undefined" ? __NO_EXTERNAL_CDN__ : false;
   return noExternalCdn ? "" : DEFAULT_LANGUAGE_PACK_BASE_URL;
 }
@@ -206,8 +214,10 @@ function configuredLanguagePackBaseUrl(): string {
  * the link can never point at the public host a `__NO_EXTERNAL_CDN__` build
  * opted out of, nor at a different host than `languagePackUrl` downloads from.
  */
-export function languagePackBaseUrl(): string {
-  return configuredLanguagePackBaseUrl();
+export function languagePackBaseUrl(
+  env?: Record<string, string | undefined>,
+): string {
+  return configuredLanguagePackBaseUrl(env);
 }
 
 /** Stable download URL for an official pack for `locale`. */
