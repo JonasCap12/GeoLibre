@@ -28,6 +28,21 @@ not a disabled feature.
 `VITE_GEOLIBRE_GEOLENS_SERVERS` takes `Label|https://host` entries separated by
 commas, or the literal `none` to offer no bookmarks at all.
 
+`VITE_LANGUAGE_PACK_BASE_URL` also takes `none`, which turns Whitebox
+translation downloads off. An empty value does *not*: it falls through to the
+default host. Before `none` existed the only way to stop that traffic was the
+`GEOLIBRE_NO_EXTERNAL_CDN` build flag, which also strips Pyodide, the 3D Tiles
+decoders and the rest — far more than a deployment wanting independence asked
+for.
+
+`VITE_GEOLIBRE_PLUGIN_REGISTRY_URL` is resolved **against the app's own
+origin**, so a relative value works. `apps/geolibre-desktop/public/plugin-registry.json`
+ships as an empty array for exactly this: set the variable to
+`/plugin-registry.json` and the plugin browser reads a registry you serve
+yourself. It then lists nothing until you add entries, which the UI reports as
+an empty registry rather than an error. Installing a plugin from a zip or a
+`plugin.json` URL is unaffected.
+
 ## The one that matters most
 
 `VITE_GEOLIBRE_TILES_URL` moves eight services at once, because they are all
