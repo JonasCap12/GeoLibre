@@ -23,7 +23,11 @@ import {
   readGeoParquetGeoMetadata,
 } from "./geoparquet-crs";
 import { parseGeoParquetMetadata } from "./geoparquet-metadata";
-import { confirmLargeDataset, type DuckDbVectorLoadOptions } from "./duckdb-vector-guard";
+import {
+  confirmLargeDataset,
+  shouldUseDxfFallback,
+  type DuckDbVectorLoadOptions,
+} from "./duckdb-vector-guard";
 import { readDxfCodepage, recodeCadFeatureCollection } from "./cad-encoding";
 import { ensureGpkgFeatureCount } from "./gpkg-ogr-contents";
 import { isLikelyGeoPackage, loadGeoPackageVectorFile } from "./gpkg-reader";
@@ -39,6 +43,7 @@ export { isGeometryColumnType, quoteIdentifier, quoteSqlString } from "./duckdb-
 export {
   confirmLargeDataset,
   DUCKDB_VECTOR_FEATURE_WARN_COUNT,
+  shouldUseDxfFallback,
   VectorLoadCancelledError,
   type DuckDbVectorLoadOptions,
   type LargeVectorDataset,
@@ -698,7 +703,67 @@ async function loadGeoPackageVector(
   return reprojectFeatureCollectionToWgs84(tagged);
 }
 
+/**
+ * Read a vector file, falling back to the in-process DXF reader when the
+ * bundled GDAL cannot open the drawing.
+ *
+ * GDAL 3.8.5 — the version inside DuckDB Spatial, which cannot be upgraded
+ * independently — fails on some DXF BLOCKS sections. Sometimes loudly
+ * (`Invalid Error: osBlockName` out of `DESCRIBE ST_Read(...)`), sometimes
+ * silently, by reporting zero layers for a drawing full of geometry. Either
+ * way the drawing itself is fine: `dxf-loader.ts` parses the same file in JS.
+ *
+ * That fallback previously existed only in the Add Data → CAD panel, so a DXF
+ * that opened there failed when dropped on the map or opened from the file
+ * picker — the same file, the same drawing, a different door. This is the one
+ * choke point every door goes through.
+ *
+ * The bytes are copied up front because `registerVectorFileBuffers` transfers
+ * the ArrayBuffer to the DuckDB worker and detaches it here, which would leave
+ * the fallback with an empty view. The copy is made for DXF only, and only
+ * until the read succeeds.
+ */
 export async function loadDuckDbVectorFile(
+  file: DuckDbVectorFile,
+  options: DuckDbVectorLoadOptions = {},
+): Promise<FeatureCollection> {
+  if (file.extension !== "dxf") return readVectorFileWithGdal(file, options);
+
+  const dxfBytes = file.data.slice();
+  let collection: FeatureCollection;
+  try {
+    collection = await readVectorFileWithGdal(file, options);
+  } catch (error) {
+    if (!shouldUseDxfFallback(file.extension, { error })) throw error;
+    console.warn("[GeoLibre] GDAL could not read this DXF; using the in-process reader.", error);
+    return readDxfWithoutGdal(dxfBytes, options);
+  }
+  if (shouldUseDxfFallback(file.extension, { featureCount: collection.features.length })) {
+    console.warn("[GeoLibre] GDAL read this DXF as empty; using the in-process reader.");
+    return readDxfWithoutGdal(dxfBytes, options);
+  }
+  return collection;
+}
+
+/** Parse a DXF in JS and reproject it the way the GDAL path's output is. */
+async function readDxfWithoutGdal(
+  bytes: Uint8Array,
+  options: DuckDbVectorLoadOptions,
+): Promise<FeatureCollection> {
+  const { ALL_LAYERS, parseDxfDrawing } = await import("./dxf-loader");
+  const drawing = await parseDxfDrawing(bytes);
+  // With no layer named, this returns the whole drawing where `ST_Read` would
+  // have returned only the first layer. Deliberate: someone dropping a DXF on
+  // the map wants the drawing, and the CAD panel already defaults the same way.
+  // The reader emits the drawing's own coordinates, so it needs the same
+  // reprojection step GDAL's output gets. A DXF carries no CRS of its own.
+  return reprojectFeatureCollectionToWgs84(
+    drawing.toFeatureCollection(options.layer ?? ALL_LAYERS),
+    options.overrideSourceCrs?.trim() || null,
+  );
+}
+
+async function readVectorFileWithGdal(
   file: DuckDbVectorFile,
   options: DuckDbVectorLoadOptions = {},
 ): Promise<FeatureCollection> {
