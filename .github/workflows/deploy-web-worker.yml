@@ -93,6 +93,9 @@ jobs:
           VITE_GEOLIBRE_PLUGIN_REGISTRY_URL: ${{ vars.VITE_GEOLIBRE_PLUGIN_REGISTRY_URL }}
           VITE_LANGUAGE_PACK_BASE_URL: ${{ vars.VITE_LANGUAGE_PACK_BASE_URL }}
           VITE_GEOLIBRE_GEOLENS_SERVERS: ${{ vars.VITE_GEOLIBRE_GEOLENS_SERVERS }}
+          # Names the viewer that the HTML export writes into every file it
+          # produces, and that the desktop build's "Copy link" hands out.
+          VITE_GEOLIBRE_VIEWER_URL: ${{ vars.VITE_GEOLIBRE_VIEWER_URL }}
           VITE_GEE_OAUTH_CLIENT_ID: ${{ secrets.VITE_GEE_OAUTH_CLIENT_ID }}
           VITE_MAPILLARY_ACCESS_TOKEN: ${{ secrets.VITE_MAPILLARY_ACCESS_TOKEN }}
           VITE_CESIUM_TOKEN: ${{ secrets.VITE_CESIUM_TOKEN }}
