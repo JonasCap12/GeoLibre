@@ -10,12 +10,14 @@ import type {
   Position,
 } from "geojson";
 
+import { tilesUrl } from "@geolibre/core";
+
 /**
  * Browser-readable relay for the public Overpass API. The upstream rejects
  * some otherwise valid browser origins (including Cloudflare Pages previews)
  * with a CORS-less 406 response, so clients cannot reliably call it directly.
  */
-export const OVERPASS_DEFAULT_ENDPOINT = "https://tiles.geolibre.app/overpass";
+export const OVERPASS_DEFAULT_ENDPOINT = tilesUrl("/overpass");
 export const OVERPASS_REQUEST_TIMEOUT_MS = 75_000;
 export const OSM_CUSTOM_TAG_MAX_LENGTH = 255;
 // Keep these mirrored limits aligned with isAllowedOverpassQuery in workers/tiles/src/index.ts.

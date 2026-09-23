@@ -1,4 +1,4 @@
-import { useAppStore } from "@geolibre/core";
+import { tilesUrl, useAppStore } from "@geolibre/core";
 import type { Feature, FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type {
   GeoJSONSource,
@@ -30,7 +30,7 @@ const PAGE_SIZE = 20;
 // embed builds (leafmap.oam_search avoids this entirely by calling the API
 // server-side in Python). The desktop app fetches the API directly through its
 // native (CORS-bypassing) HTTP, so its search bbox never leaves for the Worker.
-const OAM_SEARCH_PROXY_ENDPOINT = "https://tiles.geolibre.app/oam";
+const OAM_SEARCH_PROXY_ENDPOINT = tilesUrl("/oam");
 const ATTRIBUTION =
   '<a href="https://openaerialmap.org/" target="_blank" rel="noopener">OpenAerialMap</a>';
 

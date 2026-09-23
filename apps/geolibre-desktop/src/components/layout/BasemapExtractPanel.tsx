@@ -1,4 +1,4 @@
-import { DEFAULT_BASEMAP, useAppStore } from "@geolibre/core";
+import { DEFAULT_BASEMAP, tilesUrl, useAppStore } from "@geolibre/core";
 import {
   buildProtomapsBasemapStyle,
   createPMTilesStoreLayer,
@@ -72,7 +72,7 @@ const URL_STORAGE_KEY = "geolibre.basemapExtract.url";
 
 /** GeoLibre's Cloudflare Worker (workers/tiles) range-proxies the Protomaps
  * daily planet builds with CORS. */
-const PLANET_PROXY_PREFIX = "https://tiles.geolibre.app/pmtiles/";
+const PLANET_PROXY_PREFIX = `${tilesUrl("/pmtiles")}/`;
 
 /**
  * Default archive URL: the latest Protomaps planet build through the proxy. The

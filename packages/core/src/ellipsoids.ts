@@ -19,6 +19,8 @@
  * shortcut over a full CRS/context refactor.
  */
 
+import { tilesUrl } from "./tiles-base";
+
 /** A biaxial (rotational) ellipsoid describing a celestial body. */
 export interface Ellipsoid {
   /** Stable id persisted in the project (`map.ellipsoidId`). */
@@ -275,14 +277,14 @@ const opmCredit = (source: string) => `${source} · ${OPM_ATTRIBUTION}`;
 // The GeoLibre tiles Worker (workers/tiles), which adds CORS to the OPM S3
 // mosaics that lack it. Its dataset keys mirror the DATASETS map in that Worker.
 // Tile path: `${TILE_PROXY_BASE}/<dataset>/{z}/{x}/{y}.png`.
-const TILE_PROXY_BASE = "https://tiles.geolibre.app/opm";
+const TILE_PROXY_BASE = tilesUrl("/opm");
 
 // The GeoLibre tiles Worker's reprojection endpoint, which warps the USGS
 // Astrogeology equirectangular WMS layers to Web Mercator so MapLibre can render
 // them (the USGS server offers no EPSG:3857 for these bodies). Its dataset keys
 // mirror the WMS_DATASETS map in that Worker (workers/tiles/src/index.ts).
 // Tile path: `${WMS_PROXY_BASE}/<dataset>/{z}/{x}/{y}.png` — standard XYZ.
-const WMS_PROXY_BASE = "https://tiles.geolibre.app/wms";
+const WMS_PROXY_BASE = tilesUrl("/wms");
 
 // USGS Astrogeology, the origin of every reprojected WMS basemap below.
 const USGS_ASTRO_ATTRIBUTION = '<a href="https://astrogeology.usgs.gov/">USGS Astrogeology</a>';

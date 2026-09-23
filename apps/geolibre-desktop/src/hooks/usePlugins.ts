@@ -1,6 +1,7 @@
 import {
   clearExternalNativePaintBridge,
   setExternalNativePaintBridge,
+  tilesUrl,
   useAppStore,
   type AppState,
 } from "@geolibre/core";
@@ -1507,7 +1508,7 @@ function isTauriRuntime(): boolean {
   return Boolean((window as TauriRuntimeWindow).__TAURI_INTERNALS__);
 }
 
-const GITHUB_RAW_VECTOR_PROXY = "https://tiles.geolibre.app/github-raw";
+const GITHUB_RAW_VECTOR_PROXY = tilesUrl("/github-raw");
 
 /**
  * Budget for a native Add Vector Layer download, in seconds. Deliberately far

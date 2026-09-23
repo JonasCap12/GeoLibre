@@ -1,3 +1,4 @@
+import { resolveViewerBaseUrl } from "./viewer-base-url";
 import { WHITEBOX_MENU_CATALOG } from "./whitebox-menu-catalog";
 import { DOWNLOAD_GLOBAL_DEM_TOOL_ID } from "./global-dem";
 
@@ -119,10 +120,11 @@ export function whiteboxToolFromLocation(): WhiteboxToolUrlTarget | null {
 }
 
 /**
- * Canonical public URL of the hosted web app, used as the base for a shareable
+ * Fallback public URL of the hosted web app, used as the base for a shareable
  * tool link from the **desktop** build — there `window.location` is a
  * `tauri://…` origin that recipients can't open. The web build shares its own
- * origin instead (see `whiteboxToolShareBase`).
+ * origin instead (see `whiteboxToolShareBase`). A deployment that sets
+ * `VITE_GEOLIBRE_VIEWER_URL` overrides this with its own viewer.
  */
 export const GEOLIBRE_WEB_APP_URL = "https://web.geolibre.app/";
 
@@ -131,12 +133,18 @@ export const GEOLIBRE_WEB_APP_URL = "https://web.geolibre.app/";
  *
  * @param desktop - Whether the app is the desktop (Tauri) build, whose
  *   `window.location` is not shareable.
- * @returns `GEOLIBRE_WEB_APP_URL` on desktop; otherwise the current app's
- *   origin + path (so a self-hosted web deployment links to itself), falling
- *   back to the canonical URL when there is no window.
+ * @returns The configured viewer URL on desktop (`GEOLIBRE_WEB_APP_URL` when a
+ *   deployment sets none); otherwise the current app's origin + path, so a
+ *   self-hosted web deployment links to itself.
  */
 export function whiteboxToolShareBase(desktop: boolean): string {
-  if (desktop || typeof window === "undefined") return GEOLIBRE_WEB_APP_URL;
+  if (desktop || typeof window === "undefined") {
+    // A desktop build of a self-hosted GeoLibre would otherwise hand recipients
+    // a link to the upstream project's web app, which does not have their data
+    // or their deployment's configuration. `VITE_GEOLIBRE_VIEWER_URL` is the
+    // same variable the HTML export already uses to name the viewer.
+    return resolveViewerBaseUrl();
+  }
   return `${window.location.origin}${window.location.pathname}`;
 }
 

@@ -48,6 +48,7 @@
  * callers keep one import.
  */
 
+import { tilesUrl } from "@geolibre/core";
 import {
   classifyPath,
   fileNote,
@@ -97,7 +98,7 @@ export const SOURCE_COOP_API_BASE = "https://source.coop/api/v1";
 export const SOURCE_COOP_DATA_BASE = "https://data.source.coop";
 
 /** The tiles Worker route that re-emits the metadata API with CORS. */
-export const SOURCE_COOP_PROXY_ENDPOINT = "https://tiles.geolibre.app/source-coop";
+export const SOURCE_COOP_PROXY_ENDPOINT = tilesUrl("/source-coop");
 
 /** S3 page size for a file listing. The proxy's own ceiling is 1000. */
 export const SOURCE_COOP_LIST_MAX_KEYS = 200;

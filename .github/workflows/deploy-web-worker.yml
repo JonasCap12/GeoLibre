@@ -80,6 +80,19 @@ jobs:
           VITE_GEOLIBRE_SHARE_URL: ${{ vars.VITE_GEOLIBRE_SHARE_URL }}
           VITE_GEOLIBRE_EMBED_ORIGINS: ${{ vars.VITE_GEOLIBRE_EMBED_ORIGINS }}
           VITE_GEOLIBRE_CAPABILITIES: ${{ vars.VITE_GEOLIBRE_CAPABILITIES }}
+          # The four below decide whether this deployment depends on servers run
+          # by the upstream project. Each falls back to a geolibre.app host when
+          # unset, so leaving one blank is a live dependency on someone else's
+          # account, not a disabled feature. See docs/independence.md.
+          #
+          # VITE_GEOLIBRE_TILES_URL covers eight browser-facing services at once
+          # (planetary tiles, WMS reprojection, Protomaps extract, OpenAerialMap,
+          # Overpass, Source.coop, CKAN, GitHub-raw), so it is the one that
+          # matters most. Point it at your own deploy of workers/tiles.
+          VITE_GEOLIBRE_TILES_URL: ${{ vars.VITE_GEOLIBRE_TILES_URL }}
+          VITE_GEOLIBRE_PLUGIN_REGISTRY_URL: ${{ vars.VITE_GEOLIBRE_PLUGIN_REGISTRY_URL }}
+          VITE_LANGUAGE_PACK_BASE_URL: ${{ vars.VITE_LANGUAGE_PACK_BASE_URL }}
+          VITE_GEOLIBRE_GEOLENS_SERVERS: ${{ vars.VITE_GEOLIBRE_GEOLENS_SERVERS }}
           VITE_GEE_OAUTH_CLIENT_ID: ${{ secrets.VITE_GEE_OAUTH_CLIENT_ID }}
           VITE_MAPILLARY_ACCESS_TOKEN: ${{ secrets.VITE_MAPILLARY_ACCESS_TOKEN }}
           VITE_CESIUM_TOKEN: ${{ secrets.VITE_CESIUM_TOKEN }}
