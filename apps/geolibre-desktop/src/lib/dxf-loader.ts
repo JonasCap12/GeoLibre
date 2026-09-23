@@ -200,8 +200,65 @@ function polylinePoints(vertices: unknown, closed: boolean): Vec2[] {
 
 /** Local-space geometry of a single entity, before any block transform. */
 interface LocalGeometry {
-  kind: "line" | "polygon" | "point";
+  kind: "line" | "polygon" | "point" | "multipolygon";
   points: Vec2[];
+  /** Face rings, for `multipolygon` only. `points` stays empty for that kind. */
+  rings?: Vec2[][];
+}
+
+/**
+ * Faces of a polyface mesh, or null when the entity is not one.
+ *
+ * A polyface-mesh POLYLINE mixes two kinds of VERTEX in one list. Some carry
+ * coordinates; the rest are *face records*, which carry no position at all —
+ * their `faceA`..`faceD` are 1-based indices into the coordinate vertices, and
+ * a negative index only marks that edge invisible. dxf-parser reports those
+ * records with `x = y = 0`, so reading the list as a path draws a line from
+ * the drawing to the coordinate origin and back for every face.
+ *
+ * That is not a theoretical concern: it is what stretched a surveyed alignment
+ * in Vietnam across the South China Sea to the equator, because the origin of
+ * a VN-2000 projection reprojects to roughly the latitude of Singapore.
+ *
+ * @param entity - The POLYLINE to inspect.
+ * @returns One ring per face, or null when this is an ordinary polyline.
+ */
+function polyfaceMeshRings(entity: RawEntity): Vec2[][] | null {
+  const vertices = entity.vertices;
+  if (entity.type !== "POLYLINE" || !Array.isArray(vertices)) return null;
+
+  const isFaceRecord = (vertex: unknown): boolean =>
+    typeof vertex === "object" && vertex !== null && "faceA" in vertex;
+
+  const corners: Vec2[] = [];
+  const faces: RawEntity[] = [];
+  for (const vertex of vertices) {
+    if (isFaceRecord(vertex)) {
+      faces.push(vertex as RawEntity);
+      continue;
+    }
+    const parsed = point(vertex);
+    // Index positions must survive a malformed vertex, so a hole is kept
+    // rather than collapsing the list and shifting every later face's indices.
+    corners.push(parsed ?? { x: NaN, y: NaN });
+  }
+  if (faces.length === 0) return null;
+
+  const rings: Vec2[][] = [];
+  for (const face of faces) {
+    const ring: Vec2[] = [];
+    for (const key of ["faceA", "faceB", "faceC", "faceD"] as const) {
+      // A negative index means "edge invisible", not "different vertex"; zero
+      // (or absent) means the face has fewer than four corners.
+      const index = Math.abs(num(face[key], 0));
+      if (index === 0) continue;
+      const corner = corners[index - 1];
+      if (!corner || !Number.isFinite(corner.x) || !Number.isFinite(corner.y)) continue;
+      ring.push(corner);
+    }
+    if (ring.length >= 3) rings.push(ring);
+  }
+  return rings.length > 0 ? rings : null;
 }
 
 /**
@@ -224,6 +281,8 @@ function entityGeometry(entity: RawEntity): LocalGeometry | null {
     }
     case "LWPOLYLINE":
     case "POLYLINE": {
+      const meshRings = polyfaceMeshRings(entity);
+      if (meshRings) return { kind: "multipolygon", points: [], rings: meshRings };
       const expanded = polylinePoints(entity.vertices, entity.shape === true);
       if (expanded.length < 2) {
         return expanded.length === 1 ? { kind: "point", points: expanded } : null;
@@ -306,6 +365,18 @@ function closeRing(ring: Position[]): Position[] {
 
 /** Build the GeoJSON geometry for local geometry placed by `matrix`. */
 function placeGeometry(local: LocalGeometry, matrix: Matrix): Geometry | null {
+  if (local.kind === "multipolygon") {
+    const polygons: Position[][][] = [];
+    for (const ring of local.rings ?? []) {
+      const placedRing = ring.map((value) => transform(matrix, value));
+      if (placedRing.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) continue;
+      const closed = closeRing(placedRing);
+      if (closed.length >= 4) polygons.push([closed]);
+    }
+    // One bad face drops that face, not the whole mesh.
+    return polygons.length > 0 ? { type: "MultiPolygon", coordinates: polygons } : null;
+  }
+
   const placed = local.points.map((value) => transform(matrix, value));
   if (placed.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) return null;
 
@@ -392,7 +463,8 @@ export async function parseDxfDrawing(bytes: Uint8Array): Promise<DxfDrawing> {
       }
 
       const local = entityGeometry(entity);
-      if (!local || local.points.length === 0) continue;
+      // A polyface mesh carries its geometry in `rings`, leaving `points` empty.
+      if (!local || (local.points.length === 0 && !local.rings?.length)) continue;
       const geometry = placeGeometry(local, matrix);
       if (geometry) emit(layer, entity, geometry);
     }
