@@ -663,7 +663,10 @@
       "errorNoLayer": "Select a CAD layer to load.",
       "errorUnsupportedGeometry": "This CAD layer contains mixed or collection geometry that cannot be displayed. Try another layer.",
       "errorDwgVersion": "This drawing was saved by {{release}}. The built-in CAD engine reads only AutoCAD 2000 DWG files. Re-save it as DXF (any version), or as an AutoCAD 2000 DWG, and open it again.",
-      "errorBinaryDxf": "This is a binary DXF, which cannot be read. Re-save it as ASCII DXF (in AutoCAD: Save As, then pick a plain \"AutoCAD DXF\" format rather than \"Binary DXF\") and open it again."
+      "errorBinaryDxf": "This is a binary DXF, which cannot be read. Re-save it as ASCII DXF (in AutoCAD: Save As, then pick a plain \"AutoCAD DXF\" format rather than \"Binary DXF\") and open it again.",
+      "removeOutliers": "Remove stray objects",
+      "removeOutliersHelp": "Drops the few entities sitting far from the rest of the drawing, which otherwise force the map to zoom out past the site. Never removes more than 5% of a drawing.",
+      "outliersRemoved": "Removed {{count}} stray objects of {{total}} from this drawing (layers: {{layers}}). They sat far enough from the rest to stretch the map."
     },
     "gdb": {
       "defaultName": "Geodatabase Layer",

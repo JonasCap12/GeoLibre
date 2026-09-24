@@ -1,4 +1,5 @@
 import { Button, Input, Label, Select } from "@geolibre/ui";
+import type { FeatureCollection } from "geojson";
 import { FileUp, Layers } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,6 +11,8 @@ import {
   reprojectFeatureCollectionToWgs84,
 } from "../../../../lib/duckdb-vector-loader";
 import { isBinaryDxf } from "../../../../lib/cad-encoding";
+import { dropCadOutliers, findCadOutliers } from "../../../../lib/cad-outliers";
+import { appendDiagnostic } from "../../../../lib/diagnostics";
 import { ALL_LAYERS, type DxfDrawing, parseDxfDrawing } from "../../../../lib/dxf-loader";
 import { dwgReleaseLabel, readDwgSupport } from "../../../../lib/dwg-version";
 import { openLocalDataFileWithFallback } from "../../../../lib/tauri-io";
@@ -66,6 +69,9 @@ export function CadSource() {
   // took over; it holds the parse so the picker and the load do not repeat it.
   const [fallbackDrawing, setFallbackDrawing] = useState<DxfDrawing | null>(null);
   const [crs, setCrs] = useState("");
+  // On by default: a drawing with strays is the common case, and the box sits
+  // beside the count so the choice is visible rather than silent.
+  const [removeOutliers, setRemoveOutliers] = useState(true);
   const [isReadingLayers, setIsReadingLayers] = useState(false);
   // Bumped on every file pick / sample load so a slow probe that resolves after
   // a newer one cannot overwrite the newer file's layers (stale-result guard).
@@ -217,7 +223,7 @@ export function CadSource() {
     const name = source.layerName.trim() || defaultName;
     const overrideSourceCrs = normalizeCrs(crs);
 
-    let featureCollection;
+    let featureCollection: FeatureCollection;
     if (fallbackDrawing) {
       // The in-process reader emits the drawing's own coordinates, so it goes
       // through the same reprojection step GDAL's output does.
@@ -238,6 +244,32 @@ export function CadSource() {
           throw new Error(t("addData.cad.errorUnsupportedGeometry"));
         }
         throw err;
+      }
+    }
+
+    // Strays are a rounding error in count and dominate the extent, because
+    // the map zooms to fit. Run after reprojection so both readers above go
+    // through one code path; the test is a ratio, so degrees work as well as
+    // metres. Nothing is dropped unless the box is ticked, and what went is
+    // recorded rather than left for the user to notice.
+    if (removeOutliers) {
+      const report = findCadOutliers(featureCollection);
+      if (report) {
+        featureCollection = dropCadOutliers(featureCollection, report);
+        const layerNames = report.layers
+          .slice(0, 4)
+          .map((layer) => layer.name || "(unnamed)")
+          .join(", ");
+        appendDiagnostic({
+          category: "map",
+          level: "info",
+          message: t("addData.cad.outliersRemoved", {
+            count: report.count,
+            total: report.total,
+            layers: layerNames,
+          }),
+          source: "cad-outliers",
+        });
       }
     }
 
@@ -354,6 +386,21 @@ export function CadSource() {
           </Select>
           <p className="text-xs text-muted-foreground">{t("addData.cad.crsHelp")}</p>
         </div>
+
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={removeOutliers}
+            onChange={(event) => setRemoveOutliers(event.target.checked)}
+          />
+          <span>
+            {t("addData.cad.removeOutliers")}
+            <span className="block text-xs text-muted-foreground">
+              {t("addData.cad.removeOutliersHelp")}
+            </span>
+          </span>
+        </label>
 
         <SampleDataSelect
           samples={CAD_SAMPLES.map((sample) => ({
