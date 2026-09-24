@@ -1,11 +1,20 @@
 name: Deploy collab
 
+# FORK CHANGE: the automatic push trigger is removed.
+#
+# This workflow runs a bare `wrangler deploy`, which picks up
+# workers/collab/wrangler.toml and its `collab.geolibre.app` custom domain.
+# Only the upstream Cloudflare account can provision that hostname, so on this
+# fork every run fails -- and a red X that always fails is worse than no check,
+# because it trains everyone to ignore the red ones that matter.
+#
+# deploy-collab-selfhost.yml deploys the same Worker from
+# wrangler.selfhost.jsonc and is what runs here.
+#
+# Kept rather than deleted so an upstream sync sees a normal edit instead of a
+# delete/modify conflict, and so the workflow can still be run by hand from the
+# Actions tab by anyone who does own collab.geolibre.app.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "workers/collab/**"
-      - ".github/workflows/deploy-collab.yml"
   workflow_dispatch:
 
 permissions:

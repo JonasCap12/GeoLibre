@@ -13,9 +13,10 @@ name: Deploy studio.geolibre.app
 # This is the same app as web.geolibre.app with the Clerk sign-in gate switched
 # on. It is a client-side gate, not a server boundary: see docs/getting-started.md.
 
+# FORK CHANGE: the automatic push trigger is removed. This publishes to a
+# GitHub Pages site under geolibre.app, which this fork does not own, so it
+# failed on every push to main. See the note in deploy-collab.yml.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:

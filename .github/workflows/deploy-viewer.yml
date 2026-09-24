@@ -1,11 +1,10 @@
 name: Deploy viewer
 
+# FORK CHANGE: the automatic push trigger is removed. See the note in
+# deploy-collab.yml. This fork has no separate viewer deployment --
+# VITE_GEOLIBRE_VIEWER_URL points at the main web Worker -- so there is nothing
+# for this to deploy to.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "workers/viewer/**"
-      - ".github/workflows/deploy-viewer.yml"
   workflow_dispatch:
 
 permissions:
