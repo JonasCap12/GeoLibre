@@ -78,6 +78,7 @@ import { openRightPanel } from "@geolibre/plugins";
 import { getIsMobileViewport } from "../../hooks/useIsMobileViewport";
 import { useProjectFileActions } from "../../hooks/useProjectFileActions";
 import { useProjectHistory } from "../../hooks/useProjectHistory";
+import { useCloudWorkspace } from "../../hooks/useCloudWorkspace";
 import { useScreenshotReadiness } from "../../hooks/useScreenshotReadiness";
 import {
   isRasterFileName,
@@ -145,6 +146,7 @@ import {
 } from "../../hooks/useRightPanels";
 import { BoundsRestrictionIndicator } from "./BoundsRestrictionIndicator";
 import { CollaborationStatusBadge } from "./CollaborationStatusBadge";
+import { CloudWorkspaceStatus } from "./CloudWorkspaceStatus";
 import { CollaborateDialog } from "./CollaborateDialog";
 import { useCollaboration } from "../../hooks/useCollaboration";
 import { MapModeBanner } from "./MapModeBanner";
@@ -915,6 +917,7 @@ export function DesktopShell({
   );
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [mapReadyGeneration, setMapReadyGeneration] = useState(0);
+  const cloudWorkspace = useCloudWorkspace(mapControllerRef, mapReadyGeneration > 0);
   const [dropMessage, setDropMessage] = useState<string | null>(null);
   const [dropError, setDropError] = useState<string | null>(null);
   // Kept out of `dropError` because the drop handler sets its own success
@@ -2751,6 +2754,7 @@ export function DesktopShell({
                   <StoryMapComposeBar mapControllerRef={mapControllerRef} />
                 </>
               )}
+              <CloudWorkspaceStatus state={cloudWorkspace} />
               {/* Renderer-neutral: these read the store rather than a
                   `MapController`, so they stay available on the 3D globe. */}
               <TerrainSettingsDialog mapControllerRef={mapControllerRef} />

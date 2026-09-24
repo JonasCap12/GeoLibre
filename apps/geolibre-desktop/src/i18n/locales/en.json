@@ -10,6 +10,12 @@
     "recoveryTitle": "Recover unsaved work?",
     "recoveryDescription": "GeoLibre did not close cleanly. A newer autosave of “{{name}}” is available."
   },
+  "cloudWorkspace": {
+    "loading": "Restoring cloud workspace…",
+    "saving": "Saving to cloud…",
+    "saved": "Saved to cloud",
+    "error": "Cloud save failed"
+  },
   "browser": {
     "title": "Browser",
     "services": "Services",
@@ -2323,7 +2329,17 @@
       "stripPromptTitle": "Strip credentials?",
       "stripPromptDesc": "This project has {{count}} credential-bearing field(s), such as API keys, request headers, or plugin settings. Remove them from the saved file? The current workspace keeps them either way.",
       "stripButton": "Strip credentials",
-      "keepButton": "Keep in file"
+      "keepButton": "Keep in file",
+      "accountOpen": "Create an account or sign in",
+      "accountSwitch": "Sign in as someone else",
+      "accountHelp": "Sign in and save Settings to enable a private cloud workspace. GeoLibre then saves changes automatically and restores your layers after a normal reload. The same token also enables project sharing and shared-library uploads.",
+      "accountUsername": "Username",
+      "accountUsernamePlaceholder": "3-39 lowercase letters, digits or hyphens",
+      "accountPassword": "Password",
+      "accountSignIn": "Sign in",
+      "accountCreate": "Create account",
+      "accountClose": "Close",
+      "accountSignedIn": "Signed in as {{username}}. The token is filled in above — save Settings to enable cloud persistence."
     },
     "geocoding": {
       "title": "Geocoding",

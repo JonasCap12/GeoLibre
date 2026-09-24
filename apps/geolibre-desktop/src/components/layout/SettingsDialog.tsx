@@ -1,3 +1,4 @@
+import { ShareAccountForm } from "./ShareAccountForm";
 import { migrateMapboxTokenSettings } from "../../lib/mapbox-token-settings";
 import {
   DEFAULT_PROJECT_PREFERENCES,
@@ -2844,6 +2845,10 @@ export function SettingsDialog({
                         <p className="text-xs text-muted-foreground">
                           {t("settings.env.tokenStorageNote", { shareHost })}
                         </p>
+                        <ShareAccountForm
+                          onToken={(token) => updateShareToken(token)}
+                          hasToken={draftDesktopSettings.shareToken.trim() !== ""}
+                        />
                       </>
                     ) : (
                       <p className="text-xs text-muted-foreground">
