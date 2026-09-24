@@ -93,10 +93,16 @@ function headerLatin1(bytes: Uint8Array): string {
 /**
  * True when the buffer is a binary DXF (not the ASCII/ANSI text form).
  *
+ * Neither reader here handles that variant: the bundled GDAL DXF driver is
+ * ASCII-only, and dxf-parser fails on it with "Unexpected end of input: EOF
+ * group not read before end of file" after logging a warning per record —
+ * a message that tells the user nothing about what to do. The sentinel is 22
+ * bytes at the very start, so the file can be named for what it is instead.
+ *
  * @param bytes The file bytes.
  * @returns True when the AutoCAD binary-DXF magic is present.
  */
-function isBinaryDxf(bytes: Uint8Array): boolean {
+export function isBinaryDxf(bytes: Uint8Array): boolean {
   if (bytes.length < BINARY_DXF_MAGIC.length) return false;
   for (let i = 0; i < BINARY_DXF_MAGIC.length; i += 1) {
     if (bytes[i] !== BINARY_DXF_MAGIC.charCodeAt(i)) return false;

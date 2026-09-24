@@ -26,7 +26,7 @@
  */
 
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
-import { readDxfCodepage, recodeCadString } from "./cad-encoding";
+import { isBinaryDxf, readDxfCodepage, recodeCadString } from "./cad-encoding";
 import { sampleArc, sampleBulge, sampleEllipse, sampleSpline, type Vec2 } from "./dxf-geometry";
 
 /** Sentinel layer name meaning "every CAD layer at once". */
@@ -400,6 +400,19 @@ function placeGeometry(local: LocalGeometry, matrix: Matrix): Geometry | null {
  * @throws When the bytes are not a DXF the parser can read.
  */
 export async function parseDxfDrawing(bytes: Uint8Array): Promise<DxfDrawing> {
+  // Binary DXF is a different encoding of the same model, and neither reader
+  // here handles it: GDAL's DXF driver is ASCII-only, and dxf-parser reports
+  // "Unexpected end of input: EOF group not read before end of file" after
+  // logging a warning per record. Saying so plainly beats letting that reach
+  // the user, who can fix it in one step.
+  if (isBinaryDxf(bytes)) {
+    throw new Error(
+      "This is a binary DXF, which cannot be read. Re-save it as ASCII DXF " +
+        "(in AutoCAD: Save As, then pick a plain 'AutoCAD DXF' format rather " +
+        "than 'Binary DXF') and open it again.",
+    );
+  }
+
   const { default: DxfParser } = await import("dxf-parser");
   // The codepage is read from the raw bytes, then every string the parser
   // produced — it reads the file as Latin-1, byte for byte — is recoded through
