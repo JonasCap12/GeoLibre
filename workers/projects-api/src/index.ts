@@ -54,6 +54,7 @@ interface Env {
   GEOLIBRE_MAX_DATASET_BYTES?: string;
   GEOLIBRE_ACTIVITY_RETENTION_DAYS?: string;
   AUTH_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  DOWNLOAD_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
 }
 
 const VISIBILITIES = new Set(["public", "unlisted", "private"]);
@@ -973,6 +974,7 @@ async function apiRoute(
     }
 
     if (path.length === 3 && path[2] === "content" && method === "GET") {
+      await rateLimitDownload(env, request);
       const account = await optionalAccount(request, db);
       const row = visibleDataset(await load(), account?.id ?? null);
       const body = await objects.get(row.object_key);
@@ -1027,6 +1029,25 @@ async function rateLimit(env: Env, request: Request, scope: string): Promise<voi
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   const { success } = await env.AUTH_RATE_LIMITER.limit({ key: `${scope}:${ip}` });
   if (!success) throw new ApiError(429, "too many requests; retry later");
+}
+
+/**
+ * Rate-limits dataset downloads.
+ *
+ * Separate from {@link rateLimit} because the risk is different. The auth
+ * routes are limited to stop a CPU burn and password guessing; this one is
+ * limited to stop a bill. Each download streams up to the dataset size cap out
+ * of R2 and writes a D1 row to count it, and a public dataset needs no
+ * credentials — an id in a loop is the whole attack.
+ *
+ * Its own binding, so raising the download allowance never loosens the ones
+ * protecting scrypt, and the two cannot exhaust each other's budget.
+ */
+async function rateLimitDownload(env: Env, request: Request): Promise<void> {
+  if (env.DOWNLOAD_RATE_LIMITER === undefined) return;
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const { success } = await env.DOWNLOAD_RATE_LIMITER.limit({ key: `download:${ip}` });
+  if (!success) throw new ApiError(429, "too many downloads; retry later");
 }
 
 export default {

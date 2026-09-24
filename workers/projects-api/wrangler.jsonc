@@ -74,6 +74,24 @@
         "limit": 10,
         "period": 60
       }
+    },
+    {
+      // Dataset downloads. Unlike the two routes above this one is cheap in CPU
+      // and expensive in everything else: each call streams up to
+      // GEOLIBRE_MAX_DATASET_BYTES out of R2 (billed egress) and writes one D1
+      // row to count the download. A public dataset needs no credentials, so an
+      // id and a loop is all it takes to run up a bill on someone else's
+      // account -- the cheapest amplification surface this API has.
+      //
+      // 60/minute, not 10: a download is a legitimate bulk action and a team
+      // pulling a project's files should never see this, whereas a script
+      // looping on one id will. Egress is bounded by that times the size cap.
+      "name": "DOWNLOAD_RATE_LIMITER",
+      "namespace_id": "54703",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
     }
   ],
 
