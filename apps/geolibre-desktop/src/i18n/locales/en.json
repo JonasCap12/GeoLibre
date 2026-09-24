@@ -661,7 +661,9 @@
       "errorNoLayers": "No layers were found in this CAD file.",
       "errorChooseFile": "Choose a CAD (DXF/DWG) file first.",
       "errorNoLayer": "Select a CAD layer to load.",
-      "errorUnsupportedGeometry": "This CAD layer contains mixed or collection geometry that cannot be displayed. Try another layer."
+      "errorUnsupportedGeometry": "This CAD layer contains mixed or collection geometry that cannot be displayed. Try another layer.",
+      "errorDwgVersion": "This drawing was saved by {{release}}. The built-in CAD engine reads only AutoCAD 2000 DWG files. Re-save it as DXF (any version), or as an AutoCAD 2000 DWG, and open it again.",
+      "errorBinaryDxf": "This is a binary DXF, which cannot be read. Re-save it as ASCII DXF (in AutoCAD: Save As, then pick a plain \"AutoCAD DXF\" format rather than \"Binary DXF\") and open it again."
     },
     "gdb": {
       "defaultName": "Geodatabase Layer",

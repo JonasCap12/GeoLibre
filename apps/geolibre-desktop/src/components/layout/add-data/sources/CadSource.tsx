@@ -9,7 +9,9 @@ import {
   readCadLayers,
   reprojectFeatureCollectionToWgs84,
 } from "../../../../lib/duckdb-vector-loader";
+import { isBinaryDxf } from "../../../../lib/cad-encoding";
 import { ALL_LAYERS, type DxfDrawing, parseDxfDrawing } from "../../../../lib/dxf-loader";
+import { dwgReleaseLabel, readDwgSupport } from "../../../../lib/dwg-version";
 import { openLocalDataFileWithFallback } from "../../../../lib/tauri-io";
 import { COMMON_CRS_PRESETS, CAD_SAMPLES } from "../constants";
 import {
@@ -95,6 +97,27 @@ export function CadSource() {
     source.setLayerName((current) =>
       current.trim() && current !== defaultName ? current : layerNameFromPath(path, defaultName),
     );
+
+    // A DWG names its own version in its first six bytes, and the bundled
+    // GDAL reads exactly one of them. Checking here costs nothing and turns
+    // the silent "no layers" below into an answer the user can act on:
+    // ST_Read_Meta returns an empty result for an unsupported DWG without
+    // raising the explanation ST_Read would have given.
+    if (extensionFromPath(path) === "dwg") {
+      const support = readDwgSupport(new Uint8Array(data));
+      if (support && !support.supported) {
+        throw new Error(
+          t("addData.cad.errorDwgVersion", { release: dwgReleaseLabel(support) }),
+        );
+      }
+    }
+
+    // Binary DXF reaches neither reader: GDAL's DXF driver is ASCII-only, and
+    // the in-process parser ends on "Unexpected end of input". Its 22-byte
+    // sentinel settles it here, before a large file is handed to DuckDB.
+    if (isBinaryDxf(new Uint8Array(data))) {
+      throw new Error(t("addData.cad.errorBinaryDxf"));
+    }
 
     // GDAL first: it reads DWG as well as DXF, and its layer list is what the
     // rest of the CAD path expects.
