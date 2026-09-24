@@ -31,18 +31,16 @@
 #    Auth0 sign-in gate; enabling either also means adding its origins to
 #    script-src/frame-src below by hand.
 #
-# wss://collab.geolibre.app matches nginx.conf's base policy (the hosted relay).
-# A self-hosted relay needs its own origin added to connect-src: the directive
-# carries a bare `https:` but no bare `wss:`, so without that entry the app
-# advertises collaboration in the UI and the browser then blocks its WebSocket
-# with no other symptom.
+# Keep both the hosted relay and this fork's self-hosted relay. The directive
+# carries a bare `https:` but no bare `wss:`, so omitting the second origin made
+# the app advertise collaboration while the browser blocked its WebSocket.
 
 # Universal headers only. No Cache-Control here: it would append to every
 # per-path rule below and `no-cache` would win over all of them.
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  Content-Security-Policy: default-src 'self'; connect-src 'self' https: data: blob: wss://collab.geolibre.app; img-src 'self' data: blob: https:; media-src 'self' blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://js.arcgis.com/; script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/pyodide/ https://js.arcgis.com/ https://accounts.google.com https://api.mapbox.com/mapbox-gl-js/; child-src 'self' https://accounts.google.com https://www.google.com; frame-src 'self' https://accounts.google.com https://www.google.com; worker-src blob: 'self'
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https: data: blob: wss://collab.geolibre.app wss://geolibre-collab.jonasnguyen886.workers.dev; img-src 'self' data: blob: https:; media-src 'self' blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://js.arcgis.com/; script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/pyodide/ https://js.arcgis.com/ https://accounts.google.com https://api.mapbox.com/mapbox-gl-js/; child-src 'self' https://accounts.google.com https://www.google.com; frame-src 'self' https://accounts.google.com https://www.google.com; worker-src blob: 'self'
 
 # Vite content-hashes every file it emits here, so a redeploy mints new
 # filenames and these are safe to pin for a year. Scoped to the directory rather

@@ -16,6 +16,7 @@ import { describe, it } from "node:test";
 
 const TOML_PATH = new URL("../workers/collab/wrangler.toml", import.meta.url);
 const JSONC_PATH = new URL("../workers/collab/wrangler.selfhost.jsonc", import.meta.url);
+const WEB_HEADERS_PATH = new URL("../apps/geolibre-desktop/public/_headers", import.meta.url);
 
 /**
  * Strip `//` comments from JSONC.
@@ -158,5 +159,16 @@ describe("session creation is reachable from this deployment", () => {
       assert.ok(!origin.includes("*"), `wildcard origin is not allowed: ${origin}`);
       assert.doesNotThrow(() => new URL(origin), `not a URL: ${origin}`);
     }
+  });
+
+  it("allows the self-hosted WebSocket relay in the deployed web CSP", () => {
+    const headers = readFileSync(WEB_HEADERS_PATH, "utf8");
+    // `https:` in connect-src does not cover WebSockets. The bundle can carry
+    // a perfectly valid VITE_GEOLIBRE_COLLAB_URL while the browser blocks every
+    // connection before it reaches the relay, which was the production failure.
+    assert.ok(
+      headers.includes("wss://geolibre-collab.jonasnguyen886.workers.dev"),
+      "the web CSP must allow this fork's collaboration relay",
+    );
   });
 });
