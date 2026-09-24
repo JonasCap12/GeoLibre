@@ -134,3 +134,29 @@ describe("collab self-host config", () => {
     assert.ok(raw.includes("wrangler secret put COLLAB_IDENTITY_SECRET"));
   });
 });
+
+describe("session creation is reachable from this deployment", () => {
+  it("names an explicit origin allowlist", () => {
+    // The Worker was deployed, VITE_GEOLIBRE_COLLAB_URL was set, and starting a
+    // session still failed with 403 "Origin not allowed to create sessions."
+    // isAllowedOrigin in src/index.ts falls back to *.geolibre.app, localhost
+    // and tauri: when ALLOWED_ORIGINS is unset -- a list this fork is not on.
+    // Nothing about the deploy looked wrong, which is why it went unnoticed.
+    const vars = (selfhost.vars ?? {}) as Record<string, string>;
+    assert.ok(vars.ALLOWED_ORIGINS, "collaboration cannot start without an origin allowlist");
+    assert.match(vars.ALLOWED_ORIGINS, /^https:\/\//, "origins must be absolute https URLs");
+  });
+
+  it("does not open session creation to every workers.dev site", () => {
+    // The tiles Worker admits any *.workers.dev because it fronts public
+    // upstreams. This one creates Durable Objects on this account, so the same
+    // shortcut would let a stranger's page run up the bill.
+    const vars = (selfhost.vars ?? {}) as Record<string, string>;
+    const origins = String(vars.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim());
+    for (const origin of origins) {
+      assert.ok(origin.length > 0, "empty entry in the allowlist");
+      assert.ok(!origin.includes("*"), `wildcard origin is not allowed: ${origin}`);
+      assert.doesNotThrow(() => new URL(origin), `not a URL: ${origin}`);
+    }
+  });
+});

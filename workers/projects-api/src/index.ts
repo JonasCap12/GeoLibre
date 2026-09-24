@@ -35,6 +35,9 @@ import {
   datasetJson,
   datasetKey,
   datasetVisibility,
+  normalizeTags,
+  searchLikePattern,
+  tagLikePattern,
   type DatasetRow,
   ownedDataset,
   safeContentType,
@@ -882,11 +885,28 @@ async function apiRoute(
       const rows = await db
         .prepare(
           `${DATASET_SELECT}
-           WHERE d.visibility = 'public' OR d.owner_id = ?
+           WHERE (d.visibility = 'public' OR d.owner_id = ?)
+             AND (?4 IS NULL OR d.tags LIKE ?4)
+             AND (
+               ?5 IS NULL
+               OR lower(d.name) LIKE ?5 ESCAPE '\\'
+               OR lower(d.description) LIKE ?5 ESCAPE '\\'
+               OR lower(d.filename) LIKE ?5 ESCAPE '\\'
+               OR lower(d.tags) LIKE ?5 ESCAPE '\\'
+             )
            ORDER BY d.created_at DESC
-           LIMIT ? OFFSET ?`,
+           LIMIT ?2 OFFSET ?3`,
         )
-        .bind(account?.id ?? null, limit, offset)
+        // Numbered parameters, because ?4 and ?5 are each read twice or more:
+        // positional binding would need the value repeated per occurrence, and
+        // a miscount there silently shifts every later parameter.
+        .bind(
+          account?.id ?? null,
+          limit,
+          offset,
+          tagLikePattern(url.searchParams.get("tag")),
+          searchLikePattern(url.searchParams.get("q")),
+        )
         .all<DatasetRow>();
       return json({ datasets: (rows.results ?? []).map((row) => datasetJson(row, config)) });
     }
@@ -902,6 +922,7 @@ async function apiRoute(
       const name = (url.searchParams.get("name") ?? "").trim().slice(0, 200) || filename;
       const description = (url.searchParams.get("description") ?? "").trim().slice(0, 2000);
       const visibility = datasetVisibility(url.searchParams.get("visibility") ?? undefined);
+      const tags = normalizeTags(url.searchParams.get("tags"));
       const contentType = safeContentType(request.headers.get("Content-Type"));
 
       const data = await readCapped(
@@ -922,8 +943,8 @@ async function apiRoute(
           .prepare(
             `INSERT INTO datasets
                (id, owner_id, name, description, filename, content_type,
-                size_bytes, object_key, visibility, downloads, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+                size_bytes, object_key, visibility, downloads, created_at, updated_at, tags)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
           )
           .bind(
             id,
@@ -937,6 +958,7 @@ async function apiRoute(
             visibility,
             timestamp,
             timestamp,
+            tags,
           )
           .run();
       } catch (error) {
