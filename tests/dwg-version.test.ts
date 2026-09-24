@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   SUPPORTED_DWG_VERSION,
@@ -111,5 +112,35 @@ describe("binary DXF", () => {
     const text = pairs.flatMap(([c, v]) => [String(c), String(v)]).join("\n") + "\n";
     const drawing = await parseDxfDrawing(new TextEncoder().encode(text));
     assert.equal(drawing.toFeatureCollection(ALL_LAYERS).features.length, 1);
+  });
+});
+
+describe("every door gives the same answer", () => {
+  it("checks the DWG version in the shared loader, not only the CAD panel", () => {
+    // The first fix landed in CadSource alone, so a DWG dropped on the map,
+    // opened from the file picker, or pulled from the shared library reached
+    // none of it and failed as a DuckDB worker complaint about a file being in
+    // use — a message with no mention of versions at all. This is the same
+    // mistake the DXF fallback made before it moved here, so it is pinned.
+    const loader = readFileSync(
+      new URL("../apps/geolibre-desktop/src/lib/duckdb-vector-loader.ts", import.meta.url),
+      "utf8",
+    );
+    const entry = loader.slice(loader.indexOf("export async function loadDuckDbVectorFile"));
+    const guard = entry.indexOf("readDwgSupport");
+    const gdal = entry.indexOf("readVectorFileWithGdal");
+    assert.ok(guard !== -1, "the shared loader no longer checks the DWG version");
+    assert.ok(guard < gdal, "the check must run before the file reaches DuckDB");
+  });
+
+  it("names the release in the message, not just 'unsupported'", () => {
+    const loader = readFileSync(
+      new URL("../apps/geolibre-desktop/src/lib/duckdb-vector-loader.ts", import.meta.url),
+      "utf8",
+    );
+    assert.ok(
+      loader.includes("dwgReleaseLabel"),
+      "the message must say which AutoCAD version wrote the file",
+    );
   });
 });

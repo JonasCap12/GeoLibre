@@ -29,6 +29,7 @@ import {
   type DuckDbVectorLoadOptions,
 } from "./duckdb-vector-guard";
 import { readDxfCodepage, recodeCadFeatureCollection } from "./cad-encoding";
+import { dwgReleaseLabel, readDwgSupport } from "./dwg-version";
 import { ensureGpkgFeatureCount } from "./gpkg-ogr-contents";
 import { isLikelyGeoPackage, loadGeoPackageVectorFile } from "./gpkg-reader";
 import { prjSidecarCrs } from "./prj-sidecar";
@@ -727,6 +728,26 @@ export async function loadDuckDbVectorFile(
   file: DuckDbVectorFile,
   options: DuckDbVectorLoadOptions = {},
 ): Promise<FeatureCollection> {
+  // The bundled GDAL reads DWG through libopencad, which supports exactly one
+  // version. Asked for any other it says so precisely, but only from ST_Read --
+  // and on this path the failure surfaces as a DuckDB worker complaint with no
+  // mention of versions at all. The header settles it in six bytes.
+  //
+  // The check was added to the Add Data -> CAD panel first and only there,
+  // which repeated the mistake that put the DXF fallback in one door: a file
+  // dropped on the map, opened from the picker, or pulled from the shared
+  // library reached none of it. This is the choke point they all pass through.
+  if (file.extension === "dwg") {
+    const support = readDwgSupport(file.data);
+    if (support && !support.supported) {
+      throw new Error(
+        `This drawing was saved by ${dwgReleaseLabel(support)}. The built-in ` +
+          `CAD engine reads only AutoCAD 2000 DWG files. Re-save it as DXF ` +
+          `(any version), or as an AutoCAD 2000 DWG, and open it again.`,
+      );
+    }
+  }
+
   if (file.extension !== "dxf") return readVectorFileWithGdal(file, options);
 
   const dxfBytes = file.data.slice();
