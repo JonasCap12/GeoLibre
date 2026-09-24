@@ -38,7 +38,22 @@
   // SQLite-backed Durable Object: cheaper, and required for the WebSocket
   // Hibernation API used to keep idle sessions' sockets open without holding
   // the actor in memory.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CollabSession"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CollabSession"] }],
+
+  // Who may create a session. Without this the Worker falls back to the
+  // upstream list in src/index.ts -- *.geolibre.app, localhost and tauri: --
+  // which does not include this deployment, so every attempt to start a
+  // session was refused with "Origin not allowed to create sessions." The
+  // Worker was live and configured and the feature still did nothing.
+  //
+  // Set to this deployment's own app origin, not a wildcard: the tiles Worker
+  // admits any *.workers.dev, and that is exactly what would let a stranger's
+  // page open sessions on this account. Add each additional origin that should
+  // be able to start a session, comma-separated, including a custom domain
+  // when one is bound.
+  "vars": {
+    "ALLOWED_ORIGINS": "https://geolibre-web.jonasnguyen886.workers.dev"
+  }
 
   // COLLAB_IDENTITY_SECRET is deliberately not set here. Without it the Worker
   // runs open sessions (anyone with the 8-character code can join), which is

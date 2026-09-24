@@ -40,6 +40,8 @@ export interface SharedDataset {
   owner: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Lowercased tags the uploader attached, for filtering. */
+  tags: string[];
   /** Absolute URL the bytes can be fetched from. */
   contentUrl: string;
 }
@@ -65,6 +67,16 @@ export interface SharedDatasetUpload extends SharedDatasetRequest {
   /** Defaults to "public" — the point of the library is that others see it. */
   visibility?: SharedDatasetVisibility;
   contentType?: string;
+  /** Free-text tags. Normalized server-side: lowercased, trimmed, de-duplicated. */
+  tags?: string[];
+}
+
+/** A listing, optionally narrowed by free text or one tag. */
+export interface SharedDatasetListRequest extends SharedDatasetRequest {
+  /** Matched against name, description, filename and tags. */
+  query?: string;
+  /** Exact tag to filter by. */
+  tag?: string;
 }
 
 /** Thrown for every failure here, so callers have one type to catch. */
@@ -154,13 +166,20 @@ function networkError(error: unknown): never {
  * @returns Datasets, newest first.
  */
 export async function listSharedDatasets(
-  options: SharedDatasetRequest = {},
+  options: SharedDatasetListRequest = {},
 ): Promise<SharedDataset[]> {
   const base = requireBaseUrl(options.baseUrl);
   const fetchImpl = options.fetchImpl ?? getShareFetch();
+  // Filtering happens on the server: the library is meant to outgrow what a
+  // client can hold, so narrowing a list it already downloaded would only work
+  // until it stopped fitting.
+  const query = new URLSearchParams();
+  if (options.query?.trim()) query.set("q", options.query.trim());
+  if (options.tag?.trim()) query.set("tag", options.tag.trim());
+  const suffix = query.toString() ? `?${query}` : "";
   let response: Response;
   try {
-    response = await fetchImpl(`${base}/api/datasets`, {
+    response = await fetchImpl(`${base}/api/datasets${suffix}`, {
       headers: authHeaders(options.token),
       signal: deadline(options.signal, REQUEST_TIMEOUT_MS),
     });
@@ -193,6 +212,7 @@ export async function uploadSharedDataset(options: SharedDatasetUpload): Promise
   if (options.name?.trim()) query.set("name", options.name.trim());
   if (options.description?.trim()) query.set("description", options.description.trim());
   if (options.visibility) query.set("visibility", options.visibility);
+  if (options.tags?.length) query.set("tags", options.tags.join(","));
 
   const body =
     options.data instanceof Uint8Array

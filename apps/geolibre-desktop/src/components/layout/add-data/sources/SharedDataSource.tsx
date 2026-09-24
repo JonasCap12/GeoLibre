@@ -1,5 +1,5 @@
-import { Button, Label, Select } from "@geolibre/ui";
-import { Download, FileUp, RefreshCw, Trash2, Upload, Users } from "lucide-react";
+import { Button, Input, Label, Select } from "@geolibre/ui";
+import { Download, FileUp, RefreshCw, Search, Tag, Trash2, Upload, Users, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDesktopSettingsStore } from "../../../../hooks/useDesktopSettings";
@@ -46,6 +46,12 @@ export function SharedDataSource() {
   const [listError, setListError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  // Debounced separately from the input so typing does not fire one request --
+  // and one D1 scan -- per keystroke. The box stays responsive; the query waits.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [uploadTags, setUploadTags] = useState("");
   // Bumped on every refresh so a slow listing that resolves after a newer one
   // cannot overwrite the newer result.
   const listSeq = useRef(0);
@@ -55,7 +61,11 @@ export function SharedDataSource() {
     setIsListing(true);
     setListError(null);
     try {
-      const entries = await listSharedDatasets({ token: token || undefined });
+      const entries = await listSharedDatasets({
+        token: token || undefined,
+        query: searchQuery.trim() || undefined,
+        tag: activeTag ?? undefined,
+      });
       if (requestId !== listSeq.current) return;
       setDatasets(entries);
       setSelectedId((current) =>
@@ -70,10 +80,18 @@ export function SharedDataSource() {
     } finally {
       if (requestId === listSeq.current) setIsListing(false);
     }
-  }, [t, token]);
+  }, [t, token, searchQuery, activeTag]);
 
-  // Load once on open, and again whenever the token changes: signing in reveals
-  // the caller's own private uploads, which an anonymous listing omits.
+  // Hold the query back until typing pauses. 300 ms is long enough that a
+  // word is one request rather than five, and short enough to feel immediate.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Load once on open, and again whenever the token or the filters change:
+  // signing in reveals the caller's own private uploads, which an anonymous
+  // listing omits.
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -107,6 +125,7 @@ export function SharedDataSource() {
         token,
         data: new Uint8Array(picked.data),
         filename,
+        tags: uploadTags.split(",").map((tag) => tag.trim()).filter(Boolean),
       });
       setUploadNote(t("addData.sharedData.uploaded", { name: stored.name }));
       await refresh();
@@ -174,6 +193,31 @@ export function SharedDataSource() {
     >
       <div className="space-y-3">
         <div className="space-y-1.5">
+          <Label htmlFor="shared-search">
+            <Search className="me-1 inline h-3.5 w-3.5 align-text-bottom" />
+            {t("addData.sharedData.search")}
+          </Label>
+          <Input
+            id="shared-search"
+            value={search}
+            placeholder={t("addData.sharedData.searchPlaceholder")}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          {activeTag ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"
+              onClick={() => setActiveTag(null)}
+              title={t("addData.sharedData.clearTag")}
+            >
+              <Tag className="h-3 w-3" />
+              {activeTag}
+              <X className="h-3 w-3" />
+            </button>
+          ) : null}
+        </div>
+
+        <div className="space-y-1.5">
           <Label htmlFor="shared-dataset">
             <Users className="me-1 inline h-3.5 w-3.5 align-text-bottom" />
             {t("addData.sharedData.dataset")}
@@ -210,6 +254,21 @@ export function SharedDataSource() {
               })}
             </p>
           ) : null}
+          {selected && selected.tags.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {selected.tags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                  onClick={() => setActiveTag(tag)}
+                  title={t("addData.sharedData.filterByTag", { tag })}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {listError ? <p className="text-xs text-destructive">{listError}</p> : null}
         </div>
 
@@ -238,6 +297,21 @@ export function SharedDataSource() {
             </Button>
           ) : null}
         </div>
+
+        {token ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="shared-upload-tags">{t("addData.sharedData.uploadTags")}</Label>
+            <Input
+              id="shared-upload-tags"
+              value={uploadTags}
+              placeholder={t("addData.sharedData.uploadTagsPlaceholder")}
+              onChange={(event) => setUploadTags(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("addData.sharedData.uploadTagsHelp")}
+            </p>
+          </div>
+        ) : null}
 
         {uploadNote ? <p className="text-xs text-muted-foreground">{uploadNote}</p> : null}
         <p className="text-xs text-muted-foreground">

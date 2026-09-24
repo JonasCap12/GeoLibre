@@ -1040,7 +1040,14 @@
       "uploadError": "Could not upload that file.",
       "deleteError": "Could not delete that dataset.",
       "errorChoose": "Choose a dataset to add.",
-      "fileFilter": "Any data file"
+      "fileFilter": "Any data file",
+      "search": "Search",
+      "searchPlaceholder": "Name, description, file name or tag",
+      "clearTag": "Clear this tag filter",
+      "filterByTag": "Show only datasets tagged \"{{tag}}\"",
+      "uploadTags": "Tags for the next upload",
+      "uploadTagsPlaceholder": "e.g. bao-loc, cau-duong, khao-sat",
+      "uploadTagsHelp": "Comma-separated. Lowercased automatically, so a library of fifty projects stays findable."
     }
   },
   "offline": {

@@ -54,6 +54,7 @@ export function datasetJson(row: DatasetRow, config: Config): Record<string, unk
     visibility: row.visibility,
     downloads: row.downloads,
     owner: row.owner_username,
+    tags: readTags((row as unknown as { tags?: unknown }).tags),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     contentUrl: `${config.baseUrl}/datasets/${row.id}/content`,
@@ -128,4 +129,80 @@ export function ownedDataset(row: DatasetRow | null, accountId: string): Dataset
   if (row === null) throw new ApiError(404, "dataset not found");
   if (row.owner_id !== accountId) throw new ApiError(403, "dataset ownership required");
   return row;
+}
+
+/** How many tags one dataset may carry, and how long each may be. */
+export const MAX_TAGS = 12;
+export const MAX_TAG_LENGTH = 32;
+
+/**
+ * Normalize a caller-supplied tag list into the stored form.
+ *
+ * Tags are lowercased so "Road" and "road" are one tag rather than two that
+ * look identical in a list, trimmed, de-duplicated, and stored comma-separated
+ * with a leading and trailing comma. Those sentinel commas are what let a tag
+ * filter match a whole tag: `tags LIKE '%,road,%'` finds `road` and not the
+ * `road` inside `railroad`, which a naive `LIKE '%road%'` would.
+ *
+ * Commas are stripped from inside a tag rather than rejected, because a tag is
+ * free text a user typed and one stray comma should not fail the upload; it
+ * would otherwise split one tag into two on the way back out.
+ *
+ * @param raw - The comma-separated value from the request.
+ * @returns The stored form, or `""` when nothing usable was supplied.
+ */
+export function normalizeTags(raw: string | null | undefined): string {
+  if (typeof raw !== "string" || raw.trim() === "") return "";
+  const seen: string[] = [];
+  for (const piece of raw.split(",")) {
+    const tag = piece.trim().toLowerCase().replace(/,/g, "").slice(0, MAX_TAG_LENGTH).trim();
+    if (!tag || seen.includes(tag)) continue;
+    seen.push(tag);
+    if (seen.length >= MAX_TAGS) break;
+  }
+  return seen.length > 0 ? `,${seen.join(",")},` : "";
+}
+
+/**
+ * The tags of a stored row, as a plain list for the API response.
+ *
+ * @param stored - The column value.
+ * @returns The tags, without the sentinel commas.
+ */
+export function readTags(stored: unknown): string[] {
+  if (typeof stored !== "string" || stored === "") return [];
+  return stored.split(",").filter((tag) => tag !== "");
+}
+
+/**
+ * The `LIKE` pattern that matches one whole tag.
+ *
+ * @param tag - A caller-supplied tag.
+ * @returns The pattern, or null when the tag is unusable.
+ */
+export function tagLikePattern(tag: string | null | undefined): string | null {
+  const normalized = normalizeTags(tag);
+  if (!normalized) return null;
+  // normalizeTags may have kept several; a filter takes the first.
+  const first = readTags(normalized)[0];
+  return first ? `%,${first},%` : null;
+}
+
+/**
+ * The `LIKE` pattern for a free-text search, with wildcards escaped.
+ *
+ * Without escaping, a query containing `%` matches everything and a query
+ * containing `_` matches any character, so a user searching for a filename
+ * with an underscore -- which is most of them -- gets results that do not
+ * contain what they typed.
+ *
+ * @param query - The raw search text.
+ * @returns The pattern, or null when the query is empty.
+ */
+export function searchLikePattern(query: string | null | undefined): string | null {
+  if (typeof query !== "string") return null;
+  const trimmed = query.trim().slice(0, 200);
+  if (!trimmed) return null;
+  const escaped = trimmed.replace(/[\\%_]/g, (ch) => "\\" + ch);
+  return `%${escaped.toLowerCase()}%`;
 }
