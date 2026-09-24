@@ -1,10 +1,10 @@
 name: Deploy Website
 
+# FORK CHANGE: the automatic push and pull_request triggers are removed. This
+# publishes the demo site to GitHub Pages under geolibre.app, which this fork
+# does not own, so it failed on every push to main and on every pull request.
+# See the note in deploy-collab.yml.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

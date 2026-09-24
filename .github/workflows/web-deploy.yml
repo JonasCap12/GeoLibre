@@ -5,9 +5,10 @@ name: Deploy web.geolibre.app
 # repository contains only the generated site; this workflow remains beside
 # the source code and build configuration it deploys.
 
+# FORK CHANGE: the automatic push trigger is removed. This publishes to
+# web.geolibre.app, which this fork does not own; deploy-web-worker.yml is what
+# deploys the app here. See the note in deploy-collab.yml.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:

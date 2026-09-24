@@ -1,11 +1,9 @@
 name: Deploy tiles
 
+# FORK CHANGE: the automatic push trigger is removed. See the note in
+# deploy-collab.yml -- this workflow has the same problem with
+# `tiles.geolibre.app`, and deploy-tiles-selfhost.yml is what runs here.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "workers/tiles/**"
-      - ".github/workflows/deploy-tiles.yml"
   workflow_dispatch:
 
 permissions:
