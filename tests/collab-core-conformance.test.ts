@@ -168,3 +168,26 @@ describe("collaboration relay conformance", () => {
     assert.equal(sanitizeCursor({ lng: Number.NaN, lat: 42 }), null);
   });
 });
+
+describe("oversize snapshot message", () => {
+  it("names both sizes so the reader can act", async () => {
+    // "Project is too large to sync live" reads as "collaboration does not
+    // work". Whether the answer is to drop one layer or to stop syncing the
+    // drawing at all depends on being over by a little or by four times, and
+    // the message is the only place that is knowable. A 45 MB survey drawing
+    // is 42.7 MB of GeoJSON; one of its layers is under two.
+    const { authorizeSnapshot } = await import("../packages/collab-core/src/session.ts");
+    const decision = authorizeSnapshot(
+      { role: "host", editOverride: undefined } as never,
+      "co-edit" as never,
+      42_700_000,
+      10_000_000,
+    );
+    assert.equal(decision.ok, false);
+    if (decision.ok) return;
+    assert.equal(decision.code, "too-large");
+    assert.match(decision.message, /42\.7 MB/, "must say how big the project is");
+    assert.match(decision.message, /10\.0 MB/, "must say what the limit is");
+    assert.match(decision.message, /one CAD layer at a time/i, "must say what to do");
+  });
+});

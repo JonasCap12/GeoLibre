@@ -181,10 +181,20 @@ export function authorizeSnapshot(
     };
   }
   if (byteLength > maxBytes) {
+    // Name the two numbers. Without them the message reads as "collaboration
+    // does not work", and the reader has no way to tell whether they are over
+    // by a little or by four times -- which decides whether the answer is to
+    // drop one layer or to stop trying to sync the whole drawing. A CAD file
+    // is the usual cause: one survey drawing can be 40 MB of GeoJSON while a
+    // single layer of it is under two.
+    const mb = (bytes: number): string => `${(bytes / 1_000_000).toFixed(1)} MB`;
     return {
       ok: false,
       code: "too-large",
-      message: "Project is too large to sync live. Share it via URL instead.",
+      message:
+        `Project is ${mb(byteLength)}; live sync holds ${mb(maxBytes)}. ` +
+        `Load fewer or smaller layers -- one CAD layer at a time rather than ` +
+        `all of them -- or share the project by URL instead.`,
     };
   }
   if (
