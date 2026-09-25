@@ -24,7 +24,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
  */
 const UPLOAD_TIMEOUT_MS = 10 * 60_000;
 
-export type SharedDatasetVisibility = "public" | "private";
+export type SharedDatasetVisibility = "public" | "team" | "private";
 
 /** One entry in the shared library, as the API returns it. */
 export interface SharedDataset {
@@ -64,7 +64,10 @@ export interface SharedDatasetUpload extends SharedDatasetRequest {
   /** Display name. Falls back to the filename when blank. */
   name?: string;
   description?: string;
-  /** Defaults to "public" — the point of the library is that others see it. */
+  /**
+   * Who can read the file. Omitted means the server default, "team": anyone
+   * signed in to this deployment, not the open internet.
+   */
   visibility?: SharedDatasetVisibility;
   contentType?: string;
   /** Free-text tags. Normalized server-side: lowercased, trimmed, de-duplicated. */

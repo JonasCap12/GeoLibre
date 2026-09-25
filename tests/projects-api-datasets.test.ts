@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  DATASET_LIST_WHERE_VISIBILITY,
   datasetJson,
   datasetKey,
+  datasetListedFor,
   datasetVisibility,
   type DatasetRow,
   ownedDataset,
@@ -96,28 +98,41 @@ describe("safeContentType", () => {
 });
 
 describe("datasetVisibility", () => {
-  it("defaults to shared, which is the point of the library", () => {
-    assert.equal(datasetVisibility(undefined), "public");
-    assert.equal(datasetVisibility(null), "public");
-    assert.equal(datasetVisibility(""), "public");
+  it("defaults to team, not the open internet", () => {
+    // Public used to be the silent default. A survey drawing uploaded without
+    // a choice was then readable by anyone who knew the API hostname.
+    assert.equal(datasetVisibility(undefined), "team");
+    assert.equal(datasetVisibility(null), "team");
+    assert.equal(datasetVisibility(""), "team");
   });
 
-  it("accepts the two valid values", () => {
+  it("accepts public, team, and private", () => {
     assert.equal(datasetVisibility("public"), "public");
+    assert.equal(datasetVisibility("team"), "team");
     assert.equal(datasetVisibility("private"), "private");
   });
 
   it("rejects anything else rather than silently sharing it", () => {
     // "unlisted" is valid for a project but meaningless here, and treating an
     // unknown value as public would leak a file the uploader meant to keep.
-    assert.throws(() => datasetVisibility("unlisted"), /public or private/);
-    assert.throws(() => datasetVisibility("PUBLIC"), /public or private/);
+    assert.throws(() => datasetVisibility("unlisted"), /public, team, or private/);
+    assert.throws(() => datasetVisibility("PUBLIC"), /public, team, or private/);
   });
 });
 
 describe("visibleDataset", () => {
   it("shows a public dataset to anyone", () => {
     assert.equal(visibleDataset(row(), null).id, "abc");
+  });
+
+  it("hides a team dataset from an anonymous caller", () => {
+    // 404, not 403: the status must not confirm the file exists.
+    assert.throws(() => visibleDataset(row({ visibility: "team" }), null), /not found/);
+  });
+
+  it("shows a team dataset to any signed-in account", () => {
+    assert.equal(visibleDataset(row({ visibility: "team" }), "someone-else").id, "abc");
+    assert.equal(visibleDataset(row({ visibility: "team" }), "owner-1").id, "abc");
   });
 
   it("shows a private dataset to its owner", () => {
@@ -167,6 +182,29 @@ describe("datasetJson", () => {
     const json = datasetJson(row(), CONFIG);
     assert.equal(json.object_key, undefined);
     assert.equal(json.owner_id, undefined);
+  });
+});
+
+describe("dataset listing", () => {
+  it("reuses the already-bound account id", () => {
+    assert.match(DATASET_LIST_WHERE_VISIBILITY, /\?1 IS NOT NULL/);
+    assert.match(DATASET_LIST_WHERE_VISIBILITY, /d\.owner_id = \?1/);
+    assert.equal(DATASET_LIST_WHERE_VISIBILITY.includes("?6"), false);
+  });
+
+  it("admits a team row for a signed-in caller and excludes it anonymously", () => {
+    assert.equal(datasetListedFor("team", "owner-1", "colleague"), true);
+    assert.equal(datasetListedFor("team", "owner-1", null), false);
+  });
+
+  it("still lists a public row for an anonymous caller", () => {
+    assert.equal(datasetListedFor("public", "owner-1", null), true);
+  });
+
+  it("still lists a private row only for its owner", () => {
+    assert.equal(datasetListedFor("private", "owner-1", "owner-1"), true);
+    assert.equal(datasetListedFor("private", "owner-1", "colleague"), false);
+    assert.equal(datasetListedFor("private", "owner-1", null), false);
   });
 });
 

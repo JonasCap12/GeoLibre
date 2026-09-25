@@ -6,7 +6,7 @@
 
 import { ApiError, type Config } from "./model";
 
-export type DatasetVisibility = "public" | "private";
+export type DatasetVisibility = "public" | "team" | "private";
 
 export interface DatasetRow {
   id: string;
@@ -102,11 +102,45 @@ export function safeContentType(raw: string | null): string {
     : "application/octet-stream";
 }
 
-/** Parse the visibility field of an upload, defaulting to shared. */
+/**
+ * Parse the visibility field of an upload.
+ *
+ * Defaults to "team", not "public". Public means anyone on the internet who
+ * can reach this hostname; an internal library of survey drawings must not
+ * start there. Omitting the field used to mean public, which is why the
+ * upload form now has to send a choice instead of relying on silence.
+ */
 export function datasetVisibility(raw: unknown): DatasetVisibility {
-  if (raw === undefined || raw === null || raw === "") return "public";
-  if (raw === "public" || raw === "private") return raw;
-  throw new ApiError(422, "visibility must be public or private");
+  if (raw === undefined || raw === null || raw === "") return "team";
+  if (raw === "public" || raw === "team" || raw === "private") return raw;
+  throw new ApiError(422, "visibility must be public, team, or private");
+}
+
+/**
+ * The listing's visibility predicate. `?1` is the caller's account id, already
+ * bound by the route and reused here on purpose: adding a parameter would
+ * force every later numbered placeholder to move, and a wrong number still
+ * runs and returns the wrong rows.
+ *
+ * Anonymous callers bind null. `= NULL` matches nothing in SQL, so a private
+ * row stays hidden without a second statement, and a team row needs the
+ * explicit `IS NOT NULL` or it would vanish for signed-in callers too.
+ */
+export const DATASET_LIST_WHERE_VISIBILITY =
+  "(d.visibility = 'public' OR (d.visibility = 'team' AND ?1 IS NOT NULL) OR d.owner_id = ?1)";
+
+/**
+ * Whether the library listing returns this row. Same rule as
+ * {@link DATASET_LIST_WHERE_VISIBILITY}, in a form a test can run without D1.
+ */
+export function datasetListedFor(
+  visibility: string,
+  ownerId: string,
+  accountId: string | null,
+): boolean {
+  if (visibility === "public") return true;
+  if (visibility === "team" && accountId !== null) return true;
+  return accountId !== null && ownerId === accountId;
 }
 
 /**
@@ -115,12 +149,14 @@ export function datasetVisibility(raw: unknown): DatasetVisibility {
  * for projects.
  */
 export function visibleDataset(row: DatasetRow | null, accountId: string | null): DatasetRow {
-  if (
-    row === null ||
-    (row.visibility === "private" && (accountId === null || row.owner_id !== accountId))
-  ) {
-    throw new ApiError(404, "dataset not found");
-  }
+  if (row === null) throw new ApiError(404, "dataset not found");
+  // 404, not 403: a status code must not reveal that a hidden dataset exists.
+  // Team is the middle level — any signed-in account on this deployment, and
+  // nobody else. Private stays owner-only.
+  const hidden =
+    (row.visibility === "team" && accountId === null) ||
+    (row.visibility === "private" && (accountId === null || row.owner_id !== accountId));
+  if (hidden) throw new ApiError(404, "dataset not found");
   return row;
 }
 
