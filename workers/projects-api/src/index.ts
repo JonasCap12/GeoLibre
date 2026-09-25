@@ -31,6 +31,7 @@ import {
   type Visibility,
 } from "./model";
 import {
+  DATASET_LIST_WHERE_VISIBILITY,
   DATASET_SELECT,
   datasetJson,
   datasetKey,
@@ -879,13 +880,13 @@ async function apiRoute(
       const account = await optionalAccount(request, db);
       const limit = positiveInt(url, "limit", 50, 1, 200);
       const offset = positiveInt(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
-      // Public rows, plus the caller's own private ones. Binding the account id
-      // (rather than branching the SQL) keeps one prepared statement for both
-      // the signed-in and anonymous cases.
+      // Public rows, team rows when the caller is signed in, plus the caller's
+      // own private ones. One statement for both the signed-in and anonymous
+      // cases; ?1 is bound once and reused (see DATASET_LIST_WHERE_VISIBILITY).
       const rows = await db
         .prepare(
           `${DATASET_SELECT}
-           WHERE (d.visibility = 'public' OR d.owner_id = ?)
+           WHERE ${DATASET_LIST_WHERE_VISIBILITY}
              AND (?4 IS NULL OR d.tags LIKE ?4)
              AND (
                ?5 IS NULL

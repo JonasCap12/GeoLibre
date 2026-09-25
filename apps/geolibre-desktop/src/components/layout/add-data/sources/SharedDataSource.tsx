@@ -10,6 +10,7 @@ import {
   formatDatasetSize,
   listSharedDatasets,
   type SharedDataset,
+  type SharedDatasetVisibility,
   uploadSharedDataset,
 } from "../../../../lib/shared-datasets";
 import { openLocalDataFileWithFallback } from "../../../../lib/tauri-io";
@@ -52,6 +53,9 @@ export function SharedDataSource() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [uploadTags, setUploadTags] = useState("");
+  // Team is the default so a survey drawing is not published to the open
+  // internet just because the uploader did not pick a level.
+  const [uploadVisibility, setUploadVisibility] = useState<SharedDatasetVisibility>("team");
   // Bumped on every refresh so a slow listing that resolves after a newer one
   // cannot overwrite the newer result.
   const listSeq = useRef(0);
@@ -125,9 +129,15 @@ export function SharedDataSource() {
         token,
         data: new Uint8Array(picked.data),
         filename,
+        visibility: uploadVisibility,
         tags: uploadTags.split(",").map((tag) => tag.trim()).filter(Boolean),
       });
-      setUploadNote(t("addData.sharedData.uploaded", { name: stored.name }));
+      setUploadNote(
+        t("addData.sharedData.uploaded", {
+          name: stored.name,
+          visibility: t(`addData.sharedData.visibility.${uploadVisibility}`),
+        }),
+      );
       await refresh();
       setSelectedId(stored.id);
     } catch (err) {
@@ -251,6 +261,7 @@ export function SharedDataSource() {
               {t("addData.sharedData.datasetDetail", {
                 filename: selected.filename,
                 downloads: selected.downloads,
+                visibility: t(`addData.sharedData.visibility.${selected.visibility}`),
               })}
             </p>
           ) : null}
@@ -300,6 +311,18 @@ export function SharedDataSource() {
 
         {token ? (
           <div className="space-y-1.5">
+            <Label htmlFor="shared-upload-visibility">{t("addData.sharedData.uploadVisibility")}</Label>
+            <Select
+              id="shared-upload-visibility"
+              value={uploadVisibility}
+              onChange={(event) =>
+                setUploadVisibility(event.target.value as SharedDatasetVisibility)
+              }
+            >
+              <option value="team">{t("addData.sharedData.visibility.team")}</option>
+              <option value="public">{t("addData.sharedData.visibility.public")}</option>
+              <option value="private">{t("addData.sharedData.visibility.private")}</option>
+            </Select>
             <Label htmlFor="shared-upload-tags">{t("addData.sharedData.uploadTags")}</Label>
             <Input
               id="shared-upload-tags"

@@ -1,0 +1,17 @@
+-- Team visibility for the shared data library.
+--
+-- There is nothing to apply. This file exists so the next person looking for
+-- a migration finds the decision instead of writing an ALTER.
+--
+-- WHY NO MIGRATION
+--
+-- `datasets.visibility` is TEXT with no CHECK constraint (schema-datasets.sql),
+-- so the value 'team' stores on every database that already has the table.
+-- SQLite cannot change a column DEFAULT without rebuilding the table, and the
+-- API INSERT always supplies visibility, so the column default is never read
+-- on the upload path. Existing rows stay whatever they were; moving them is
+-- out of scope.
+--
+-- A fresh database created from schema-datasets.sql already defaults the
+-- column to 'team'. Re-running that file against a live database is a no-op
+-- (`CREATE TABLE IF NOT EXISTS`) and will not rewrite the old default.

@@ -29,11 +29,18 @@ CREATE TABLE IF NOT EXISTS datasets (
   -- imported bucket) does not need a migration of every row, exactly as the
   -- versions table stores object_key.
   object_key   TEXT NOT NULL,
-  -- 'public'  -- anyone who can reach the API, which for an internal
-  --              deployment is the team; this is what makes sharing work.
+  -- 'public'  -- anyone on the internet who can reach the API.
+  -- 'team'    -- any caller holding a valid account token on this deployment.
+  --              The API default for new uploads. Fresh databases created from
+  --              this file default the column the same way.
   -- 'private' -- only the uploader. Same vocabulary as projects.visibility
   --              minus 'unlisted', which has no meaning without a slug URL.
-  visibility   TEXT NOT NULL DEFAULT 'public',
+  --
+  -- No CHECK constraint, so 'team' stores on a database created before this
+  -- comment existed. SQLite cannot change a column default in place, and the
+  -- INSERT always writes visibility explicitly, so existing deployments do not
+  -- need a migration. See schema-datasets-team.sql.
+  visibility   TEXT NOT NULL DEFAULT 'team',
   -- Denormalised counter, incremented on each content read. Cheap signal for
   -- "is anyone actually using this", and avoids a join against the activity
   -- table for a listing.

@@ -1030,17 +1030,17 @@
       "defaultName": "Shared Layer",
       "dataset": "Shared dataset",
       "datasetOption": "{{name}} — {{size}}, by {{owner}}",
-      "datasetDetail": "File: {{filename}} · added to a map {{downloads}} times",
+      "datasetDetail": "File: {{filename}} · {{visibility}} · added to a map {{downloads}} times",
       "unknownOwner": "unknown",
       "loading": "Loading the library…",
       "emptyLibrary": "Nothing has been shared yet",
       "refresh": "Refresh",
       "upload": "Upload a file",
       "uploading": "Uploading…",
-      "uploaded": "Uploaded {{name}}. Everyone on this deployment can now add it.",
+      "uploaded": "Uploaded {{name}}. {{visibility}}",
       "delete": "Delete",
-      "help": "Files here are stored on your deployment, not in this browser, so everyone can add them. Only the person who uploaded a file can delete it.",
-      "helpAnonymous": "Add a share API token in Settings to upload files or to see your own private uploads.",
+      "help": "Files here are stored on your deployment, not in this browser. Team files are visible to anyone signed in; public files are visible to anyone on the internet. Only the person who uploaded a file can delete it.",
+      "helpAnonymous": "Add a share API token in Settings to upload files, or to see team files and your own private uploads.",
       "tokenRequired": "Add a share API token in Settings before uploading.",
       "listError": "Could not read the shared data library.",
       "uploadError": "Could not upload that file.",
@@ -1053,7 +1053,13 @@
       "filterByTag": "Show only datasets tagged \"{{tag}}\"",
       "uploadTags": "Tags for the next upload",
       "uploadTagsPlaceholder": "e.g. bao-loc, cau-duong, khao-sat",
-      "uploadTagsHelp": "Comma-separated. Lowercased automatically, so a library of fifty projects stays findable."
+      "uploadTagsHelp": "Comma-separated. Lowercased automatically, so a library of fifty projects stays findable.",
+      "uploadVisibility": "Who can use this file",
+      "visibility": {
+        "team": "Team — anyone signed in to this server",
+        "public": "Public — anyone on the internet",
+        "private": "Private — only you"
+      }
     }
   },
   "offline": {
