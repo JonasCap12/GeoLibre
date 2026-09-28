@@ -3519,26 +3519,40 @@ export function LayerPanel({
                           }}
                         />
                       ) : (
-                        <span
-                          className={`min-w-0 flex-1 truncate text-sm font-medium ${
-                            groupHidden ? "text-muted-foreground" : ""
-                          }`}
-                          title={
-                            isLayerLocked
-                              ? t("collaborate.layerLockedHint")
-                              : groupHidden
-                                ? `${t("layers.hiddenByGroup")} — ${t(
-                                    "layers.doubleClickToRename",
-                                  )}`
-                                : t("layers.doubleClickToRename")
-                          }
-                          onDoubleClick={(e: ReactMouseEvent) => {
-                            e.stopPropagation();
-                            if (layerEditable) beginRename(layer);
-                          }}
-                        >
-                          {layer.name}
-                        </span>
+                        <>
+                          <span
+                            className={`min-w-0 flex-1 truncate text-sm font-medium ${
+                              groupHidden ? "text-muted-foreground" : ""
+                            }`}
+                            title={
+                              isLayerLocked
+                                ? t("collaborate.layerLockedHint")
+                                : groupHidden
+                                  ? `${t("layers.hiddenByGroup")} — ${t(
+                                      "layers.doubleClickToRename",
+                                    )}`
+                                  : t("layers.doubleClickToRename")
+                            }
+                            onDoubleClick={(e: ReactMouseEvent) => {
+                              e.stopPropagation();
+                              if (layerEditable) beginRename(layer);
+                            }}
+                          >
+                            {layer.name}
+                          </span>
+                          {typeof layer.metadata.sharedDatasetId === "string" &&
+                          !(layer.geojson?.features && layer.geojson.features.length > 0) ? (
+                            <span className="block text-start text-[10px] text-amber-700 dark:text-amber-400">
+                              {layer.metadata.sharedDatasetLoad === "needs-sign-in"
+                                ? t("collaborate.sharedLayerNeedsSignIn")
+                                : layer.metadata.sharedDatasetLoad === "missing"
+                                  ? t("collaborate.sharedLayerMissing")
+                                  : layer.metadata.sharedDatasetLoad === "failed"
+                                    ? t("collaborate.sharedLayerFailed")
+                                    : t("collaborate.sharedLayerLoading")}
+                            </span>
+                          ) : null}
+                        </>
                       )}
                       {isLayerLocked && (
                         <span title={t("collaborate.layerLockedHint")}>

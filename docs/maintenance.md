@@ -76,6 +76,19 @@ suite.
   `e2e/blend-modes.spec.ts` asserts real pixels. Run both on a bump.
 
   See [Adding a blend mode](#adding-a-blend-mode) before extending the list.
+- **`Map._removed`** (`packages/map/src/generated-images.ts`) is read before
+  every `hasImage`. MapLibre's `hasImage` calls `this.style.getImage` with no
+  guard, and `Map.remove()` deletes `style` while the object is still
+  reachable. `_removed` is the flag MapLibre sets in that same `remove()` and
+  checks itself (`if (this._removed) return` in `_render`). It is not in the
+  public docs. A stub map that simply omits `style` must stay usable — that is
+  how the node tests stand in for MapLibre — so a missing `style` property is
+  not treated as removal. If a bump stops setting `_removed`,
+  `tests/generated-images.test.ts` ("does not call hasImage after MapLibre's
+  real remove() shape") fails: that case `delete`s the own `style` property,
+  sets `_removed`, and leaves the map in the registry, so `hasImage` throws
+  unless the flag is what skips it. A bump that stops deleting `style` does
+  not throw, so the suite does not watch that half.
 
 ### `@deck.gl/mapbox` and `@deck.gl/maplibre`
 
