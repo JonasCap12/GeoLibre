@@ -2664,6 +2664,13 @@ export function DesktopShell({
             label="Map"
             displayName={t("shell.section.map")}
             fallbackClassName="h-full w-full"
+            // Only while the fallback is showing does a key change remount the
+            // map. `projectGeneration` advances when a project is loaded or a
+            // remote snapshot is applied, not when the camera or a cursor
+            // moves, so a healthy session is left alone and the next snapshot
+            // after a crash clears the Retry wall. Layer identity would change
+            // on every edit and is the wrong key; this one fires once per apply.
+            resetKeys={[projectGeneration]}
           >
             <MapGrid>
               {/* The primary map area is one renderer or the other (#2217).

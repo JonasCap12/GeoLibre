@@ -106,6 +106,22 @@ const factories = new Map<string, GeneratedImageFactory>();
 const wiredMaps = new WeakSet<maplibregl.Map>();
 const activeMaps = new Set<WeakRef<maplibregl.Map>>();
 
+/**
+ * `hasImage` reads `map.style` with no guard. `remove()` deletes that object,
+ * sets `_removed`, then fires `remove`, but the Map stays reachable through
+ * the WeakRef below until GC — and a factory promise captured earlier can
+ * resolve in that same window.
+ *
+ * `_removed` is not public API (see docs/maintenance.md). It is the flag
+ * MapLibre itself checks before touching a torn-down map. `style` is public,
+ * but unit-test stubs omit it entirely, so a missing property is not the same
+ * as `remove()` having deleted one.
+ */
+function mapStillHasStyle(map: maplibregl.Map): boolean {
+  if ((map as maplibregl.Map & { _removed?: boolean })._removed === true) return false;
+  return !("style" in map) || map.style != null;
+}
+
 // Bound the registry so a long session of custom-SVG editing (each distinct
 // markup hashes to a new id) can't grow it without limit. Built-in shapes and
 // patterns have low cardinality and stay well under this.
@@ -134,6 +150,9 @@ export function registerGeneratedImage(id: string, factory: GeneratedImageFactor
         activeMaps.delete(ref);
         continue;
       }
+      // A removed map is still a live object here. Skip it; the `remove`
+      // listener drops the ref, but this pass can run before that event.
+      if (!mapStillHasStyle(map)) continue;
       if (map.hasImage(id)) {
         try {
           map.removeImage(id);
@@ -149,7 +168,7 @@ export function registerGeneratedImage(id: string, factory: GeneratedImageFactor
 const TRANSPARENT_1X1 = new Uint8Array([0, 0, 0, 0]);
 
 function addGeneratedImage(map: maplibregl.Map, id: string): void {
-  if (map.hasImage(id)) return;
+  if (!mapStillHasStyle(map) || map.hasImage(id)) return;
   const factory = factories.get(id);
   if (!factory) {
     map.addImage(id, { width: 1, height: 1, data: TRANSPARENT_1X1 });
@@ -169,16 +188,17 @@ function addGeneratedImage(map: maplibregl.Map, id: string): void {
   if (result instanceof Promise) {
     result
       .then((resolved) => {
-        if (resolved && !map.hasImage(id)) {
+        // The map can be removed while the factory is still rasterizing.
+        if (!mapStillHasStyle(map) || map.hasImage(id)) return;
+        if (resolved) {
           map.addImage(id, resolved.image, { pixelRatio: resolved.pixelRatio });
-        } else if (!map.hasImage(id)) {
+        } else {
           map.addImage(id, { width: 1, height: 1, data: TRANSPARENT_1X1 });
         }
       })
       .catch(() => {
-        if (!map.hasImage(id)) {
-          map.addImage(id, { width: 1, height: 1, data: TRANSPARENT_1X1 });
-        }
+        if (!mapStillHasStyle(map) || map.hasImage(id)) return;
+        map.addImage(id, { width: 1, height: 1, data: TRANSPARENT_1X1 });
       });
     return;
   }
@@ -194,8 +214,26 @@ export function ensureGeneratedImageHandler(map: maplibregl.Map): void {
   // Guard against stub maps (unit tests) that do not implement the event API.
   if (typeof map.on !== "function") return;
   wiredMaps.add(map);
-  activeMaps.add(new WeakRef(map));
-  map.on("styleimagemissing", (event) => {
+  const ref = new WeakRef(map);
+  activeMaps.add(ref);
+  const onMissing = (event: { id: string }) => {
     addGeneratedImage(map, event.id);
-  });
+  };
+  // Waiting for GC is the window in which a removed map still answers
+  // deref() and then throws in hasImage. Drop it while remove() is running.
+  const onRemove = () => {
+    activeMaps.delete(ref);
+    wiredMaps.delete(map);
+    // Unit-test stubs implement `on` without `off`. The map is going away
+    // either way; unsubscribing is only for a real MapLibre map.
+    if (typeof map.off === "function") {
+      map.off("styleimagemissing", onMissing);
+      map.off("remove", onRemove);
+    }
+  };
+  // `styleimagemissing` is registered last. Some unit-test stubs keep only
+  // the most recent `on` handler, and that handler is the one they invoke
+  // to materialize an image.
+  map.on("remove", onRemove);
+  map.on("styleimagemissing", onMissing);
 }

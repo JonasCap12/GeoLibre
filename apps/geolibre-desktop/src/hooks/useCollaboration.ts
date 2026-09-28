@@ -29,7 +29,22 @@ import {
   type ServerMessage,
   participantCanEditLayer,
 } from "../lib/collab-protocol";
+import { recallHostToken, rememberHostToken } from "../lib/collab-host-tokens";
 import { mergeInboundCollaborationProject } from "../lib/collaboration-project";
+import {
+  learnedSnapshotLimit,
+  localTooLargeMessage,
+  snapshotSyncAction,
+  snapshotSyncLimit,
+} from "../lib/collaboration-sync";
+import {
+  applySharedLayerFeatures,
+  classifySharedDatasetError,
+  markSharedLayerFailure,
+  sharedDatasetIdOf,
+} from "../lib/collaboration-shared-layer";
+import { loadSharedDatasetFeatures } from "../lib/collaboration-shared-load";
+import { useDesktopSettingsStore } from "./useDesktopSettings";
 
 const SNAPSHOT_DEBOUNCE_MS = 250;
 const CURSOR_THROTTLE_MS = 40;
@@ -75,6 +90,12 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   const snapshotRequestRef = useRef(0);
   const selfIdRef = useRef<string | null>(null);
   const syncPausedRef = useRef(false);
+  // Null until a too-large rejection names the relay's ceiling. The compile-time
+  // constant is only the fallback; a deployment may set a lower one.
+  const learnedLimitRef = useRef<number | null>(null);
+  // Separate from snapshotRequestRef. Sharing that counter would let a library
+  // fetch cancel a snapshot that was already the newest one.
+  const sharedLoadGenRef = useRef(new Map<string, number>());
   const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingConnectRef = useRef<{
     resolve: () => void;
@@ -110,22 +131,39 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   }, []);
 
   const sendSnapshot = async (): Promise<void> => {
-    if (!canEdit() || syncPausedRef.current) return;
+    // A pause does not skip the build. The size is measured locally so an
+    // oversized project is never put back on the wire just to learn that it
+    // still does not fit. The request id still advances first: a slower build
+    // must not send after a newer one has already been decided.
+    if (!canEdit()) return;
     const request = ++snapshotRequestRef.current;
     let project: GeoLibreProject;
     try {
       project = await buildCollaborationSnapshot(mapControllerRef);
     } catch {
-      if (request === snapshotRequestRef.current && canEdit() && !syncPausedRef.current) {
+      if (request === snapshotRequestRef.current && canEdit()) {
         useAppStore.getState().setCollaboration({ error: i18n.t("collaborate.shareFailed") });
       }
       return;
     }
-    if (request !== snapshotRequestRef.current || !canEdit() || syncPausedRef.current) return;
+    if (request !== snapshotRequestRef.current || !canEdit()) return;
     const content = serializeProject(project);
-    if (content === lastContentRef.current) return;
+    const bytes = new TextEncoder().encode(content).length;
+    if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
+      syncPausedRef.current = true;
+      useAppStore.getState().setCollaboration({
+        error: localTooLargeMessage(bytes, snapshotSyncLimit(learnedLimitRef.current)),
+      });
+      return;
+    }
+    if (syncPausedRef.current) syncPausedRef.current = false;
+    if (content === lastContentRef.current) {
+      useAppStore.getState().setCollaboration({ error: null });
+      return;
+    }
     lastContentRef.current = content;
     revRef.current += 1;
+    useAppStore.getState().setCollaboration({ error: null });
     connRef.current?.send({ type: "snapshot", project, rev: revRef.current });
   };
 
@@ -152,6 +190,38 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       scheduleRestore();
     }
     lastContentRef.current = serializeProject(buildProjectEgressSnapshot(mapControllerRef));
+    rehydrateSharedLayers(merged.layers);
+  };
+
+  const rehydrateSharedLayers = (layers: GeoLibreProject["layers"]): void => {
+    const token = useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
+    for (const layer of layers) {
+      const datasetId = sharedDatasetIdOf(layer);
+      if (!datasetId) continue;
+      const features = layer.geojson?.features;
+      if (features && features.length > 0) continue;
+      const ticket = (sharedLoadGenRef.current.get(layer.id) ?? 0) + 1;
+      sharedLoadGenRef.current.set(layer.id, ticket);
+      void loadSharedDatasetFeatures(datasetId, layer, token || undefined)
+        .then((collection) => {
+          if (sharedLoadGenRef.current.get(layer.id) !== ticket) return;
+          const current = useAppStore.getState().layers.find((item) => item.id === layer.id);
+          if (!current || sharedDatasetIdOf(current) !== datasetId) return;
+          const filled = applySharedLayerFeatures(current, collection);
+          useAppStore.getState().updateLayer(current.id, {
+            geojson: filled.geojson,
+            metadata: filled.metadata,
+          });
+        })
+        .catch((error: unknown) => {
+          if (sharedLoadGenRef.current.get(layer.id) !== ticket) return;
+          const current = useAppStore.getState().layers.find((item) => item.id === layer.id);
+          if (!current || sharedDatasetIdOf(current) !== datasetId) return;
+          const failure = classifySharedDatasetError(error, token !== "");
+          const marked = markSharedLayerFailure(current, failure);
+          useAppStore.getState().updateLayer(current.id, { metadata: marked.metadata });
+        });
+    }
   };
 
   const handleMessage = (message: ServerMessage): void => {
@@ -285,7 +355,11 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
           return;
         }
         store.setCollaboration({ error: message.message });
-        if (message.code === "too-large") syncPausedRef.current = true;
+        if (message.code === "too-large") {
+          syncPausedRef.current = true;
+          const learned = learnedSnapshotLimit(message.message);
+          if (learned !== null) learnedLimitRef.current = learned;
+        }
         break;
       }
     }
@@ -370,6 +444,7 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   ): Promise<void> => {
     disconnect();
     syncPausedRef.current = false;
+    learnedLimitRef.current = null;
     selfIdRef.current = crypto.randomUUID();
     lastContentRef.current = null;
     revRef.current = 0;
@@ -456,6 +531,10 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       requireIdentity?: boolean,
     ) => {
       const session = await createSession({ mode, requireIdentity }, baseUrl);
+      // Stored before connecting, not after: if the socket fails the session
+      // still exists on the relay, and this is the only copy of the token that
+      // can claim it back.
+      rememberHostToken(session.sessionId, session.hostToken);
       await connect(session.sessionId, displayName, color, session.hostToken);
       return session.sessionId;
     },
@@ -470,7 +549,11 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       color: string,
       options?: { inviteToken?: string; identityToken?: string },
     ) => {
-      await connect(sessionId.trim().toUpperCase(), displayName, color, undefined, options);
+      const code = sessionId.trim().toUpperCase();
+      // A host who left and came back arrives through this path, typing their
+      // own code. Replaying the stored token is what makes the relay hand host
+      // back; without it the session's own creator rejoins as a guest.
+      await connect(code, displayName, color, recallHostToken(code), options);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseUrl],

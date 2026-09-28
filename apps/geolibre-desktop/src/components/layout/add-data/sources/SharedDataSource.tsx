@@ -114,12 +114,10 @@ export function SharedDataSource() {
       filters: [{ name: t("addData.sharedData.fileFilter"), extensions: ["*"] }],
       accept: "*/*",
       readBinary: true,
-    }).catch(
-      (err: unknown) => {
-        setUploadNote(errorMessage(err, t("addData.sharedData.uploadError")));
-        return null;
-      },
-    );
+    }).catch((err: unknown) => {
+      setUploadNote(errorMessage(err, t("addData.sharedData.uploadError")));
+      return null;
+    });
     if (!picked?.data) return;
 
     const filename = fileNameFromPath(picked.path);
@@ -130,7 +128,10 @@ export function SharedDataSource() {
         data: new Uint8Array(picked.data),
         filename,
         visibility: uploadVisibility,
-        tags: uploadTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        tags: uploadTags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
       });
       setUploadNote(
         t("addData.sharedData.uploaded", {
@@ -181,6 +182,7 @@ export function SharedDataSource() {
           {
             sourceKind: "shared-data",
             sharedDatasetId: selected.id,
+            sharedDatasetFilename: selected.filename,
             featureCount: featureCollection.features.length,
           },
           { geojson: featureCollection },
@@ -240,9 +242,7 @@ export function SharedDataSource() {
           >
             {datasets.length === 0 ? (
               <option value="">
-                {isListing
-                  ? t("addData.sharedData.loading")
-                  : t("addData.sharedData.emptyLibrary")}
+                {isListing ? t("addData.sharedData.loading") : t("addData.sharedData.emptyLibrary")}
               </option>
             ) : (
               datasets.map((entry) => (
@@ -284,7 +284,12 @@ export function SharedDataSource() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => void refresh()} disabled={isListing}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refresh()}
+            disabled={isListing}
+          >
             <RefreshCw className="me-2 h-3.5 w-3.5" />
             {t("addData.sharedData.refresh")}
           </Button>
@@ -311,7 +316,9 @@ export function SharedDataSource() {
 
         {token ? (
           <div className="space-y-1.5">
-            <Label htmlFor="shared-upload-visibility">{t("addData.sharedData.uploadVisibility")}</Label>
+            <Label htmlFor="shared-upload-visibility">
+              {t("addData.sharedData.uploadVisibility")}
+            </Label>
             <Select
               id="shared-upload-visibility"
               value={uploadVisibility}

@@ -62,6 +62,7 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
   // a `welcome` without `chat`, and an undefined slice would crash this badge
   // (and, since it renders inside the map's error boundary, the whole map).
   const chat = useAppStore((s) => s.collaboration.chat) ?? [];
+  const sessionError = useAppStore((s) => s.collaboration.error);
   const isHost = role === "host";
   const setCollaborateDialogOpen = useAppStore((s) => s.setCollaborateDialogOpen);
   // Shares the bottom-left corner with the MapLibre scale control and the
@@ -429,6 +430,22 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
           </div>
         </div>
       )}
+
+      {sessionError ? (
+        <div
+          role="alert"
+          className="pointer-events-auto rounded-md border border-destructive bg-destructive/10 px-2 py-1.5 text-start text-xs text-destructive shadow-sm"
+        >
+          <p className="whitespace-pre-wrap break-words">{sessionError}</p>
+          <button
+            type="button"
+            className="mt-1 text-start font-medium underline"
+            onClick={() => setCollaborateDialogOpen(true)}
+          >
+            {t("collaborate.openFromError")}
+          </button>
+        </div>
+      ) : null}
 
       {/* Collapsed pill, always visible while the session is live. */}
       <button
