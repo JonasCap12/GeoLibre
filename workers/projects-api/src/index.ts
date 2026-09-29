@@ -10,6 +10,21 @@
 
 import { burnPasswordHash, mintToken, passwordHash, passwordMatches, tokenDigest } from "./auth";
 import {
+  INVITE_TTL_MS,
+  RESET_REQUEST_BODY,
+  RESET_TTL_MS,
+  actionRefusal,
+  expiresAt,
+  isAdminUsername,
+  normalizeEmail,
+  passwordPolicyError,
+  registrationRefusal,
+  resetEmailLimitKey,
+  resetRequestReply,
+  type AuthActionRow,
+} from "./auth-policy";
+import { inviteEmail, passwordChangedEmail, resetEmail, type OutboundEmail } from "./email";
+import {
   ApiError,
   IMAGE_TYPES,
   PROJECT_SELECT,
@@ -59,6 +74,21 @@ interface Env {
   GEOLIBRE_ACTIVITY_RETENTION_DAYS?: string;
   AUTH_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   DOWNLOAD_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  // Optional, like the rate limiter: a deployment without Email Service still
+  // builds. Invites and resets then return a clear error instead of throwing.
+  EMAIL?: {
+    send(message: {
+      to: string;
+      from: string;
+      subject: string;
+      text: string;
+      html: string;
+    }): Promise<unknown>;
+  };
+  // Comma-separated. Absent means nobody is an admin — see isAdminUsername.
+  GEOLIBRE_ADMIN_USERNAMES?: string;
+  // Must be one of the addresses in wrangler `allowed_sender_addresses`.
+  GEOLIBRE_EMAIL_FROM?: string;
 }
 
 const VISIBILITIES = new Set(["public", "unlisted", "private"]);
@@ -219,9 +249,7 @@ async function optionalAccount(request: Request, db: D1Database): Promise<Accoun
   if (header === null || header === "") return null;
   if (!header.startsWith("Bearer ")) throw new ApiError(401, "invalid authorization");
   const account = await db
-    .prepare(
-      `SELECT a.* FROM accounts a JOIN tokens t ON t.account_id = a.id WHERE t.digest = ?`,
-    )
+    .prepare(`SELECT a.* FROM accounts a JOIN tokens t ON t.account_id = a.id WHERE t.digest = ?`)
     .bind(await tokenDigest(header.slice(7)))
     .first<AccountRow>();
   if (account === null) throw new ApiError(401, "invalid or expired token");
@@ -238,12 +266,13 @@ function requireAccount(account: AccountRow | null): AccountRow {
 // ---------------------------------------------------------------------------
 
 const projectById = (db: D1Database, id: string): Promise<ProjectRow | null> =>
-  db
-    .prepare(`${PROJECT_SELECT} WHERE p.id = ?`)
-    .bind(id)
-    .first<ProjectRow>();
+  db.prepare(`${PROJECT_SELECT} WHERE p.id = ?`).bind(id).first<ProjectRow>();
 
-const projectByPath = (db: D1Database, username: string, slug: string): Promise<ProjectRow | null> =>
+const projectByPath = (
+  db: D1Database,
+  username: string,
+  slug: string,
+): Promise<ProjectRow | null> =>
   db
     .prepare(`${PROJECT_SELECT} WHERE a.username = ? AND p.slug = ?`)
     .bind(username, slug)
@@ -442,7 +471,18 @@ async function apiRoute(
     if (!USERNAME_RE.test(username)) {
       throw new ApiError(422, "username must be 3-39 lowercase letters, digits, or hyphens");
     }
-    if (password.length < 8) throw new ApiError(422, "password must be at least 8 characters");
+    const passwordError = passwordPolicyError(password);
+    if (passwordError === "too-long") throw new ApiError(422, "username or password is too long");
+    if (passwordError === "too-short") {
+      throw new ApiError(422, "password must be at least 12 characters");
+    }
+    // Open registration is the hole. The invite is what proves control of the
+    // mailbox, so the account is created already verified.
+    const inviteToken = typeof body.invite === "string" ? body.invite : "";
+    const invite = await loadAuthAction(db, inviteToken);
+    const refusal = registrationRefusal(invite, now());
+    if (refusal !== null || invite === null)
+      throw new ApiError(403, "invite is invalid or expired");
 
     const account: AccountRow = {
       id: crypto.randomUUID(),
@@ -453,18 +493,83 @@ async function apiRoute(
     try {
       await db
         .prepare(
-          `INSERT INTO accounts (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)`,
+          `INSERT INTO accounts (id, username, password_hash, created_at, email, email_verified_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .bind(account.id, account.username, account.password_hash, account.created_at)
+        .bind(
+          account.id,
+          account.username,
+          account.password_hash,
+          account.created_at,
+          invite.email,
+          account.created_at,
+        )
         .run();
     } catch (error) {
       // The uniqueness check and the insert are not atomic, so racing requests
       // can both pass it. The contract makes a uniqueness conflict a 409, not
       // the 500 an unhandled constraint error would produce.
-      if (String(error).includes("UNIQUE")) throw new ApiError(409, "username already exists");
+      if (String(error).includes("UNIQUE")) {
+        throw new ApiError(
+          409,
+          String(error).includes("email") ? "email already exists" : "username already exists",
+        );
+      }
       throw error;
     }
+    // Claim the invite after the insert. A lost race (used_at already set)
+    // must not leave the account we just wrote.
+    const claimed = await db
+      .prepare(
+        `UPDATE auth_actions SET used_at = ?, account_id = ? WHERE digest = ? AND used_at IS NULL`,
+      )
+      .bind(account.created_at, account.id, invite.digest)
+      .run();
+    if ((claimed.meta.changes ?? 0) < 1) {
+      await db.prepare(`DELETE FROM accounts WHERE id = ?`).bind(account.id).run();
+      throw new ApiError(403, "invite is invalid or expired");
+    }
     return json({ account: accountJson(account), token: await issueToken(db, account.id) }, 201);
+  }
+
+  if (path.length === 1 && path[0] === "invites" && method === "POST") {
+    const account = requireAccount(await optionalAccount(request, db));
+    // Unset GEOLIBRE_ADMIN_USERNAMES is nobody, not everybody. See isAdminUsername.
+    if (!isAdminUsername(account.username, env.GEOLIBRE_ADMIN_USERNAMES)) {
+      throw new ApiError(403, "admin only");
+    }
+    const body = await readJsonBody(request);
+    const email = normalizeEmail(body.email);
+    if (email === null) throw new ApiError(422, "email is invalid");
+    const from = emailFrom(env);
+    const token = mintToken();
+    const created = now();
+    await db
+      .prepare(
+        `INSERT INTO auth_actions (digest, kind, account_id, email, created_at, expires_at, used_at, created_by)
+         VALUES (?, 'invite', NULL, ?, ?, ?, NULL, ?)`,
+      )
+      .bind(
+        await tokenDigest(token),
+        email,
+        created,
+        expiresAt(Date.now(), INVITE_TTL_MS),
+        account.id,
+      )
+      .run();
+    const registerUrl = `${config.viewerUrl}register?invite=${encodeURIComponent(token)}`;
+    try {
+      await sendEmail(env, inviteEmail(email, from, registerUrl));
+    } catch (error) {
+      await db
+        .prepare(`DELETE FROM auth_actions WHERE digest = ?`)
+        .bind(await tokenDigest(token))
+        .run();
+      if (error instanceof ApiError) throw error;
+      console.error("invite email failed", error);
+      throw new ApiError(503, "email is not configured on this deployment");
+    }
+    return json({ ok: true }, 201);
   }
 
   if (path.length === 2 && path[0] === "auth" && path[1] === "token") {
@@ -502,6 +607,137 @@ async function apiRoute(
         .run();
       return empty(204);
     }
+  }
+
+  if (path.length === 2 && path[0] === "auth" && path[1] === "password" && method === "POST") {
+    const account = requireAccount(await optionalAccount(request, db));
+    const body = await readJsonBody(request);
+    const current = typeof body.currentPassword === "string" ? body.currentPassword : "";
+    const next = typeof body.password === "string" ? body.password : "";
+    if (current.length > 1024) throw new ApiError(422, "username or password is too long");
+    const passwordError = passwordPolicyError(next);
+    if (passwordError === "too-long") throw new ApiError(422, "username or password is too long");
+    if (passwordError === "too-short") {
+      throw new ApiError(422, "password must be at least 12 characters");
+    }
+    if (!(await passwordMatches(current, account.password_hash))) {
+      throw new ApiError(401, "current password is incorrect");
+    }
+    const changedAt = now();
+    await db
+      .prepare(`UPDATE accounts SET password_hash = ?, password_changed_at = ? WHERE id = ?`)
+      .bind(await passwordHash(next), changedAt, account.id)
+      .run();
+    // The session that just proved the current password is re-issued below.
+    // Every digest that existed before that, including this request's, is
+    // deleted first — an attacker's copy of the old token must die too.
+    await db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(account.id).run();
+    const token = await issueToken(db, account.id);
+    if (accountHasEmail(account)) {
+      const from = emailFromOrNull(env);
+      if (from !== null) {
+        try {
+          await sendEmail(env, passwordChangedEmail(accountEmail(account), from));
+        } catch (error) {
+          console.error("password-changed notice failed", error);
+        }
+      }
+    }
+    return json({ token });
+  }
+
+  if (path.length === 2 && path[0] === "auth" && path[1] === "reset-request" && method === "POST") {
+    await rateLimit(env, request, "reset-request");
+    if (emailFromOrNull(env) === null) {
+      throw new ApiError(503, "email is not configured on this deployment");
+    }
+    const body = await readJsonBody(request);
+    const email = normalizeEmail(body.email);
+    // Same reply whether or not the address exists. See resetRequestReply.
+    const reply = resetRequestReply(false);
+    if (email === null) return json(reply.body, reply.status);
+    await rateLimitKey(env, resetEmailLimitKey(email));
+    const account = await db
+      .prepare(`SELECT * FROM accounts WHERE email = ?`)
+      .bind(email)
+      .first<AccountRow>();
+    const outcome = resetRequestReply(
+      account !== null && account.email !== null && account.email !== "",
+    );
+    if (outcome.send && account !== null) {
+      const from = emailFrom(env);
+      const token = mintToken();
+      const created = now();
+      await db
+        .prepare(
+          `INSERT INTO auth_actions (digest, kind, account_id, email, created_at, expires_at, used_at, created_by)
+           VALUES (?, 'reset', ?, ?, ?, ?, NULL, NULL)`,
+        )
+        .bind(
+          await tokenDigest(token),
+          account.id,
+          email,
+          created,
+          expiresAt(Date.now(), RESET_TTL_MS),
+        )
+        .run();
+      const resetUrl = `${config.viewerUrl}reset?token=${encodeURIComponent(token)}`;
+      try {
+        // Awaited on purpose, and it costs something: this branch runs a token
+        // mint, a D1 insert and a network call that the unknown-address branch
+        // does not, so response *time* still says whether the address has an
+        // account. The body does not, which is the half that can be fixed here.
+        //
+        // The timing half cannot: dropping the await would let the runtime
+        // cancel the send when the response returns, so the mail would simply
+        // not arrive. The fix is ctx.waitUntil(), and route handlers are not
+        // given an ExecutionContext (see the comment on the view counter
+        // below). Reliable delivery beats closing a timing channel on a
+        // six-person internal deployment; revisit if this is ever opened up.
+        await sendEmail(env, resetEmail(email, from, resetUrl));
+      } catch (error) {
+        console.error("reset email failed", error);
+      }
+    }
+    return json(RESET_REQUEST_BODY, outcome.status);
+  }
+
+  if (path.length === 2 && path[0] === "auth" && path[1] === "reset-confirm" && method === "POST") {
+    await rateLimit(env, request, "reset-confirm");
+    const body = await readJsonBody(request);
+    const token = typeof body.token === "string" ? body.token : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const passwordError = passwordPolicyError(password);
+    if (passwordError === "too-long") throw new ApiError(422, "username or password is too long");
+    if (passwordError === "too-short") {
+      throw new ApiError(422, "password must be at least 12 characters");
+    }
+    const action = await loadAuthAction(db, token);
+    const refusal = actionRefusal(action, "reset", now());
+    if (refusal !== null || action === null || action.account_id === null) {
+      throw new ApiError(403, "reset token is invalid or expired");
+    }
+    const changedAt = now();
+    const claimed = await db
+      .prepare(`UPDATE auth_actions SET used_at = ? WHERE digest = ? AND used_at IS NULL`)
+      .bind(changedAt, action.digest)
+      .run();
+    if ((claimed.meta.changes ?? 0) < 1)
+      throw new ApiError(403, "reset token is invalid or expired");
+    await db
+      .prepare(`UPDATE accounts SET password_hash = ?, password_changed_at = ? WHERE id = ?`)
+      .bind(await passwordHash(password), changedAt, action.account_id)
+      .run();
+    await db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(action.account_id).run();
+    const from = emailFromOrNull(env);
+    if (from !== null) {
+      try {
+        await sendEmail(env, passwordChangedEmail(action.email, from));
+      } catch (error) {
+        console.error("password-changed notice failed", error);
+      }
+    }
+    return json({ ok: true });
   }
 
   if (path.length === 1 && path[0] === "account" && method === "GET") {
@@ -546,15 +782,7 @@ async function apiRoute(
       const filename = typeof body.filename === "string" ? body.filename : "";
       if (filename.length > 255) throw new ApiError(422, "filename is too long");
       const visibility = requireVisibility(body.visibility);
-      const id = await createProject(
-        db,
-        objects,
-        config,
-        account,
-        content,
-        filename,
-        visibility,
-      );
+      const id = await createProject(db, objects, config, account, content, filename, visibility);
       const project = await projectById(db, id);
       return json({ project: projectJson(project as ProjectRow, config) }, 201);
     }
@@ -630,7 +858,8 @@ async function apiRoute(
       if ("title" in body) {
         const title = typeof body.title === "string" ? body.title.trim() : "";
         if (title === "") throw new ApiError(422, "title must not be empty");
-        if (codePoints(title) > 100) throw new ApiError(422, "title must not exceed 100 characters");
+        if (codePoints(title) > 100)
+          throw new ApiError(422, "title must not exceed 100 characters");
         assignments.push("title = ?");
         binds.push(title);
       }
@@ -676,7 +905,9 @@ async function apiRoute(
         );
       }
       await db.batch(statements);
-      return json({ project: projectJson((await projectById(db, project.id)) as ProjectRow, config) });
+      return json({
+        project: projectJson((await projectById(db, project.id)) as ProjectRow, config),
+      });
     }
 
     if (path.length === 2 && method === "DELETE") {
@@ -751,7 +982,9 @@ async function apiRoute(
       await objects.put(reserved.object_key, new TextEncoder().encode(content), "application/json");
       await db.batch([
         db.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`).bind(now(), project.id),
-        ...activityStatements(db, config, project.id, account.id, "version_save", { version: number }),
+        ...activityStatements(db, config, project.id, account.id, "version_save", {
+          version: number,
+        }),
       ]);
       return json(
         {
@@ -799,7 +1032,10 @@ async function apiRoute(
           forked_project_id: forkId,
         }),
       ]);
-      return json({ project: projectJson((await projectById(db, forkId)) as ProjectRow, config) }, 201);
+      return json(
+        { project: projectJson((await projectById(db, forkId)) as ProjectRow, config) },
+        201,
+      );
     }
 
     if (path.length === 4 && path[2] === "versions" && method === "GET") {
@@ -832,8 +1068,7 @@ async function apiRoute(
         const data = await readCapped(
           request,
           config.maxThumbnailBytes,
-          () =>
-            new ApiError(413, `thumbnail exceeds the ${config.maxThumbnailBytes} byte limit`),
+          () => new ApiError(413, `thumbnail exceeds the ${config.maxThumbnailBytes} byte limit`),
         );
         await objects.put(thumbnailKey(project.id), data, contentType);
         await db
@@ -967,10 +1202,7 @@ async function apiRoute(
         throw error;
       }
 
-      const row = await db
-        .prepare(`${DATASET_SELECT} WHERE d.id = ?`)
-        .bind(id)
-        .first<DatasetRow>();
+      const row = await db.prepare(`${DATASET_SELECT} WHERE d.id = ?`).bind(id).first<DatasetRow>();
       return json({ dataset: datasetJson(visibleDataset(row, account.id), config) }, 201);
     }
   }
@@ -983,7 +1215,9 @@ async function apiRoute(
     if (path.length === 2) {
       if (method === "GET") {
         const account = await optionalAccount(request, db);
-        return json({ dataset: datasetJson(visibleDataset(await load(), account?.id ?? null), config) });
+        return json({
+          dataset: datasetJson(visibleDataset(await load(), account?.id ?? null), config),
+        });
       }
       if (method === "DELETE") {
         const account = requireAccount(await optionalAccount(request, db));
@@ -1029,6 +1263,40 @@ async function apiRoute(
   throw new ApiError(404, "not found");
 }
 
+async function loadAuthAction(db: D1Database, token: string): Promise<AuthActionRow | null> {
+  if (token.length < 20 || token.length > 200) return null;
+  return db
+    .prepare(`SELECT * FROM auth_actions WHERE digest = ?`)
+    .bind(await tokenDigest(token))
+    .first<AuthActionRow>();
+}
+
+function accountHasEmail(account: AccountRow): boolean {
+  return typeof account.email === "string" && account.email !== "";
+}
+
+function accountEmail(account: AccountRow): string {
+  return account.email ?? "";
+}
+
+function emailFromOrNull(env: Env): string | null {
+  const from = env.GEOLIBRE_EMAIL_FROM?.trim() ?? "";
+  if (from === "" || env.EMAIL === undefined) return null;
+  return from;
+}
+
+function emailFrom(env: Env): string {
+  const from = emailFromOrNull(env);
+  if (from === null) throw new ApiError(503, "email is not configured on this deployment");
+  return from;
+}
+
+async function sendEmail(env: Env, message: OutboundEmail): Promise<void> {
+  if (env.EMAIL === undefined)
+    throw new ApiError(503, "email is not configured on this deployment");
+  await env.EMAIL.send(message);
+}
+
 async function issueToken(db: D1Database, accountId: string): Promise<string> {
   const token = mintToken();
   await db
@@ -1050,7 +1318,13 @@ async function issueToken(db: D1Database, accountId: string): Promise<string> {
 async function rateLimit(env: Env, request: Request, scope: string): Promise<void> {
   if (env.AUTH_RATE_LIMITER === undefined) return;
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  const { success } = await env.AUTH_RATE_LIMITER.limit({ key: `${scope}:${ip}` });
+  await rateLimitKey(env, `${scope}:${ip}`);
+}
+
+/** Same limiter, but the key is chosen by the caller (an email address, not only an IP). */
+async function rateLimitKey(env: Env, key: string): Promise<void> {
+  if (env.AUTH_RATE_LIMITER === undefined) return;
+  const { success } = await env.AUTH_RATE_LIMITER.limit({ key });
   if (!success) throw new ApiError(429, "too many requests; retry later");
 }
 

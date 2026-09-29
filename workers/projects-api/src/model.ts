@@ -22,6 +22,11 @@ export interface AccountRow {
   username: string | null;
   password_hash: string;
   created_at: string;
+  // Absent on a database that has not applied schema-auth.sql yet. Sign-in
+  // does not read them, so those accounts keep working.
+  email?: string | null;
+  email_verified_at?: string | null;
+  password_changed_at?: string | null;
 }
 
 /** A project joined with its owner's username and its version count. */

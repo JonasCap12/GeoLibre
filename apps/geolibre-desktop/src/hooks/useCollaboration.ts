@@ -37,13 +37,7 @@ import {
   snapshotSyncAction,
   snapshotSyncLimit,
 } from "../lib/collaboration-sync";
-import {
-  applySharedLayerFeatures,
-  classifySharedDatasetError,
-  markSharedLayerFailure,
-  sharedDatasetIdOf,
-} from "../lib/collaboration-shared-layer";
-import { loadSharedDatasetFeatures } from "../lib/collaboration-shared-load";
+import { rehydrateSharedLayersInStore } from "../lib/collaboration-shared-load";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
 
 const SNAPSHOT_DEBOUNCE_MS = 250;
@@ -95,7 +89,6 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   const learnedLimitRef = useRef<number | null>(null);
   // Separate from snapshotRequestRef. Sharing that counter would let a library
   // fetch cancel a snapshot that was already the newest one.
-  const sharedLoadGenRef = useRef(new Map<string, number>());
   const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingConnectRef = useRef<{
     resolve: () => void;
@@ -110,6 +103,14 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  // A settled failure (needs-sign-in, missing, failed) stays settled until the
+  // share token changes. Signing in is what makes a team dataset readable, so
+  // that change is the retry.
+  const shareToken = useDesktopSettingsStore((s) => s.desktopSettings.shareToken.trim());
+  useEffect(() => {
+    void rehydrateSharedLayersInStore(shareToken);
+  }, [shareToken]);
 
   const canEdit = (): boolean => {
     const c = useAppStore.getState().collaboration;
@@ -190,38 +191,8 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       scheduleRestore();
     }
     lastContentRef.current = serializeProject(buildProjectEgressSnapshot(mapControllerRef));
-    rehydrateSharedLayers(merged.layers);
-  };
-
-  const rehydrateSharedLayers = (layers: GeoLibreProject["layers"]): void => {
     const token = useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
-    for (const layer of layers) {
-      const datasetId = sharedDatasetIdOf(layer);
-      if (!datasetId) continue;
-      const features = layer.geojson?.features;
-      if (features && features.length > 0) continue;
-      const ticket = (sharedLoadGenRef.current.get(layer.id) ?? 0) + 1;
-      sharedLoadGenRef.current.set(layer.id, ticket);
-      void loadSharedDatasetFeatures(datasetId, layer, token || undefined)
-        .then((collection) => {
-          if (sharedLoadGenRef.current.get(layer.id) !== ticket) return;
-          const current = useAppStore.getState().layers.find((item) => item.id === layer.id);
-          if (!current || sharedDatasetIdOf(current) !== datasetId) return;
-          const filled = applySharedLayerFeatures(current, collection);
-          useAppStore.getState().updateLayer(current.id, {
-            geojson: filled.geojson,
-            metadata: filled.metadata,
-          });
-        })
-        .catch((error: unknown) => {
-          if (sharedLoadGenRef.current.get(layer.id) !== ticket) return;
-          const current = useAppStore.getState().layers.find((item) => item.id === layer.id);
-          if (!current || sharedDatasetIdOf(current) !== datasetId) return;
-          const failure = classifySharedDatasetError(error, token !== "");
-          const marked = markSharedLayerFailure(current, failure);
-          useAppStore.getState().updateLayer(current.id, { metadata: marked.metadata });
-        });
-    }
+    void rehydrateSharedLayersInStore(token, merged.layers);
   };
 
   const handleMessage = (message: ServerMessage): void => {

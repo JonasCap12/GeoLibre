@@ -26,6 +26,15 @@
     }
   ],
 
+  "send_email": [
+    {
+      "name": "EMAIL",
+      // Restrict the sender so a bug in this Worker cannot turn it into an open
+      // relay. The operator sets the address; it must match GEOLIBRE_EMAIL_FROM.
+      "allowed_sender_addresses": ["noreply@jonasnguyen.uk"]
+    }
+  ],
+
   "r2_buckets": [
     {
       "binding": "OBJECTS",
@@ -49,6 +58,15 @@
     // origin anyway, and a deployment that forgets should fail visibly in the
     // browser rather than quietly accept every origin on the internet.
     "GEOLIBRE_CORS_ORIGINS": "https://geolibre-web.jonasnguyen886.workers.dev",
+    // Comma-separated admin usernames. Empty or omitted means nobody can mint
+    // invites — an unconfigured deployment must not be seedable by a stranger.
+    "GEOLIBRE_ADMIN_USERNAMES": "nguyen-minh-nhut",
+    // Must match an entry in send_email.allowed_sender_addresses above, and the
+    // domain must be onboarded to Cloudflare Email Service on this account —
+    // sending from a domain you do not control is refused, not merely spam-
+    // filtered. Until it is onboarded, mail reaches verified destination
+    // addresses only, which is enough for this team and costs nothing.
+    "GEOLIBRE_EMAIL_FROM": "noreply@jonasnguyen.uk",
     "GEOLIBRE_MAX_PROJECT_BYTES": "52428800",
     "GEOLIBRE_MAX_THUMBNAIL_BYTES": "5242880",
     "GEOLIBRE_ACTIVITY_RETENTION_DAYS": "90"

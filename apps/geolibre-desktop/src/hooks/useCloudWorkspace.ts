@@ -2,6 +2,7 @@ import { parseProject, serializeProject, useAppStore } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { buildCollaborationSnapshot } from "../lib/build-project-snapshot";
+import { rehydrateSharedLayersInStore } from "../lib/collaboration-shared-load";
 import {
   createCloudWorkspace,
   downloadCloudWorkspace,
@@ -20,13 +21,7 @@ import { useDesktopSettingsStore } from "./useDesktopSettings";
 const CLOUD_SAVE_DEBOUNCE_MS = 3_000;
 const SAVED_NOTICE_MS = 2_500;
 
-export type CloudWorkspaceStatus =
-  | "disabled"
-  | "loading"
-  | "ready"
-  | "saving"
-  | "saved"
-  | "error";
+export type CloudWorkspaceStatus = "disabled" | "loading" | "ready" | "saving" | "saved" | "error";
 
 export interface CloudWorkspaceState {
   status: CloudWorkspaceStatus;
@@ -184,6 +179,11 @@ export function useCloudWorkspace(
             rememberRecent: false,
             presenting: false,
           });
+          // The saved workspace keeps the dataset id and drops the features.
+          // The same refill collaboration uses puts them back; a layer that
+          // is also in a live session shares that in-flight book, so this
+          // does not start a second download.
+          void rehydrateSharedLayersInStore(token, project.layers);
           lastContent = serializeProject(project);
         }
 

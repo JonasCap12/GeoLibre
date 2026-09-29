@@ -21,8 +21,12 @@ import { resolveShareBaseUrl } from "./share-geolibre";
 /** Mirrors the API: 3-39 lowercase letters, digits, or hyphens. */
 export const USERNAME_PATTERN = /^[a-z0-9-]{3,39}$/;
 
-/** Mirrors the API's minimum. Enforced here too, so the error arrives before the round trip. */
-export const MIN_PASSWORD_LENGTH = 8;
+/**
+ * Mirrors `passwordPolicyError` in the projects API (12, not 8).
+ * Enforced here too, so the error arrives before the round trip.
+ * Composition rules stay off on both sides; see that function for why.
+ */
+export const MIN_PASSWORD_LENGTH = 12;
 
 export class ShareAccountError extends Error {
   constructor(message: string) {
@@ -34,6 +38,8 @@ export class ShareAccountError extends Error {
 export interface ShareAccountOptions {
   username: string;
   password: string;
+  /** Invite token from the registration email. Required to create an account. */
+  invite?: string;
   /** Overrides the configured API base; for tests. */
   baseUrl?: string | null;
   fetchImpl?: typeof globalThis.fetch;
@@ -111,6 +117,75 @@ export async function signIn(options: ShareAccountOptions): Promise<string> {
 }
 
 /**
+ * Revoke the bearer server-side.
+ *
+ * The caller must clear the saved token only after this resolves. Clearing
+ * first and then failing the request leaves a row in `tokens`, and that table
+ * has no expiry column, so the token would stay valid forever with nobody
+ * left who can present it for deletion.
+ */
+export async function signOut(options: {
+  token: string;
+  baseUrl?: string | null;
+  fetchImpl?: typeof globalThis.fetch;
+}): Promise<void> {
+  const base = requireBaseUrl(options.baseUrl);
+  const fetchImpl = options.fetchImpl ?? getShareFetch();
+  let response: Response;
+  try {
+    response = await fetchImpl(`${base}/api/auth/token`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${options.token}` },
+    });
+  } catch {
+    throw new ShareAccountError("Could not reach the projects server.");
+  }
+  if (!response.ok) throw await readError(response, "Sign out failed");
+}
+
+/**
+ * Replace the password. The API revokes every existing session and returns a
+ * new token for this one.
+ *
+ * @returns The replacement bearer token.
+ */
+export async function changePassword(options: {
+  token: string;
+  currentPassword: string;
+  password: string;
+  baseUrl?: string | null;
+  fetchImpl?: typeof globalThis.fetch;
+}): Promise<string> {
+  if (options.password.length < MIN_PASSWORD_LENGTH) {
+    throw new ShareAccountError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+  const base = requireBaseUrl(options.baseUrl);
+  const fetchImpl = options.fetchImpl ?? getShareFetch();
+  let response: Response;
+  try {
+    response = await fetchImpl(`${base}/api/auth/password`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${options.token}`,
+      },
+      body: JSON.stringify({
+        currentPassword: options.currentPassword,
+        password: options.password,
+      }),
+    });
+  } catch {
+    throw new ShareAccountError("Could not reach the projects server.");
+  }
+  if (!response.ok) throw await readError(response, "Could not change the password");
+  const body = (await response.json()) as { token?: unknown };
+  if (typeof body.token !== "string" || !body.token) {
+    throw new ShareAccountError("The server did not return a token.");
+  }
+  return body.token;
+}
+
+/**
  * Create an account and return its token.
  *
  * The create endpoint mints a token itself, so this is one request, not two.
@@ -127,6 +202,10 @@ export async function signIn(options: ShareAccountOptions): Promise<string> {
 export async function createAccount(options: ShareAccountOptions): Promise<string> {
   const problem = validateCredentials(options.username, options.password);
   if (problem) throw new ShareAccountError(problem);
+  const invite = options.invite?.trim() ?? "";
+  if (invite === "") {
+    throw new ShareAccountError("An invite is required to create an account.");
+  }
   const base = requireBaseUrl(options.baseUrl);
   const fetchImpl = options.fetchImpl ?? getShareFetch();
 
@@ -135,15 +214,17 @@ export async function createAccount(options: ShareAccountOptions): Promise<strin
     response = await fetchImpl(`${base}/api/accounts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: options.username, password: options.password }),
+      body: JSON.stringify({
+        username: options.username,
+        password: options.password,
+        invite,
+      }),
     });
   } catch {
     throw new ShareAccountError("Could not reach the projects server.");
   }
   if (response.status === 409) {
-    throw new ShareAccountError(
-      "That username is taken. Sign in instead, or pick another name.",
-    );
+    throw new ShareAccountError("That username is taken. Sign in instead, or pick another name.");
   }
   if (!response.ok) throw await readError(response, "Could not create the account");
 

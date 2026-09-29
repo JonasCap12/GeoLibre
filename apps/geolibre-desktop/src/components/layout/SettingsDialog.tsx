@@ -2847,6 +2847,8 @@ export function SettingsDialog({
                         </p>
                         <ShareAccountForm
                           onToken={(token) => updateShareToken(token)}
+                          onSignedOut={() => updateShareToken("")}
+                          token={draftDesktopSettings.shareToken}
                           hasToken={draftDesktopSettings.shareToken.trim() !== ""}
                         />
                       </>
