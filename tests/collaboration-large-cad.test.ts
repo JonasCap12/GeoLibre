@@ -15,6 +15,10 @@ import {
   sharedLayerFailureOf,
 } from "../apps/geolibre-desktop/src/lib/collaboration-shared-layer.ts";
 import { SharedDatasetError } from "../apps/geolibre-desktop/src/lib/shared-datasets.ts";
+import {
+  createSharedRehydrateSession,
+  rehydrateSharedLayers,
+} from "../apps/geolibre-desktop/src/lib/collaboration-shared-rehydrate.ts";
 import { geojsonLayer } from "./helpers/layer-fixtures.ts";
 
 /**
@@ -188,5 +192,236 @@ describe("shared layer load failures", () => {
   it("marks a conversion or network failure as failed", () => {
     const failure = classifySharedDatasetError(new Error("duckdb"), true);
     assert.equal(sharedLayerFailureOf(markSharedLayerFailure(layer, failure)), "failed");
+  });
+});
+
+const THREE = {
+  type: "FeatureCollection" as const,
+  features: [0, 1, 2].map((index) => ({
+    type: "Feature" as const,
+    properties: { index },
+    geometry: { type: "Point" as const, coordinates: [index, index] },
+  })),
+};
+
+function libraryLayer(id: string, datasetId: string) {
+  return geojsonLayer({
+    id,
+    metadata: { sharedDatasetId: datasetId },
+    geojson: undefined,
+  });
+}
+
+describe("shared library workspace round trip", () => {
+  it("puts the features back after a library layer is saved by reference", async () => {
+    const layer = geojsonLayer({
+      id: "roads",
+      metadata: { sharedDatasetId: "ds-1" },
+      geojson: THREE,
+    });
+    const [saved] = prepareCollaborationLayers([layer], new Map());
+    assert.equal(saved.geojson, undefined);
+    assert.equal(saved.metadata.sharedDatasetId, "ds-1");
+    const store = [saved];
+    await rehydrateSharedLayers({
+      layers: store,
+      token: "tok",
+      session: createSharedRehydrateSession(),
+      listDatasets: async () => [{ id: "ds-1", filename: "roads.dxf" }],
+      loadFeatures: async () => THREE,
+      getLayer: (id) => store.find((item) => item.id === id),
+      updateLayer: (id, patch) => {
+        const index = store.findIndex((item) => item.id === id);
+        store[index] = { ...store[index], ...patch };
+      },
+    });
+    assert.equal(store[0].geojson?.features.length, 3);
+  });
+
+  it("round-trips a local-file layer unchanged", async () => {
+    const layer = geojsonLayer({
+      id: "local",
+      geojson: undefined,
+      metadata: {
+        externalNativeLayer: true,
+        sourceKind: "maplibre-gl-vector",
+        localFileReloadable: true,
+      },
+    });
+    const [saved] = prepareCollaborationLayers([layer], new Map([["local", THREE]]));
+    assert.equal(saved.metadata.embeddedGeoJSON, THREE);
+    assert.equal(saved.metadata.sharedDatasetId, undefined);
+    let loads = 0;
+    await rehydrateSharedLayers({
+      layers: [saved],
+      token: "tok",
+      session: createSharedRehydrateSession(),
+      listDatasets: async () => {
+        throw new Error("a local file is not a library layer");
+      },
+      loadFeatures: async () => {
+        loads += 1;
+        return THREE;
+      },
+      getLayer: () => saved,
+      updateLayer: () => {},
+    });
+    assert.equal(loads, 0);
+    assert.equal(saved.metadata.embeddedGeoJSON, THREE);
+  });
+
+  it("does not retry a layer a later snapshot already marked failed", async () => {
+    const session = createSharedRehydrateSession();
+    const store = [libraryLayer("roads", "ds-1")];
+    let loads = 0;
+    const run = () =>
+      rehydrateSharedLayers({
+        layers: store,
+        token: "tok",
+        session,
+        listDatasets: async () => [{ id: "ds-1", filename: "roads.dxf" }],
+        loadFeatures: async () => {
+          loads += 1;
+          throw new Error("nope");
+        },
+        getLayer: (id) => store.find((item) => item.id === id),
+        updateLayer: (id, patch) => {
+          const index = store.findIndex((item) => item.id === id);
+          store[index] = { ...store[index], ...patch };
+        },
+      });
+    await run();
+    assert.equal(loads, 1);
+    assert.equal(store[0].metadata.sharedDatasetLoad, "failed");
+    await run();
+    assert.equal(loads, 1);
+  });
+
+  it("does not start a second fetch while one is already in flight", async () => {
+    const session = createSharedRehydrateSession();
+    const store = [libraryLayer("roads", "ds-1")];
+    let loads = 0;
+    let release: (features: typeof THREE) => void = () => {};
+    const gate = new Promise<typeof THREE>((resolve) => {
+      release = resolve;
+    });
+    const run = () =>
+      rehydrateSharedLayers({
+        layers: store,
+        token: "tok",
+        session,
+        listDatasets: async () => [{ id: "ds-1", filename: "roads.dxf" }],
+        loadFeatures: () => {
+          loads += 1;
+          return gate;
+        },
+        getLayer: (id) => store.find((item) => item.id === id),
+        updateLayer: (id, patch) => {
+          const index = store.findIndex((item) => item.id === id);
+          store[index] = { ...store[index], ...patch };
+        },
+      });
+    const first = run();
+    const second = run();
+    for (let i = 0; i < 5 && loads < 1; i += 1) await Promise.resolve();
+    assert.equal(loads, 1);
+    release(THREE);
+    await first;
+    await second;
+    assert.equal(loads, 1);
+    assert.equal(store[0].geojson?.features.length, 3);
+  });
+
+  it("retries a settled failure when the share token changes", async () => {
+    const session = createSharedRehydrateSession();
+    session.token = "old";
+    const store = [markSharedLayerFailure(libraryLayer("roads", "ds-1"), "needs-sign-in")];
+    let loads = 0;
+    const run = (token: string) =>
+      rehydrateSharedLayers({
+        layers: store,
+        token,
+        session,
+        listDatasets: async () => [{ id: "ds-1", filename: "roads.dxf" }],
+        loadFeatures: async () => {
+          loads += 1;
+          assert.equal(store[0].metadata.sharedDatasetLoad, undefined);
+          return THREE;
+        },
+        getLayer: (id) => store.find((item) => item.id === id),
+        updateLayer: (id, patch) => {
+          const index = store.findIndex((item) => item.id === id);
+          store[index] = { ...store[index], ...patch };
+        },
+      });
+    await run("old");
+    assert.equal(loads, 0);
+    assert.equal(store[0].metadata.sharedDatasetLoad, "needs-sign-in");
+    await run("new");
+    assert.equal(loads, 1);
+    assert.equal(store[0].geojson?.features.length, 3);
+    assert.equal(store[0].metadata.sharedDatasetLoad, undefined);
+  });
+
+  it("lists the library once for a pass over several layers", async () => {
+    const store = [libraryLayer("a", "ds-1"), libraryLayer("b", "ds-2"), libraryLayer("c", "ds-3")];
+    let lists = 0;
+    let loads = 0;
+    await rehydrateSharedLayers({
+      layers: store,
+      token: "tok",
+      session: createSharedRehydrateSession(),
+      listDatasets: async () => {
+        lists += 1;
+        return [
+          { id: "ds-1", filename: "a.dxf" },
+          { id: "ds-2", filename: "b.dxf" },
+          { id: "ds-3", filename: "c.dxf" },
+        ];
+      },
+      loadFeatures: async (_datasetId, _layer, _token, filename) => {
+        loads += 1;
+        assert.equal(typeof filename, "string");
+        return THREE;
+      },
+      getLayer: (id) => store.find((item) => item.id === id),
+      updateLayer: (id, patch) => {
+        const index = store.findIndex((item) => item.id === id);
+        store[index] = { ...store[index], ...patch };
+      },
+    });
+    assert.equal(lists, 1);
+    assert.equal(loads, 3);
+  });
+
+  it("does not treat an empty pass as the token the saved failure was settled against", async () => {
+    const session = createSharedRehydrateSession();
+    await rehydrateSharedLayers({
+      layers: [],
+      token: "tok",
+      session,
+      listDatasets: async () => [],
+      loadFeatures: async () => THREE,
+      getLayer: () => undefined,
+      updateLayer: () => {},
+    });
+    const store = [markSharedLayerFailure(libraryLayer("roads", "ds-1"), "needs-sign-in")];
+    let loads = 0;
+    await rehydrateSharedLayers({
+      layers: store,
+      token: "tok",
+      session,
+      listDatasets: async () => [{ id: "ds-1", filename: "roads.dxf" }],
+      loadFeatures: async () => {
+        loads += 1;
+        return THREE;
+      },
+      getLayer: (id) => store.find((item) => item.id === id),
+      updateLayer: (id, patch) => {
+        const index = store.findIndex((item) => item.id === id);
+        store[index] = { ...store[index], ...patch };
+      },
+    });
+    assert.equal(loads, 1);
   });
 });

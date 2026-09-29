@@ -17,8 +17,20 @@ CREATE TABLE IF NOT EXISTS accounts (
   -- required` sentinel the clients look for (see docs/server-api.md).
   username      TEXT UNIQUE,
   password_hash TEXT NOT NULL,
-  created_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL,
+  -- Nullable: the six accounts that predate email have none, and a UNIQUE
+  -- index below allows many NULLs. A database created before these columns
+  -- exists already; CREATE IF NOT EXISTS will not add them. Apply
+  -- schema-auth.sql once on that database.
+  email               TEXT,
+  email_verified_at   TEXT,
+  password_changed_at TEXT
 );
+-- See schema-auth.sql for why this index is partial. A database that already
+-- had `accounts` does not get these columns from the CREATE above; that file
+-- is the one to apply there.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_email
+  ON accounts(email) WHERE email IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS tokens (
   -- The SHA-256 hex digest of the bearer token, never the token itself.
@@ -27,6 +39,20 @@ CREATE TABLE IF NOT EXISTS tokens (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_account ON tokens(account_id);
+
+-- Single-use invite, reset, and verify tokens. See schema-auth.sql.
+CREATE TABLE IF NOT EXISTS auth_actions (
+  digest      TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('invite','reset','verify')),
+  account_id  TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+  email       TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  used_at     TEXT,
+  created_by  TEXT REFERENCES accounts(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_actions_email ON auth_actions(email, kind);
+CREATE INDEX IF NOT EXISTS idx_auth_actions_expires ON auth_actions(expires_at);
 
 CREATE TABLE IF NOT EXISTS projects (
   id             TEXT PRIMARY KEY,

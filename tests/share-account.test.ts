@@ -40,11 +40,11 @@ function stubFetch(
 
 describe("validateCredentials", () => {
   it("mirrors the rules the API enforces", () => {
-    assert.equal(validateCredentials("ky-thuat-1", "longenough"), null);
-    assert.match(validateCredentials("ab", "longenough")!, /3-39/);
-    assert.match(validateCredentials("Has-Upper", "longenough")!, /lowercase/);
-    assert.match(validateCredentials("has space", "longenough")!, /lowercase/);
-    assert.match(validateCredentials("ok-name", "short")!, /8 characters/);
+    assert.equal(validateCredentials("ky-thuat-1", "longenough12"), null);
+    assert.match(validateCredentials("ab", "longenough12")!, /3-39/);
+    assert.match(validateCredentials("Has-Upper", "longenough12")!, /lowercase/);
+    assert.match(validateCredentials("has space", "longenough12")!, /lowercase/);
+    assert.match(validateCredentials("ok-name", "longenough")!, /12 characters/);
   });
 
   it("checks before a request is spent", async () => {
@@ -70,11 +70,15 @@ describe("createAccount", () => {
     // attempts a minute that this route and sign-in share.
     const { fetch, calls } = stubFetch((url) => {
       assert.ok(url.endsWith("/api/accounts"), `unexpected request to ${url}`);
-      return { status: 201, body: { account: { username: "ky-thuat-1" }, token: "tok-from-create" } };
+      return {
+        status: 201,
+        body: { account: { username: "ky-thuat-1" }, token: "tok-from-create" },
+      };
     });
     const token = await createAccount({
       username: "ky-thuat-1",
-      password: "longenough",
+      password: "longenough12",
+      invite: "invite-token",
       baseUrl: BASE,
       fetchImpl: fetch,
     });
@@ -92,7 +96,8 @@ describe("createAccount", () => {
     );
     const token = await createAccount({
       username: "ky-thuat-1",
-      password: "longenough",
+      password: "longenough12",
+      invite: "invite-token",
       baseUrl: BASE,
       fetchImpl: fetch,
     });
@@ -102,12 +107,16 @@ describe("createAccount", () => {
   });
 
   it("says the username is taken rather than showing a status code", async () => {
-    const { fetch } = stubFetch(() => ({ status: 409, body: { error: "username already exists" } }));
+    const { fetch } = stubFetch(() => ({
+      status: 409,
+      body: { error: "username already exists" },
+    }));
     await assert.rejects(
       () =>
         createAccount({
           username: "ky-thuat-1",
-          password: "longenough",
+          password: "longenough12",
+          invite: "invite-token",
           baseUrl: BASE,
           fetchImpl: fetch,
         }),
@@ -127,6 +136,7 @@ describe("createAccount", () => {
         createAccount({
           username: "ky-thuat-1",
           password: "correct-horse-battery",
+          invite: "invite-token",
           baseUrl: BASE,
           fetchImpl: fetch,
         }),
@@ -143,18 +153,28 @@ describe("signIn", () => {
     const { fetch, calls } = stubFetch(() => ({ status: 200, body: { token: "tok" } }));
     const token = await signIn({
       username: "ky-thuat-1",
-      password: "longenough",
+      password: "longenough12",
+      invite: "invite-token",
       baseUrl: BASE,
       fetchImpl: fetch,
     });
     assert.equal(token, "tok");
-    assert.deepEqual(calls[0].body, { username: "ky-thuat-1", password: "longenough" });
+    assert.deepEqual(calls[0].body, { username: "ky-thuat-1", password: "longenough12" });
   });
 
   it("surfaces the server's own message", async () => {
-    const { fetch } = stubFetch(() => ({ status: 401, body: { error: "invalid username or password" } }));
+    const { fetch } = stubFetch(() => ({
+      status: 401,
+      body: { error: "invalid username or password" },
+    }));
     await assert.rejects(
-      () => signIn({ username: "ky-thuat-1", password: "longenough", baseUrl: BASE, fetchImpl: fetch }),
+      () =>
+        signIn({
+          username: "ky-thuat-1",
+          password: "longenough12",
+          baseUrl: BASE,
+          fetchImpl: fetch,
+        }),
       /invalid username or password/,
     );
   });
@@ -162,7 +182,13 @@ describe("signIn", () => {
   it("reports an unreachable server as such", async () => {
     const failing = (() => Promise.reject(new TypeError("network"))) as unknown as typeof fetch;
     await assert.rejects(
-      () => signIn({ username: "ky-thuat-1", password: "longenough", baseUrl: BASE, fetchImpl: failing }),
+      () =>
+        signIn({
+          username: "ky-thuat-1",
+          password: "longenough12",
+          baseUrl: BASE,
+          fetchImpl: failing,
+        }),
       /Could not reach/,
     );
   });
@@ -170,7 +196,13 @@ describe("signIn", () => {
   it("rejects a response with no token instead of storing an empty one", async () => {
     const { fetch } = stubFetch(() => ({ status: 200, body: { account: {} } }));
     await assert.rejects(
-      () => signIn({ username: "ky-thuat-1", password: "longenough", baseUrl: BASE, fetchImpl: fetch }),
+      () =>
+        signIn({
+          username: "ky-thuat-1",
+          password: "longenough12",
+          baseUrl: BASE,
+          fetchImpl: fetch,
+        }),
       /did not return a token/,
     );
   });

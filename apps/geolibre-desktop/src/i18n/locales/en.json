@@ -2350,7 +2350,17 @@
       "accountSignIn": "Sign in",
       "accountCreate": "Create account",
       "accountClose": "Close",
-      "accountSignedIn": "Signed in as {{username}}. The token is filled in above — save Settings to enable cloud persistence."
+      "accountSignedIn": "Signed in as {{username}}. The token is filled in above — save Settings to enable cloud persistence.",
+      "accountInvite": "Invite",
+      "accountInvitePlaceholder": "Paste the invite from the email",
+      "accountSignOut": "Sign out",
+      "accountSignedOut": "Signed out. Save Settings so this browser forgets the token.",
+      "accountPasswordHelp": "Changing the password signs out every other session. This browser keeps the new token.",
+      "accountCurrentPassword": "Current password",
+      "accountNewPassword": "New password",
+      "accountChangePassword": "Change password",
+      "accountPasswordChanged": "Password changed. Save Settings to keep the new token.",
+      "accountPasswordShort": "Password must be at least {{count}} characters."
     },
     "geocoding": {
       "title": "Geocoding",
