@@ -6,6 +6,7 @@ import {
   CLERK_PUBLISHABLE_KEY_ENV,
   CLERK_WAITLIST_ENV,
 } from "../apps/geolibre-desktop/src/lib/clerk-auth";
+import { SELFHOST_AUTH_ENV } from "../apps/geolibre-desktop/src/lib/selfhost-auth.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -92,6 +93,39 @@ describe("sign-in gate selection", () => {
   });
 
   it("never gates native or embedded applications", () => {
-    assert.equal(resolveAuthGate(false, { ...clerkEnv(), ...auth0Env() }, {}), undefined);
+    assert.equal(
+      resolveAuthGate(false, { ...clerkEnv(), ...auth0Env(), [SELFHOST_AUTH_ENV]: "1" }, {}),
+      undefined,
+    );
+  });
+
+  it("selects this deployment's own accounts when that is the only provider", () => {
+    assert.deepEqual(resolveAuthGate(true, { [SELFHOST_AUTH_ENV]: "1" }, {}), {
+      provider: "selfhost",
+    });
+  });
+
+  it("keeps Clerk, then Auth0, ahead of self-host at the same tier", () => {
+    // Same-tier order is Clerk, then Auth0, then self-host. Naming the fork's
+    // own gate next to an existing provider must not replace that provider.
+    assert.equal(
+      resolveAuthGate(true, { ...clerkEnv(), ...auth0Env(), [SELFHOST_AUTH_ENV]: "1" }, {})
+        ?.provider,
+      "clerk",
+    );
+    assert.equal(
+      resolveAuthGate(true, { ...auth0Env(), [SELFHOST_AUTH_ENV]: "1" }, {})?.provider,
+      "auth0",
+    );
+    assert.equal(
+      resolveAuthGate(true, {}, { ...clerkEnv(), [SELFHOST_AUTH_ENV]: "1" })?.provider,
+      "clerk",
+    );
+  });
+
+  it("lets a deployment-configured self-host gate override a build-configured Clerk key", () => {
+    assert.deepEqual(resolveAuthGate(true, { [SELFHOST_AUTH_ENV]: "1" }, clerkEnv()), {
+      provider: "selfhost",
+    });
   });
 });

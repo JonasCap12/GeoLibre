@@ -1926,9 +1926,19 @@
     "retry": "Try again",
     "signInTitle": "Sign in to GeoLibre",
     "signInDescription": "This deployment requires an account. You will be taken to a secure sign-in page and returned here.",
+    "selfHostDescription": "This deployment requires an account on this server.",
     "signIn": "Sign in",
+    "signingIn": "Signing in…",
     "signOut": "Sign out",
-    "account": "Account"
+    "account": "Account",
+    "forgotPassword": "Forgot password?",
+    "forgotPasswordTitle": "Reset your password",
+    "forgotPasswordDescription": "If this address has an account, a reset link will be sent to it.",
+    "email": "Email",
+    "sendResetLink": "Send reset link",
+    "resetRequested": "If that address has an account, a reset link is on its way.",
+    "backToSignIn": "Back to sign in",
+    "emailInvalid": "Enter the email address on the account."
   },
   "basemapExtract": {
     "title": "Extract Offline Basemap",

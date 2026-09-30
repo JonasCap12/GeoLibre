@@ -162,6 +162,11 @@ if (configuredCapabilities) {
 // hosted deployment gates every request. In particular this must NOT consult
 // `isEmbedded()` — that returns true for a plain `?embed=1` query parameter, so
 // any visitor could disable a configured sign-in wall by typing a URL.
+//
+// The desktop build stays ungated even when self-host auth is configured. This
+// team does not ship the Tauri app, and Settings already has the sign-in form
+// for it. Gating the Jupyter embed would break notebooks, so that build stays
+// open either way.
 const isHostedWebApp = !isTauri() && !__GEOLIBRE_EMBED_BUILD__;
 // Google Analytics, if this deployment was built with a measurement ID (only
 // the geolibre.app and web.geolibre.app Pages deploys are, see analytics.ts).
@@ -198,6 +203,12 @@ function loadAuthGate(
         {children}
       </ClerkGate>
     ));
+  }
+  if (config.provider === "selfhost") {
+    return import("./components/auth/SelfHostGate").then(
+      ({ SelfHostGate }) =>
+        (children: ReactNode) => <SelfHostGate>{children}</SelfHostGate>,
+    );
   }
   return import("./components/auth/Auth0Gate").then(({ Auth0Gate }) => (children: ReactNode) => (
     <Auth0Gate domain={config.domain} clientId={config.clientId}>

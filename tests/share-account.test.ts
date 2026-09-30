@@ -4,6 +4,7 @@ import {
   MIN_PASSWORD_LENGTH,
   ShareAccountError,
   createAccount,
+  requestPasswordReset,
   signIn,
   validateCredentials,
 } from "../apps/geolibre-desktop/src/lib/share-account";
@@ -191,6 +192,17 @@ describe("signIn", () => {
         }),
       /Could not reach/,
     );
+  });
+
+  it("asks for a reset without saying whether the address exists", async () => {
+    const { fetch, calls } = stubFetch(() => ({ status: 200, body: { ok: true } }));
+    await requestPasswordReset({
+      email: "kythuat@example.test",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.equal(calls[0].url, `${BASE}/api/auth/reset-request`);
+    assert.deepEqual(calls[0].body, { email: "kythuat@example.test" });
   });
 
   it("rejects a response with no token instead of storing an empty one", async () => {

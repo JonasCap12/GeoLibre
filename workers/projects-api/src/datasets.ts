@@ -109,6 +109,12 @@ export function safeContentType(raw: string | null): string {
  * can reach this hostname; an internal library of survey drawings must not
  * start there. Omitting the field used to mean public, which is why the
  * upload form now has to send a choice instead of relying on silence.
+ *
+ * With the API closed, an anonymous caller cannot reach a public dataset
+ * either, so public and team are the same thing for anyone outside the
+ * deployment. team versus private is still a real distinction for a signed-in
+ * caller, and this function still accepts public: the sign-in gate is a
+ * second layer, not a replacement for the column.
  */
 export function datasetVisibility(raw: unknown): DatasetVisibility {
   if (raw === undefined || raw === null || raw === "") return "team";
