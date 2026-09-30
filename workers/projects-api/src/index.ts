@@ -24,6 +24,7 @@ import {
   type AuthActionRow,
 } from "./auth-policy";
 import { inviteEmail, passwordChangedEmail, resetEmail, type OutboundEmail } from "./email";
+import { isPublicRoute } from "./public-routes";
 import {
   ApiError,
   IMAGE_TYPES,
@@ -399,6 +400,13 @@ async function route(request: Request, env: Env, config: Config): Promise<Respon
     throw new ApiError(413, "request body too large");
   }
 
+  // Closed unless named in isPublicRoute. A handler added below is
+  // authenticated even when it forgets requireAccount; the five exceptions
+  // are the ones a person with no token must still be able to call.
+  if (!isPublicRoute(method, segments)) {
+    requireAccount(await optionalAccount(request, db));
+  }
+
   if (segments.length === 1 && segments[0] === "health" && method === "GET") {
     return json({ ok: true, service: "geolibre-server" });
   }
@@ -411,7 +419,11 @@ async function route(request: Request, env: Env, config: Config): Promise<Respon
   // /health, and only for a two-segment path, which is all the contract defines.
   if (segments.length === 2 && method === "GET") {
     const [username, tail] = segments;
-    const account = await optionalAccount(request, db);
+    // Share links used to be anonymous. This deployment is an internal team,
+    // so both the project file and the redirect that points the viewer at it
+    // require a token. An old link returns 401 until the visitor is signed
+    // in. workers/viewer is built on this route and follows the same rule.
+    const account = requireAccount(await optionalAccount(request, db));
     const actorId = account?.id ?? null;
 
     if (tail.endsWith(".geolibre.json")) {
@@ -753,7 +765,7 @@ async function apiRoute(
   if (path.length === 3 && path[0] === "users" && path[2] === "projects" && method === "GET") {
     const limit = positiveInt(url, "limit", 24, 1, 100);
     const offset = positiveInt(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
-    const account = await optionalAccount(request, db);
+    const account = requireAccount(await optionalAccount(request, db));
     const owner = await db
       .prepare(`SELECT id FROM accounts WHERE username = ?`)
       .bind(path[1])
@@ -792,13 +804,14 @@ async function apiRoute(
       const offset = positiveInt(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
       const featured = boolParam(url, "featured");
       const mine = boolParam(url, "mine");
-      const account = await optionalAccount(request, db);
+      const account = requireAccount(await optionalAccount(request, db));
 
       const filters: string[] = [];
       const binds: unknown[] = [];
       if (mine) {
-        // An Authorization header does not broaden a public listing by itself;
-        // only mine=true does, and then a token is mandatory.
+        // mine=true is what lists this account's own projects. Without it the
+        // listing stays public projects, even though the route itself now
+        // requires a token.
         const owner = requireAccount(account);
         filters.push("p.owner_id = ?");
         binds.push(owner.id);
@@ -829,7 +842,7 @@ async function apiRoute(
     const projectId = path[1];
 
     if (path.length === 2 && method === "GET") {
-      const account = await optionalAccount(request, db);
+      const account = requireAccount(await optionalAccount(request, db));
       const project = visible(await projectById(db, projectId), account?.id ?? null);
       // Only the private case gets a policy. The contract requires `private,
       // no-store` there; it says nothing about caching public metadata, and
@@ -1041,7 +1054,7 @@ async function apiRoute(
     if (path.length === 4 && path[2] === "versions" && method === "GET") {
       if (!/^\d+$/.test(path[3])) throw new ApiError(422, "version must be an integer");
       const number = Number.parseInt(path[3], 10);
-      const account = await optionalAccount(request, db);
+      const account = requireAccount(await optionalAccount(request, db));
       const actorId = account?.id ?? null;
       const project = visible(await projectById(db, projectId), actorId);
       const versionRow = await db
@@ -1078,7 +1091,7 @@ async function apiRoute(
         return empty(204);
       }
       if (method === "GET") {
-        const account = await optionalAccount(request, db);
+        const account = requireAccount(await optionalAccount(request, db));
         const project = visible(await projectById(db, projectId), account?.id ?? null);
         if (!project.thumbnail_type) throw new ApiError(404, "thumbnail not found");
         const data = await objects.get(thumbnailKey(project.id));
@@ -1112,7 +1125,7 @@ async function apiRoute(
   // nobody else can see. See schema-datasets.sql.
   if (path.length === 1 && path[0] === "datasets") {
     if (method === "GET") {
-      const account = await optionalAccount(request, db);
+      const account = requireAccount(await optionalAccount(request, db));
       const limit = positiveInt(url, "limit", 50, 1, 200);
       const offset = positiveInt(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
       // Public rows, team rows when the caller is signed in, plus the caller's
@@ -1214,7 +1227,7 @@ async function apiRoute(
 
     if (path.length === 2) {
       if (method === "GET") {
-        const account = await optionalAccount(request, db);
+        const account = requireAccount(await optionalAccount(request, db));
         return json({
           dataset: datasetJson(visibleDataset(await load(), account?.id ?? null), config),
         });
@@ -1232,7 +1245,7 @@ async function apiRoute(
 
     if (path.length === 3 && path[2] === "content" && method === "GET") {
       await rateLimitDownload(env, request);
-      const account = await optionalAccount(request, db);
+      const account = requireAccount(await optionalAccount(request, db));
       const row = visibleDataset(await load(), account?.id ?? null);
       const body = await objects.get(row.object_key);
       if (body === null) throw new ApiError(404, "dataset content not found");
@@ -1334,8 +1347,8 @@ async function rateLimitKey(env: Env, key: string): Promise<void> {
  * Separate from {@link rateLimit} because the risk is different. The auth
  * routes are limited to stop a CPU burn and password guessing; this one is
  * limited to stop a bill. Each download streams up to the dataset size cap out
- * of R2 and writes a D1 row to count it, and a public dataset needs no
- * credentials — an id in a loop is the whole attack.
+ * of R2 and writes a D1 row to count it. The route now requires a token, but
+ * any signed-in caller can still loop ids, so the bill is unchanged.
  *
  * Its own binding, so raising the download allowance never loosens the ones
  * protecting scrypt, and the two cannot exhaust each other's budget.

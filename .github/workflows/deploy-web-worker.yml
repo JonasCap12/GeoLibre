@@ -78,6 +78,10 @@ jobs:
           # as an unset ARG does in the Dockerfile.
           VITE_GEOLIBRE_COLLAB_URL: ${{ vars.VITE_GEOLIBRE_COLLAB_URL }}
           VITE_GEOLIBRE_SHARE_URL: ${{ vars.VITE_GEOLIBRE_SHARE_URL }}
+          # Fork sign-in gate. Unset leaves the app open, which is what every
+          # other deployment wants. Set the repository variable to 1 or the
+          # built worker is ungated no matter what the code says.
+          VITE_GEOLIBRE_SELFHOST_AUTH: ${{ vars.VITE_GEOLIBRE_SELFHOST_AUTH }}
           VITE_GEOLIBRE_EMBED_ORIGINS: ${{ vars.VITE_GEOLIBRE_EMBED_ORIGINS }}
           VITE_GEOLIBRE_CAPABILITIES: ${{ vars.VITE_GEOLIBRE_CAPABILITIES }}
           # The four below decide whether this deployment depends on servers run

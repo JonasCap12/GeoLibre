@@ -177,10 +177,7 @@ describe("upstream independence", () => {
       join(REPO_ROOT, ".github/workflows/deploy-web-worker.yml"),
       "utf8",
     );
-    const allowlist = readFileSync(
-      join(REPO_ROOT, "apps/geolibre-desktop/vite.config.ts"),
-      "utf8",
-    );
+    const allowlist = readFileSync(join(REPO_ROOT, "apps/geolibre-desktop/vite.config.ts"), "utf8");
     for (const variable of new Set(Object.values(SERVICE_DEFAULTS))) {
       assert.ok(
         workflow.includes(`${variable}: \${{ vars.${variable} }}`),
@@ -193,6 +190,26 @@ describe("upstream independence", () => {
         `${variable} is missing from BUILD_ENV_KEYS and would be stripped`,
       );
     }
+  });
+
+  it("passes the self-host sign-in flag through the deploy workflow and the build allowlist", () => {
+    // Not a service URL, so the SERVICE_DEFAULTS loop above never sees it.
+    // Missing from either place, the gate compiles out and the deployed app
+    // stays open with every other test still green.
+    const variable = "VITE_GEOLIBRE_SELFHOST_AUTH";
+    const workflow = readFileSync(
+      join(REPO_ROOT, ".github/workflows/deploy-web-worker.yml"),
+      "utf8",
+    );
+    const allowlist = readFileSync(join(REPO_ROOT, "apps/geolibre-desktop/vite.config.ts"), "utf8");
+    assert.ok(
+      workflow.includes(`${variable}: \${{ vars.${variable} }}`),
+      `${variable} is read by the app but deploy-web-worker.yml never passes it`,
+    );
+    assert.ok(
+      allowlist.includes(`"${variable}"`),
+      `${variable} is missing from BUILD_ENV_KEYS and would be stripped`,
+    );
   });
 
   it("routes every tiles-Worker service through the shared resolver", () => {

@@ -117,6 +117,37 @@ export async function signIn(options: ShareAccountOptions): Promise<string> {
 }
 
 /**
+ * Ask the server to email a reset link.
+ *
+ * The response is the same whether or not the address has an account, so the
+ * caller must not try to tell the visitor which one happened. A deployment
+ * with no email binding answers 503; that is a real failure, not a hint.
+ */
+export async function requestPasswordReset(options: {
+  email: string;
+  baseUrl?: string | null;
+  fetchImpl?: typeof globalThis.fetch;
+}): Promise<void> {
+  const email = options.email.trim();
+  if (email === "" || !email.includes("@")) {
+    throw new ShareAccountError("Enter the email address on the account.");
+  }
+  const base = requireBaseUrl(options.baseUrl);
+  const fetchImpl = options.fetchImpl ?? getShareFetch();
+  let response: Response;
+  try {
+    response = await fetchImpl(`${base}/api/auth/reset-request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    throw new ShareAccountError("Could not reach the projects server.");
+  }
+  if (!response.ok) throw await readError(response, "Could not request a reset");
+}
+
+/**
  * Revoke the bearer server-side.
  *
  * The caller must clear the saved token only after this resolves. Clearing
