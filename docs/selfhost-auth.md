@@ -239,7 +239,8 @@ written. Admins read it in the **Activity** tab.
 ## Known gaps against ASVS Level 2
 
 - **Two-factor is optional for members.** Only admins are required to use it.
-  There is no phishing-resistant factor yet.
+  There is no phishing-resistant factor yet; see
+  [Passkeys: proposal](#passkeys-proposal).
 - **A locked-out sole admin needs D1 access** to recover; there is no
   break-glass route.
 - **Token readable by page script.** See
@@ -260,3 +261,164 @@ written. Admins read it in the **Activity** tab.
   without an admin.
 - **The main app can be framed** by any origin when embedding is enabled; only
   the token pages are protected.
+
+## Passkeys: proposal
+
+Not implemented. This is the design for the next phase, written down so the
+choices that are hard to undo (the RP ID above all) are made on purpose.
+
+### What it adds
+
+A passkey (WebAuthn credential with user verification) is phishing-resistant
+and, under NIST SP 800-63B-4, a multi-factor cryptographic authenticator on its
+own, synced passkeys included, at AAL2. So it is offered as a **sign-in method**,
+not only as a second step:
+
+- **Sign in with a passkey**: no password, no TOTP. The credential is
+  discoverable and the ceremony requires `userVerification: "required"`.
+- **Satisfies the admin two-factor rule** in place of TOTP.
+- **Re-authentication**: one passkey assertion replaces password + code for
+  the sensitive changes listed under
+  [Two-factor authentication](#two-factor-authentication).
+- Password + TOTP stays as the fallback, and is the only method on desktop
+  until the handoff below exists.
+
+### Server: `@simplewebauthn/server` on Workers
+
+Version 14 does its cryptography through WebCrypto (`globalThis.crypto`), which
+workerd provides, and it bundles for the browser platform without any Node
+built-in. Its [documentation](https://simplewebauthn.dev/docs/packages/server)
+lists only Node 22+ and Deno as supported runtimes, though, so the first task
+of the phase is a spike: register and sign in under `wrangler dev` with
+Chrome's virtual authenticator, first without `nodejs_compat`, before any other
+code is written. Signature checks (ES256, RS256, EdDSA) cost a few
+milliseconds of CPU, well inside the current `cpu_ms`.
+Request `attestationType: "none"`: a small team has no use for authenticator
+make attestation, and it avoids most of the certificate-chain code at runtime.
+
+Writing the verifier by hand (CBOR, COSE keys, authenticator data flags,
+counters) would avoid the dependency, but it is exactly the security-critical
+parsing that is better taken from a maintained, widely reviewed library.
+
+Two new tables, by the same reasoning as `mfa_tickets`:
+
+```sql
+CREATE TABLE webauthn_credentials (
+  id TEXT PRIMARY KEY,            -- credential id, base64url
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  public_key BLOB NOT NULL,       -- COSE key
+  sign_count INTEGER NOT NULL DEFAULT 0,
+  transports TEXT,                -- JSON array, passed back as allowCredentials hints
+  backed_up INTEGER NOT NULL DEFAULT 0,
+  name TEXT,                      -- "MacBook", shown in Account & security
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE TABLE webauthn_challenges (
+  digest TEXT PRIMARY KEY,        -- SHA-256 of the challenge
+  account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE, -- NULL for sign-in
+  purpose TEXT NOT NULL,          -- 'register' | 'login' | 'reauth'
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,       -- 5 minutes
+  used_at TEXT
+);
+```
+
+Routes, all under the existing `no-store` and body-limit rules:
+
+| Route | Bearer | Notes |
+| --- | --- | --- |
+| `POST /api/auth/passkeys/register-options` | yes | Needs re-authentication; returns creation options |
+| `POST /api/auth/passkeys/register` | yes | `{response, name}`; stores the credential, records `passkey_added`, mails a notice |
+| `POST /api/auth/passkeys/login-options` | no | Per-IP rate limit; returns request options and a challenge id |
+| `POST /api/auth/passkeys/login` | no | `{challengeId, response}`; same response as `POST /api/auth/token` |
+| `GET /api/auth/passkeys` | yes | `{passkeys: [{id, name, createdAt, lastUsedAt, backedUp}]}` |
+| `DELETE /api/auth/passkeys/{id}` | yes | Needs re-authentication |
+
+The challenge is spent with a conditional `UPDATE … WHERE used_at IS NULL`,
+like the ticket. A sign count that goes backwards on a credential that reported
+one is refused and logged (a cloned authenticator); synced passkeys report `0`
+and are exempt. The admin two-factor reset also deletes the account's
+passkeys. New config: `GEOLIBRE_WEBAUTHN_RP_ID` and `GEOLIBRE_WEBAUTHN_ORIGINS`
+(the app origins the server accepts as `expectedOrigin`).
+
+### Choosing the RP ID
+
+A passkey is bound to its RP ID forever: change it and every passkey stops
+working and has to be enrolled again. The RP ID must equal, or be a registrable
+suffix of, the host of the page running the ceremony (the app, not the API;
+the API only checks the result).
+
+| Option | RP ID | Consequence |
+| --- | --- | --- |
+| Stay on `workers.dev` | `geolibre-web.<account>.workers.dev`, or `<account>.workers.dev` | `workers.dev` is a public suffix, so nothing broader is allowed. Tied to the Cloudflare account subdomain; renaming it, or the later move to a custom domain, orphans every passkey |
+| Custom domain | e.g. `geolibre.example.org` | Stable across Cloudflare account changes. Also what makes the other deferred items possible: an `HttpOnly` same-site session cookie, HSTS, and Leaked Credentials Detection, which needs a zone |
+
+**Recommendation: move the app and API to a custom domain first, then ship
+passkeys with that domain as the RP ID.** WebAuthn Related Origin Requests
+(`/.well-known/webauthn`) can let one RP ID serve several origins, but browser
+support is uneven, so the design does not rely on it to undo a premature
+`workers.dev` choice.
+
+### Desktop (Tauri)
+
+The desktop webview cannot run a ceremony for the web RP ID:
+
+- **Windows** (WebView2) serves the app from `http://tauri.localhost`, and
+  **macOS** (WKWebView) from `tauri://localhost`. Neither host can claim
+  `geolibre.example.org` as RP ID. WKWebView only allows it through the
+  Associated Domains entitlement, which needs a signed build and an
+  `apple-app-site-association` file on the RP domain.
+- **Linux** (WebKitGTK) has no WebAuthn at all.
+
+So the desktop app hands the ceremony to the system browser, using the pattern
+RFC 8252 sets out for native apps with a PKCE-style binding (RFC 7636):
+
+1. The app makes a random `verifier`, and opens
+   `https://<app>/desktop-signin#challenge=<SHA-256(verifier)>` with
+   `tauri-plugin-opener` (already a dependency).
+2. The user signs in there with the passkey, as on the web. The page calls
+   `POST /api/auth/desktop-grant {challenge}`, which stores a single-use grant
+   valid for two minutes, and redirects to `geolibre://signin?grant=…`.
+   `tauri-plugin-deep-link` is already in the crate; only the desktop scheme
+   needs registering.
+3. The app posts `POST /api/auth/desktop-redeem {grant, verifier}`, and the
+   server issues the desktop its own session after checking
+   `SHA-256(verifier)` against the stored challenge.
+
+A custom URL scheme can be claimed by another program, and the binding is what
+makes that harmless: an intercepted grant is useless without the verifier,
+which never leaves the app. A loopback redirect (`http://127.0.0.1:<port>`)
+would avoid the scheme registration but needs a listener in the Rust side.
+
+### Dependency and `package-lock.json` impact
+
+Measured against the current lockfile:
+
+- `workers/projects-api/package.json` gains `@simplewebauthn/server@^14`.
+- `package-lock.json` gains about 24 entries: `@simplewebauthn/server`, 15
+  `@peculiar/*` packages (ASN.1 and X.509 parsing), `asn1js`, `pvtsutils`,
+  `pvutils`, `reflect-metadata`, `tsyringe` (with its own `tslib@1`),
+  `@hexagon/base64` and `@levischuck/tiny-cbor`. `tslib@2` is already present.
+- The Worker bundle grows by about 304 KB minified, 85 KB gzipped
+  (esbuild, browser/worker conditions).
+- The app needs no dependency: `PublicKeyCredential.parseCreationOptionsFromJSON`,
+  `parseRequestOptionsFromJSON` and `toJSON()` cover the JSON round trip in
+  current browsers. `@simplewebauthn/browser` (no dependencies of its own) is
+  the fallback if the support matrix at implementation time says otherwise.
+- `docs/maintenance.md` gets a note: a major bump of the server library is a
+  security review, not a routine Dependabot merge.
+
+### Effort
+
+| Part | Estimate |
+| --- | --- |
+| Spike: the library under `wrangler dev` with a virtual authenticator | ½ day |
+| Worker: tables, migration, six routes, re-auth by passkey, admin reset, audit kinds | 2–3 days |
+| App (web): sign-in button, Account & security list/add/rename/remove, i18n | 2 days |
+| Tests: pure policy modules under `node --test`; local E2E with Chrome's virtual authenticator (DevTools `WebAuthn` domain) | 1–2 days |
+| Desktop handoff (scheme registration, grant routes, per-OS testing) | 2–3 days |
+
+About a week and a half in total, or four to five days for web only, with
+desktop keeping password + TOTP. The custom-domain move is a prerequisite, not
+included above.
