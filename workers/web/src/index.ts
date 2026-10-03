@@ -25,8 +25,9 @@ const NEVER_FALLBACK = ["/assets/", "/jupyterlite/", "/plugins/"];
 
 /**
  * The self-hosted auth pages that emails link to. They take a password, so
- * they must not render inside someone else's frame (clickjacking). The rest of
- * the app is embeddable by design, which is why this is not in _headers.
+ * they must not render inside someone else's frame (clickjacking). _headers
+ * now sets the same `frame-ancestors 'self'` for the whole app; this stays so
+ * these pages remain unframeable if that is ever widened for embedding.
  */
 const LINK_PAGES = new Set(["register", "reset", "verify-email"]);
 

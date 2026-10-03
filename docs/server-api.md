@@ -352,7 +352,8 @@ required` without it, `403` `two-factor code is incorrect` for a wrong one.
 address has an account.
 
 `POST /api/auth/reset-confirm` (no bearer) — `{"token": "…", "password": "…",
-"turnstileToken": "…"}`. Sets the password and signs out every session.
+"turnstileToken": "…"}`. Sets the password, signs out every session, and spends
+any other reset link and pending two-factor sign-in step for the account.
 `200` `{"ok": true}`; `403` for an invalid or expired link (30 minutes).
 
 `POST /api/auth/email` — `{"email": "…", "currentPassword": "…"}`. Mails a
@@ -408,7 +409,7 @@ same shape as `POST /api/auth/token`. Errors:
 | --- | --- | --- |
 | `401` | `two-factor code is incorrect` | Try again with the same ticket |
 | `401` | `sign-in step expired; sign in again` | The ticket is unknown, used, older than 5 minutes or has had 5 wrong codes |
-| `403` | `too many wrong two-factor codes; ask an admin to reset two-factor authentication` | 10 wrong codes in a row; only an admin reset clears it |
+| `403` | `too many wrong two-factor codes; wait 15 minutes or use a recovery code` | 10 wrong codes in a row; after that one authenticator code per 15 minutes. Recovery codes are still accepted, and an admin reset clears the count |
 | `429` | — | Per-IP and per-account limits |
 
 A code is accepted once: a TOTP step that has been used, even within its
@@ -419,7 +420,8 @@ returns `200` `{"secret": "BASE32…", "otpauthUri": "otpauth://totp/…"}`. The
 secret is not active yet. `409` when two-factor is already on.
 
 `POST /api/auth/mfa/enable` — `{"code": "…"}`. A code from the new secret
-turns two-factor on and returns `200` `{"recoveryCodes": ["XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
+turns two-factor on, signs out every other session of the account, and
+returns `200` `{"recoveryCodes": ["XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
 …]}`, the only time the codes are shown. `403` for a wrong code; `409` without
 a pending setup.
 
@@ -427,7 +429,8 @@ a pending setup.
 Replaces every recovery code; `200` `{"recoveryCodes": […]}`.
 
 `POST /api/auth/mfa/disable` — `{"currentPassword": "…", "code": "…"}`. Turns
-two-factor off and deletes the recovery codes. `200` `{"ok": true}`.
+two-factor off, deletes the recovery codes and signs out every other session.
+`200` `{"ok": true}`.
 
 The last two are `403` for a wrong password or code and `409` when two-factor
 is off.

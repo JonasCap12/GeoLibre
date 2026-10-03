@@ -699,10 +699,9 @@ function LinkProblem({
   );
 }
 
-/** Account menu. The server revoke runs before the saved token is cleared. */
+/** Account menu. Sign-out asks the server to revoke, then clears the saved token either way. */
 function UserMenu({ token }: { token: string }) {
   const { t } = useTranslation();
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [dialog, setDialog] = useState<"security" | "admin" | null>(null);
@@ -722,15 +721,18 @@ function UserMenu({ token }: { token: string }) {
 
   const reloadAccount = async () => setAccount(await fetchAccount({ token }));
 
+  // The local token is cleared whether or not the revoke reached the server.
+  // Someone pressing "Sign out" offline, or on a token the server already
+  // dropped, must not stay signed in on this device; an unrevoked token still
+  // dies at its idle timeout.
   const revoke = async () => {
     setBusy(true);
-    setError(null);
     try {
       await signOut({ token });
-      writeShareToken("");
     } catch (err) {
-      setError(authErrorText(t, err));
+      console.warn("sign-out could not reach the server; clearing the local session", err);
     } finally {
+      writeShareToken("");
       setBusy(false);
     }
   };
@@ -756,11 +758,6 @@ function UserMenu({ token }: { token: string }) {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
             </>
-          ) : null}
-          {error ? (
-            <p className="px-2 py-1.5 text-start text-xs text-destructive" role="alert">
-              {error}
-            </p>
           ) : null}
           <DropdownMenuItem onSelect={() => setDialog("security")}>
             <Shield className="me-2 h-4 w-4" />

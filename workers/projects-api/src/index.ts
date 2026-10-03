@@ -47,6 +47,7 @@ import {
   assertNewPassword,
   background,
   clientIp,
+  credentialChangeStatements,
   emailFrom,
   emailFromOrNull,
   empty,
@@ -619,7 +620,10 @@ async function apiRoute(
     // The session that just proved the current password is re-issued below.
     // Every digest that existed before that, including this request's, is
     // deleted first — an attacker's copy of the old token must die too.
-    await db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(account.id).run();
+    await db.batch([
+      db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(account.id),
+      ...credentialChangeStatements(db, account.id, changedAt),
+    ]);
     const token = await issueToken(scope, account.id);
     recordAuthEvent(scope, "password_changed", account.id);
     const from = emailFromOrNull(env);
@@ -714,7 +718,12 @@ async function apiRoute(
       .prepare(`UPDATE accounts SET password_hash = ?, password_changed_at = ? WHERE id = ?`)
       .bind(await passwordHash(password), changedAt, target.id)
       .run();
-    await db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(target.id).run();
+    // Also spends any other reset link still in the mailbox: one reset is
+    // enough, and a second link must not reopen the account behind it.
+    await db.batch([
+      db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(target.id),
+      ...credentialChangeStatements(db, target.id, changedAt),
+    ]);
     recordAuthEvent(scope, "reset_completed", target.id);
     const from = emailFromOrNull(env);
     if (from !== null) {

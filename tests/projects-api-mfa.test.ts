@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  MFA_LOCK_COOLDOWN_MS,
+  MFA_LOCKED_MESSAGE,
+  MFA_MAX_CONSECUTIVE_FAILURES,
   MFA_TICKET_MAX_ATTEMPTS,
   MFA_TICKET_TTL_MS,
   expiresAt,
+  mfaLockRefusal,
   mfaTicketRefusal,
   type MfaTicketRow,
 } from "../workers/projects-api/src/auth-policy";
@@ -223,5 +227,39 @@ describe("sign-in ticket policy", () => {
       mfaTicketRefusal(ticket({ attempts: MFA_TICKET_MAX_ATTEMPTS }), nowIso),
       "exhausted",
     );
+  });
+});
+
+describe("wrong-code cooldown", () => {
+  const now = Date.parse("2026-10-03T12:00:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("does not slow anyone down below the limit", () => {
+    assert.equal(mfaLockRefusal(MFA_MAX_CONSECUTIVE_FAILURES - 1, ago(1000), now), null);
+  });
+
+  it("refuses an authenticator code inside the cooldown once past the limit", () => {
+    assert.equal(mfaLockRefusal(MFA_MAX_CONSECUTIVE_FAILURES, ago(1000), now), "locked");
+    assert.equal(
+      mfaLockRefusal(MFA_MAX_CONSECUTIVE_FAILURES + 40, ago(MFA_LOCK_COOLDOWN_MS - 1), now),
+      "locked",
+    );
+  });
+
+  it("takes one more code once the cooldown has passed, so it is never a permanent lock", () => {
+    assert.equal(
+      mfaLockRefusal(MFA_MAX_CONSECUTIVE_FAILURES, ago(MFA_LOCK_COOLDOWN_MS), now),
+      null,
+    );
+  });
+
+  it("does not lock when the failure record is missing or unreadable", () => {
+    // Pruned past retention, or never written: the count alone must not lock.
+    assert.equal(mfaLockRefusal(MFA_MAX_CONSECUTIVE_FAILURES, null, now), null);
+    assert.equal(mfaLockRefusal(MFA_MAX_CONSECUTIVE_FAILURES, "not a date", now), null);
+  });
+
+  it("keeps the prefix the client recognises as mfa-locked", () => {
+    assert.ok(MFA_LOCKED_MESSAGE.startsWith("too many wrong two-factor codes"));
   });
 });
