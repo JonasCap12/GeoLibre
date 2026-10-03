@@ -2024,7 +2024,7 @@
       "mfaInvalid": "Mã không đúng. Nhập mã sáu số hiện tại hoặc một mã khôi phục chưa dùng.",
       "mfaRequired": "Hãy nhập thêm mã xác thực hai bước.",
       "mfaExpired": "Bước đăng nhập đã quá hạn. Hãy nhập lại mật khẩu.",
-      "mfaLocked": "Nhập sai mã quá nhiều lần. Hãy nhờ quản trị viên đặt lại xác thực hai bước cho tài khoản này.",
+      "mfaLocked": "Nhập sai mã quá nhiều lần. Hãy chờ 15 phút, hoặc đăng nhập bằng mã khôi phục.",
       "mfaUnavailable": "Máy chủ này chưa cấu hình xác thực hai bước. Hãy liên hệ quản trị viên.",
       "adminMfaRequired": "Công cụ quản trị cần xác thực hai bước. Hãy bật trong Tài khoản & bảo mật trước."
     }

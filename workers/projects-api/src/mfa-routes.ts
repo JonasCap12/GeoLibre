@@ -11,18 +11,22 @@ import { mintToken, passwordMatches, tokenDigest } from "./auth";
 import {
   AUTH_BODY_LIMIT,
   MAX_PASSWORD_LENGTH,
+  MFA_LOCKED_MESSAGE,
   MFA_MAX_CONSECUTIVE_FAILURES,
   MFA_TICKET_MAX_ATTEMPTS,
   MFA_TICKET_TTL_MS,
   expiresAt,
+  mfaLockRefusal,
   mfaTicketRefusal,
   type MfaTicketRow,
 } from "./auth-policy";
 import {
   accountEmail,
   accountHasEmail,
+  authEventStatements,
   emailFromOrNull,
   json,
+  otherSessionsStatement,
   rateLimitAccount,
   rateLimitKey,
   readJsonBody,
@@ -90,7 +94,8 @@ function notify(scope: Scope, account: AccountRow, change: Parameters<typeof mfa
  *
  * Six digits is tried as TOTP, anything else as a recovery code, so one input
  * field serves both. A wrong code counts toward MFA_MAX_CONSECUTIVE_FAILURES;
- * past it the account takes no more codes until an admin resets the factor.
+ * past it an authenticator code is taken only once per MFA_LOCK_COOLDOWN_MS,
+ * while recovery codes keep working (see mfaLockRefusal).
  *
  * @returns Which factor matched, or null for a wrong code.
  */
@@ -100,17 +105,25 @@ export async function verifySecondFactor(
   rawCode: string,
 ): Promise<"totp" | "recovery" | null> {
   const { db } = scope;
-  if ((account.mfa_failed_attempts ?? 0) >= MFA_MAX_CONSECUTIVE_FAILURES) {
-    throw new ApiError(
-      403,
-      "too many wrong two-factor codes; ask an admin to reset two-factor authentication",
-    );
-  }
   // Per account, not per IP or per ticket: a password holder minting fresh
   // tickets from many addresses still gets this many guesses a minute.
   await rateLimitAccount(scope.env, `mfa:${account.id}`);
 
   const totp = normalizeTotpCode(rawCode);
+  const failures = account.mfa_failed_attempts ?? 0;
+  if (totp !== null && failures >= MFA_MAX_CONSECUTIVE_FAILURES) {
+    const last = await db
+      .prepare(
+        `SELECT MAX(created_at) AS at FROM auth_events
+         WHERE account_id = ? AND kind = 'mfa_failure'`,
+      )
+      .bind(account.id)
+      .first<{ at: string | null }>();
+    if (mfaLockRefusal(failures, last?.at ?? null, Date.now()) !== null) {
+      throw new ApiError(403, MFA_LOCKED_MESSAGE);
+    }
+  }
+
   if (totp !== null && account.mfa_secret) {
     const secret = await openSecret(await sealKey(scope), account.mfa_secret, account.id);
     const step = await verifyTotp(secret, totp, Date.now(), account.mfa_last_used_step ?? null);
@@ -150,11 +163,14 @@ export async function verifySecondFactor(
     }
   }
 
-  await db
-    .prepare(`UPDATE accounts SET mfa_failed_attempts = mfa_failed_attempts + 1 WHERE id = ?`)
-    .bind(account.id)
-    .run();
-  recordAuthEvent(scope, "mfa_failure", account.id);
+  // Awaited, not recordAuthEvent: the cooldown above reads this row back, and
+  // a write still pending in waitUntil would let the next guess through early.
+  await db.batch([
+    db
+      .prepare(`UPDATE accounts SET mfa_failed_attempts = mfa_failed_attempts + 1 WHERE id = ?`)
+      .bind(account.id),
+    ...authEventStatements(scope, "mfa_failure", account.id),
+  ]);
   return null;
 }
 
@@ -315,7 +331,7 @@ export async function mfaRoute(
     return null;
   }
   const { db, request } = scope;
-  const { account } = await requireSession(scope);
+  const { account, digest } = await requireSession(scope);
   const body = await readJsonBody(request, AUTH_BODY_LIMIT);
 
   // Step one of setup. The password proves it is the owner at the keyboard;
@@ -358,6 +374,9 @@ export async function mfaRoute(
       .bind(now(), step, account.id, account.mfa_pending_secret)
       .run();
     if ((enabled.meta.changes ?? 0) < 1) throw new ApiError(409, "start two-factor setup first");
+    // Sessions signed in with the password alone end here; this one, which
+    // just proved the new factor, stays.
+    await otherSessionsStatement(db, account.id, digest).run();
     const recoveryCodes = await storeRecoveryCodes(scope, account.id);
     recordAuthEvent(scope, "mfa_enabled", account.id);
     notify(scope, account, "enabled");
@@ -368,7 +387,10 @@ export async function mfaRoute(
     if (!mfaEnabled(account)) throw new ApiError(409, "two-factor authentication is not on");
     await requirePassword(scope, account, body);
     await requireSecondFactor(scope, account, body);
-    await db.batch(clearMfaStatements(db, account.id));
+    await db.batch([
+      ...clearMfaStatements(db, account.id),
+      otherSessionsStatement(db, account.id, digest),
+    ]);
     recordAuthEvent(scope, "mfa_disabled", account.id);
     notify(scope, account, "disabled");
     return json({ ok: true });

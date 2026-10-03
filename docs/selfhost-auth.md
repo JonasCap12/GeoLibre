@@ -145,16 +145,23 @@ empty tabs.
   deleted on a schedule the email links do not share.
 - **Guessing.** Codes are limited per account (5 a minute) as well as per IP,
   so minting fresh tickets from many addresses does not buy more guesses.
-  After 10 wrong codes in a row the account accepts no code at all until an
-  admin resets two-factor. Unlike the password, this is a hard lockout,
-  because only someone who already knows the password can reach it.
+  After 10 wrong codes in a row, authenticator codes are taken only once per
+  15 minutes until one is right (or an admin resets two-factor). Recovery
+  codes are always accepted. It is a cooldown rather than a lockout: a hard
+  lock would let anyone holding a leaked password lock the owner out for
+  good, and would strand the only admin.
+- **Factor changes end other sessions.** Turning two-factor on or off signs
+  out every other session of the account, so a session someone else opened
+  with the password alone does not outlive the change. Changing or resetting
+  the password also spends any other reset link and any pending sign-in step.
 - **Re-authentication.** Changing the password or email, regenerating
   recovery codes and turning two-factor off need the current password *and*
   a current code (ASVS V7.5.1).
 - **Admin reset.** For a lost phone with no codes left, an admin can turn
   two-factor off for an account. This also ends its sessions and mails the
-  owner. If the *only* admin is locked out there is no one to reset them; the
-  operator clears the `mfa_*` columns for that account directly in D1.
+  owner. If the *only* admin loses both their phone and their recovery codes
+  there is no one to reset them; the operator clears the `mfa_*` columns for
+  that account directly in D1.
 - **Older clients** that do not know the ticket see a `200` without a token
   and report "The server did not return a token". Members without two-factor
   are unaffected.
@@ -231,10 +238,13 @@ written. Admins read it in the **Activity** tab.
 - `Referrer-Policy: strict-origin-when-cross-origin` is already set for the
   app. With tokens in the fragment, a link token cannot leak through `Referer`
   either way.
-- The app is designed to be embedded (`VITE_GEOLIBRE_EMBED_ORIGINS`), so `/*`
-  has no `frame-ancestors`. The pages that act on a mailed token (`/register`,
-  `/reset`, `/verify-email`) get `frame-ancestors 'self'` from the web Worker,
-  so they cannot be framed for clickjacking.
+- `/*` carries `frame-ancestors 'self'`, so no other site can frame the app and
+  trick a click onto an admin action. Embedding by other sites is off here
+  anyway (`VITE_GEOLIBRE_EMBED_ORIGINS` is unset); to turn it on, add each host
+  origin to that directive in `_headers` in the same change. The pages that act
+  on a mailed token (`/register`, `/reset`, `/verify-email`) also get
+  `frame-ancestors 'self'` from the web Worker, so they stay unframeable even
+  if the app policy is widened.
 
 ## Known gaps against ASVS Level 2
 

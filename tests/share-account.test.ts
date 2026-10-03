@@ -351,7 +351,7 @@ describe("authErrorCode", () => {
     assert.equal(
       authErrorCode(
         403,
-        "too many wrong two-factor codes; ask an admin to reset two-factor authentication",
+        "too many wrong two-factor codes; wait 15 minutes or use a recovery code",
       ),
       "mfa-locked",
     );

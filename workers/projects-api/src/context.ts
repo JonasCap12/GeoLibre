@@ -274,6 +274,44 @@ export async function issueToken(scope: Scope, accountId: string): Promise<strin
   return token;
 }
 
+/**
+ * Ends every session of an account except the one making the request.
+ *
+ * Run when a factor changes (ASVS 5.0 V7.4.3). People turn two-factor on
+ * because they suspect someone else is in; leaving that someone's session alive
+ * for the rest of its 30 days would defeat the point.
+ */
+export function otherSessionsStatement(
+  db: D1Database,
+  accountId: string,
+  keepDigest: string,
+): D1PreparedStatement {
+  return db
+    .prepare(`DELETE FROM tokens WHERE account_id = ? AND digest <> ?`)
+    .bind(accountId, keepDigest);
+}
+
+/**
+ * Spends what the old password could still be traded for: unused reset links,
+ * and sign-in tickets already earned with it (a ticket plus a code is a
+ * session). Run beside the token delete whenever the password changes.
+ */
+export function credentialChangeStatements(
+  db: D1Database,
+  accountId: string,
+  at: string,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE auth_actions SET used_at = ?
+         WHERE account_id = ? AND kind = 'reset' AND used_at IS NULL`,
+      )
+      .bind(at, accountId),
+    db.prepare(`DELETE FROM mfa_tickets WHERE account_id = ?`).bind(accountId),
+  ];
+}
+
 /** Work that must finish but must not delay, or be observable in, the response. */
 export function background(scope: Scope, label: string, work: () => Promise<unknown>): void {
   scope.ctx.waitUntil(
@@ -419,28 +457,41 @@ export function recordAuthEvent(
   accountId: string | null,
   detail: Record<string, unknown> = {},
 ): void {
-  const created = now();
   background(scope, `audit ${kind}`, () =>
-    scope.db.batch([
-      scope.db
-        .prepare(`DELETE FROM auth_events WHERE created_at < ?`)
-        .bind(auditCutoff(Date.now(), scope.config.activityRetentionDays)),
-      scope.db
-        .prepare(
-          `INSERT INTO auth_events (id, account_id, kind, ip, user_agent, created_at, detail)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          accountId,
-          kind,
-          clientIp(scope.request),
-          shortUserAgent(scope.request.headers.get("User-Agent")),
-          created,
-          auditDetail(detail),
-        ),
-    ]),
+    scope.db.batch(authEventStatements(scope, kind, accountId, detail)),
   );
+}
+
+/**
+ * The prune and insert {@link recordAuthEvent} runs, for a caller that must
+ * have the row written before it answers: the MFA cooldown reads the latest
+ * `mfa_failure` back, so that one cannot wait for waitUntil.
+ */
+export function authEventStatements(
+  scope: Scope,
+  kind: AuthEventKind,
+  accountId: string | null,
+  detail: Record<string, unknown> = {},
+): D1PreparedStatement[] {
+  return [
+    scope.db
+      .prepare(`DELETE FROM auth_events WHERE created_at < ?`)
+      .bind(auditCutoff(Date.now(), scope.config.activityRetentionDays)),
+    scope.db
+      .prepare(
+        `INSERT INTO auth_events (id, account_id, kind, ip, user_agent, created_at, detail)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        accountId,
+        kind,
+        clientIp(scope.request),
+        shortUserAgent(scope.request.headers.get("User-Agent")),
+        now(),
+        auditDetail(detail),
+      ),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -451,8 +502,9 @@ export function recordAuthEvent(
  * Verifies the form's Turnstile token when this deployment has a secret.
  *
  * Without TURNSTILE_SECRET_KEY the check is skipped with a warning, the same
- * way an absent rate-limit binding is: a fresh or local deployment works, and
- * deploy-projects-api.yml is what insists production has one.
+ * way an absent rate-limit binding is: a fresh or local deployment works.
+ * Production cannot get there: deploy-projects-api.yml runs
+ * scripts/predeploy-check.mjs, which refuses to deploy while the secret is unset.
  */
 export async function requireTurnstile(
   scope: Scope,
