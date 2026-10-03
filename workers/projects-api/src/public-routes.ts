@@ -4,8 +4,9 @@
  * Everything else is closed, including a route added later that forgets to
  * ask for an account. These stay open because closing any of them locks the
  * team out permanently: health is an uptime check, registration and invite
- * inspection are already invite-gated, sign-in is how a token is obtained at
- * all, the two reset steps are what a person with no token uses to get one
+ * inspection are already invite-gated, sign-in (and its second-factor step,
+ * which needs the single-use ticket the password earned) is how a token is
+ * obtained at all, the two reset steps are what a person with no token uses to get one
  * back, and email confirmation is opened from a mail link on a device that
  * may not be signed in (the single-use token in the body is the credential).
  *
@@ -22,6 +23,7 @@ export function isPublicRoute(method: string, segments: readonly string[]): bool
   if (path.length === 2 && path[0] === "auth") {
     return (
       path[1] === "token" ||
+      path[1] === "mfa" ||
       path[1] === "reset-request" ||
       path[1] === "reset-confirm" ||
       path[1] === "email-confirm"

@@ -1,4 +1,5 @@
--- Session expiry and device columns, account disabling, and the auth audit log.
+-- Session expiry and device columns, account disabling, the auth audit log,
+-- and two-factor authentication.
 --
 -- Requires schema-auth.sql to have been applied first (accounts.email).
 --
@@ -56,3 +57,38 @@ CREATE TABLE IF NOT EXISTS auth_events (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_auth_events_account ON auth_events(account_id, kind);
+
+-- Two-factor authentication ------------------------------------------------
+-- TOTP secret, AES-GCM sealed with MFA_ENCRYPTION_KEY and bound to the account
+-- id. Never stored or logged in the clear.
+ALTER TABLE accounts ADD COLUMN mfa_secret TEXT;
+-- Shown during setup; becomes mfa_secret once the first code proves the app
+-- has it, so a half-finished setup never locks anyone out.
+ALTER TABLE accounts ADD COLUMN mfa_pending_secret TEXT;
+ALTER TABLE accounts ADD COLUMN mfa_enabled_at TEXT;
+-- Highest TOTP time step accepted, so a code cannot be replayed.
+ALTER TABLE accounts ADD COLUMN mfa_last_used_step INTEGER;
+-- Consecutive wrong codes; reset on success and by an admin.
+ALTER TABLE accounts ADD COLUMN mfa_failed_attempts INTEGER NOT NULL DEFAULT 0;
+
+-- Ten per account, shown once. SHA-256 of the normalized code only.
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  digest      TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL,
+  used_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_account ON mfa_recovery_codes(account_id);
+
+-- The step between a right password and the code. Its own table rather than a
+-- new auth_actions kind: that table's CHECK constraint on `kind` cannot be
+-- altered in SQLite without rebuilding it.
+CREATE TABLE IF NOT EXISTS mfa_tickets (
+  digest      TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  used_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_tickets_expires ON mfa_tickets(expires_at);

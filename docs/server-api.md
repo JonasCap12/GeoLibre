@@ -321,6 +321,12 @@ carries `Retry-After` in seconds.
   15-character rule keep working.
 - Tokens now expire: 30 days after issue and after 7 days unused (both
   configurable). An expired token is `401`, like a revoked one.
+- When the account has two-factor authentication on, a correct password to
+  `POST /api/auth/token` answers `200` `{"mfaRequired": true, "mfaTicket": "…"}`
+  with no `token`; the client finishes at
+  [`POST /api/auth/mfa`](#two-factor-authentication). Accounts without
+  two-factor are unchanged. A client that predates this sees a `200` without a
+  token and must report it as an error rather than store nothing.
 
 ### Invites
 
@@ -337,7 +343,9 @@ expired invite.
 
 `POST /api/auth/password` — `{"currentPassword": "…", "password": "…"}`. Signs
 out every session, then returns a fresh one: `200` `{"token": "…"}`. `401` for
-a wrong current password.
+a wrong current password. With two-factor on, the body also needs `"code"` (a
+current authenticator code or an unused recovery code): `403` `two-factor code
+required` without it, `403` `two-factor code is incorrect` for a wrong one.
 
 `POST /api/auth/reset-request` (no bearer) — `{"email": "…",
 "turnstileToken": "…"}`. Always `200` `{"ok": true}`, whether or not the
@@ -350,7 +358,8 @@ address has an account.
 `POST /api/auth/email` — `{"email": "…", "currentPassword": "…"}`. Mails a
 confirmation link to the new address and a notice to the old one; the address
 changes only when the link is used. `202` `{"ok": true}`; `403` for a wrong
-current password; `409` when another account has the address.
+current password; `409` when another account has the address. Takes `"code"`
+under the same rule as the password change.
 
 `POST /api/auth/email-confirm` (no bearer) — `{"token": "…"}`. `200`
 `{"ok": true}`; `403` for an invalid or expired link (24 hours).
@@ -362,10 +371,12 @@ draw its menus:
 
 ```json
 {"account": {"id": "uuid", "username": "ada", "createdAt": "…",
-  "email": "ada@example.com", "emailVerifiedAt": "…", "isAdmin": false}}
+  "email": "ada@example.com", "emailVerifiedAt": "…", "isAdmin": false,
+  "mfaEnabled": true, "recoveryCodesLeft": 9}}
 ```
 
 `isAdmin` only decides what the app shows; every admin route checks again.
+`recoveryCodesLeft` is `0` when two-factor is off.
 
 `GET /api/auth/sessions` — the account's live sessions, newest first:
 
@@ -381,20 +392,62 @@ once an hour.
 `DELETE /api/auth/sessions/{id}` signs out one. Both `204`; `404` for an id the
 account does not own.
 
+### Two-factor authentication
+
+Time-based one-time passwords (RFC 6238: SHA-1, six digits, 30-second step)
+plus ten single-use recovery codes. Every route here except `POST /api/auth/mfa`
+needs the bearer. A deployment without `MFA_ENCRYPTION_KEY` answers `503`
+`two-factor authentication is not configured on this deployment`.
+
+`POST /api/auth/mfa` (no bearer) — `{"ticket": "…", "code": "…"}`. Finishes a
+sign-in that `POST /api/auth/token` paused. `code` is the six-digit code or a
+recovery code (case, spaces and dashes are ignored). Response `200` has the
+same shape as `POST /api/auth/token`. Errors:
+
+| Status | Error | Meaning |
+| --- | --- | --- |
+| `401` | `two-factor code is incorrect` | Try again with the same ticket |
+| `401` | `sign-in step expired; sign in again` | The ticket is unknown, used, older than 5 minutes or has had 5 wrong codes |
+| `403` | `too many wrong two-factor codes; ask an admin to reset two-factor authentication` | 10 wrong codes in a row; only an admin reset clears it |
+| `429` | — | Per-IP and per-account limits |
+
+A code is accepted once: a TOTP step that has been used, even within its
+window, is refused.
+
+`POST /api/auth/mfa/setup` — `{"currentPassword": "…"}`. Starts setup and
+returns `200` `{"secret": "BASE32…", "otpauthUri": "otpauth://totp/…"}`. The
+secret is not active yet. `409` when two-factor is already on.
+
+`POST /api/auth/mfa/enable` — `{"code": "…"}`. A code from the new secret
+turns two-factor on and returns `200` `{"recoveryCodes": ["XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
+…]}`, the only time the codes are shown. `403` for a wrong code; `409` without
+a pending setup.
+
+`POST /api/auth/mfa/recovery-codes` — `{"currentPassword": "…", "code": "…"}`.
+Replaces every recovery code; `200` `{"recoveryCodes": […]}`.
+
+`POST /api/auth/mfa/disable` — `{"currentPassword": "…", "code": "…"}`. Turns
+two-factor off and deletes the recovery codes. `200` `{"ok": true}`.
+
+The last two are `403` for a wrong password or code and `409` when two-factor
+is off.
+
 ### Administration
 
 Admins are the usernames listed in `GEOLIBRE_ADMIN_USERNAMES`. Every route here
-is `403` for anyone else.
+is `403` for anyone else, and `403` `admin accounts must turn on two-factor
+authentication first` for an admin who has not.
 
 | Route | Effect |
 | --- | --- |
 | `GET /api/admin/invites` | `{"invites": [{id, email, status, createdAt, expiresAt, usedAt, createdBy, usedBy}]}`; `status` is `pending`, `used` or `expired` |
 | `DELETE /api/admin/invites/{id}` | Revokes an unused invite. `204`; `409` if used |
 | `POST /api/admin/invites/{id}/resend` | Replaces the invite with a fresh link and 72 hours. `201` |
-| `GET /api/admin/accounts` | `{"accounts": [{id, username, email, emailVerifiedAt, createdAt, disabledAt, isAdmin, sessions, lastSeenAt}]}` |
+| `GET /api/admin/accounts` | `{"accounts": [{id, username, email, emailVerifiedAt, createdAt, disabledAt, isAdmin, mfaEnabled, sessions, lastSeenAt}]}` |
 | `POST /api/admin/accounts/{id}/disable` | Blocks sign-in and ends every session. `204`; `409` for the last enabled admin |
 | `POST /api/admin/accounts/{id}/enable` | `204` |
 | `DELETE /api/admin/accounts/{id}/sessions` | Ends every session of that account. `204` |
+| `DELETE /api/admin/accounts/{id}/mfa` | Turns two-factor off for a user who lost their device, clears the wrong-code lockout and ends their sessions. `204` |
 | `GET /api/admin/events?limit=&offset=` | The audit log, newest first (`limit` default 100, maximum 500): `{"events": [{id, kind, accountId, username, ip, userAgent, createdAt, detail}]}` |
 
 The audit log never holds a password, token or one-time code. `detail` carries

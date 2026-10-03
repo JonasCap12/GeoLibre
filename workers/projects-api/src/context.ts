@@ -311,10 +311,19 @@ export function isAdmin(scope: Scope, account: AccountRow): boolean {
   return isAdminUsername(account.username, scope.env.GEOLIBRE_ADMIN_USERNAMES);
 }
 
-/** Unset GEOLIBRE_ADMIN_USERNAMES is nobody, not everybody. See isAdminUsername. */
+export const ADMIN_MFA_REQUIRED = "admin accounts must turn on two-factor authentication first";
+
+/**
+ * Unset GEOLIBRE_ADMIN_USERNAMES is nobody, not everybody. See isAdminUsername.
+ *
+ * An admin can disable accounts and read everyone's sign-in history, so a
+ * stolen admin password alone must not be enough (ASVS 5.0 V6.3.3): the
+ * account needs a second factor before any admin route answers.
+ */
 export async function requireAdmin(scope: Scope): Promise<AccountRow> {
   const account = requireAccount(await optionalAccount(scope));
   if (!isAdmin(scope, account)) throw new ApiError(403, "admin only");
+  if (!account.mfa_enabled_at || !account.mfa_secret) throw new ApiError(403, ADMIN_MFA_REQUIRED);
   return account;
 }
 

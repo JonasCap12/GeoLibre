@@ -64,6 +64,12 @@ export type AuthErrorCode =
   | "email-unconfigured"
   | "session-expired"
   | "forbidden"
+  | "mfa-invalid"
+  | "mfa-required"
+  | "mfa-expired"
+  | "mfa-locked"
+  | "mfa-unavailable"
+  | "admin-mfa-required"
   | "unknown";
 
 export class ShareAccountError extends Error {
@@ -118,6 +124,12 @@ export function authErrorCode(status: number, message: string): AuthErrorCode {
   if (text.includes("invalid or expired token") || text.includes("authentication required")) {
     return "session-expired";
   }
+  if (text.includes("two-factor code is incorrect")) return "mfa-invalid";
+  if (text.includes("two-factor code required")) return "mfa-required";
+  if (text.includes("sign-in step expired")) return "mfa-expired";
+  if (text.includes("too many wrong two-factor codes")) return "mfa-locked";
+  if (text.includes("two-factor authentication is not configured")) return "mfa-unavailable";
+  if (text.includes("must turn on two-factor")) return "admin-mfa-required";
   if (text.includes("admin only")) return "forbidden";
   return "unknown";
 }
@@ -267,11 +279,13 @@ async function readToken(response: Response): Promise<string> {
 }
 
 /**
- * Exchange a username (or email address) and password for an API token.
- *
- * @returns The bearer token to store in Settings.
+ * What a right password earns: the bearer, or (with two-factor on) a
+ * short-lived ticket to trade for one with {@link completeMfaSignIn}.
  */
-export async function signIn(options: ShareAccountOptions): Promise<string> {
+export type SignInResult = { kind: "token"; token: string } | { kind: "mfa"; ticket: string };
+
+/** Exchange a username (or email address) and password for an API token. */
+export async function signIn(options: ShareAccountOptions): Promise<SignInResult> {
   const problem = validateSignIn(options.username, options.password);
   if (problem) throw new ShareAccountError(problem, { code: "login-invalid" });
   const response = await authRequest("/api/auth/token", {
@@ -279,6 +293,46 @@ export async function signIn(options: ShareAccountOptions): Promise<string> {
     // The key stays `username` when it holds an email, so the request a
     // pre-email client sends is unchanged.
     body: { username: options.username.trim(), password: options.password },
+    fallback: "Sign in failed",
+  });
+  const body = (await response.json()) as {
+    token?: unknown;
+    mfaRequired?: unknown;
+    mfaTicket?: unknown;
+  };
+  if (body.mfaRequired === true && typeof body.mfaTicket === "string" && body.mfaTicket) {
+    return { kind: "mfa", ticket: body.mfaTicket };
+  }
+  if (typeof body.token !== "string" || !body.token) {
+    throw new ShareAccountError("The server did not return a token.");
+  }
+  return { kind: "token", token: body.token };
+}
+
+/** Whether a typed second factor is worth a request: a TOTP or a recovery code. */
+export function mfaCodeProblem(code: string): "mfa-invalid" | null {
+  const clean = code.replace(/[\s-]/g, "");
+  return /^\d{6}$/.test(clean) || /^[A-Za-z2-7]{24}$/.test(clean) ? null : "mfa-invalid";
+}
+
+/**
+ * The second step of sign-in. `code` is the six digits from the authenticator
+ * app or one recovery code.
+ *
+ * @returns The bearer token to store in Settings.
+ */
+export async function completeMfaSignIn(
+  options: BaseOptions & { ticket: string; code: string },
+): Promise<string> {
+  if (mfaCodeProblem(options.code) !== null) {
+    throw new ShareAccountError("Enter the six-digit code or a recovery code.", {
+      code: "mfa-invalid",
+    });
+  }
+  const response = await authRequest("/api/auth/mfa", {
+    baseUrl: options.baseUrl,
+    fetchImpl: options.fetchImpl,
+    body: { ticket: options.ticket, code: options.code.trim() },
     fallback: "Sign in failed",
   });
   return readToken(response);
@@ -385,7 +439,7 @@ export async function signOut(options: TokenOptions): Promise<void> {
  * @returns The replacement bearer token.
  */
 export async function changePassword(
-  options: TokenOptions & { currentPassword: string; password: string },
+  options: TokenOptions & { currentPassword: string; password: string; code?: string },
 ): Promise<string> {
   if (newPasswordProblem(options.password) !== null) {
     throw new ShareAccountError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, {
@@ -394,10 +448,20 @@ export async function changePassword(
   }
   const response = await authRequest("/api/auth/password", {
     ...options,
-    body: { currentPassword: options.currentPassword, password: options.password },
+    body: {
+      currentPassword: options.currentPassword,
+      password: options.password,
+      ...withCode(options.code),
+    },
     fallback: "Could not change the password",
   });
   return readToken(response);
+}
+
+/** Sent only when typed, so a request to a server without two-factor is unchanged. */
+function withCode(code: string | undefined): { code?: string } {
+  const value = code?.trim() ?? "";
+  return value === "" ? {} : { code: value };
 }
 
 /**
@@ -452,7 +516,11 @@ export async function createAccount(options: ShareAccountOptions): Promise<strin
   }
   const body = (await response.json()) as { token?: unknown };
   if (typeof body.token === "string" && body.token) return body.token;
-  return signIn(options);
+  // A brand-new account has no second factor yet, so anything but a token is
+  // the server misbehaving.
+  const signedIn = await signIn(options);
+  if (signedIn.kind !== "token") throw new ShareAccountError("The server did not return a token.");
+  return signedIn.token;
 }
 
 /** `GET /api/account`, as the self-hosted server extends it. */
@@ -463,6 +531,8 @@ export interface AccountInfo {
   emailVerifiedAt: string | null;
   /** Decides only what the app draws; every admin route checks again. */
   isAdmin: boolean;
+  mfaEnabled: boolean;
+  recoveryCodesLeft: number;
 }
 
 export async function fetchAccount(options: TokenOptions): Promise<AccountInfo> {
@@ -479,6 +549,9 @@ export async function fetchAccount(options: TokenOptions): Promise<AccountInfo> 
     email: typeof account.email === "string" ? account.email : null,
     emailVerifiedAt: typeof account.emailVerifiedAt === "string" ? account.emailVerifiedAt : null,
     isAdmin: account.isAdmin === true,
+    mfaEnabled: account.mfaEnabled === true,
+    recoveryCodesLeft:
+      typeof account.recoveryCodesLeft === "number" ? account.recoveryCodesLeft : 0,
   };
 }
 
@@ -525,11 +598,84 @@ export async function signOutEverywhere(options: TokenOptions): Promise<void> {
  * opened; the old address is told either way.
  */
 export async function requestEmailChange(
-  options: TokenOptions & { email: string; currentPassword: string },
+  options: TokenOptions & { email: string; currentPassword: string; code?: string },
 ): Promise<void> {
   await authRequest("/api/auth/email", {
     ...options,
-    body: { email: options.email.trim(), currentPassword: options.currentPassword },
+    body: {
+      email: options.email.trim(),
+      currentPassword: options.currentPassword,
+      ...withCode(options.code),
+    },
     fallback: "Could not change the email address",
   });
+}
+
+/** Step one of turning two-factor on. Nothing is enforced until {@link enableMfa}. */
+export interface MfaSetup {
+  /** Base32, for typing into an app that cannot scan. */
+  secret: string;
+  /** `otpauth://` URI; the app renders it as a QR code locally. */
+  otpauthUri: string;
+}
+
+export async function startMfaSetup(
+  options: TokenOptions & { currentPassword: string },
+): Promise<MfaSetup> {
+  const response = await authRequest("/api/auth/mfa/setup", {
+    ...options,
+    body: { currentPassword: options.currentPassword },
+    fallback: "Could not start two-factor setup",
+  });
+  const body = (await response.json()) as Partial<MfaSetup>;
+  if (typeof body.secret !== "string" || typeof body.otpauthUri !== "string") {
+    throw new ShareAccountError("The server did not return a two-factor secret.");
+  }
+  return { secret: body.secret, otpauthUri: body.otpauthUri };
+}
+
+async function readRecoveryCodes(response: Response): Promise<string[]> {
+  const body = (await response.json()) as { recoveryCodes?: unknown };
+  const codes = Array.isArray(body.recoveryCodes)
+    ? body.recoveryCodes.filter((code): code is string => typeof code === "string")
+    : [];
+  if (codes.length === 0) throw new ShareAccountError("The server did not return recovery codes.");
+  return codes;
+}
+
+/**
+ * Confirms setup with one code from the app.
+ *
+ * @returns The recovery codes. The server keeps only their hashes, so this is
+ *   the one time they can be shown.
+ */
+export async function enableMfa(options: TokenOptions & { code: string }): Promise<string[]> {
+  const response = await authRequest("/api/auth/mfa/enable", {
+    ...options,
+    body: { code: options.code.trim() },
+    fallback: "Could not turn on two-factor authentication",
+  });
+  return readRecoveryCodes(response);
+}
+
+export async function disableMfa(
+  options: TokenOptions & { currentPassword: string; code: string },
+): Promise<void> {
+  await authRequest("/api/auth/mfa/disable", {
+    ...options,
+    body: { currentPassword: options.currentPassword, ...withCode(options.code) },
+    fallback: "Could not turn off two-factor authentication",
+  });
+}
+
+/** Replaces every recovery code, used or not. */
+export async function regenerateRecoveryCodes(
+  options: TokenOptions & { currentPassword: string; code: string },
+): Promise<string[]> {
+  const response = await authRequest("/api/auth/mfa/recovery-codes", {
+    ...options,
+    body: { currentPassword: options.currentPassword, ...withCode(options.code) },
+    fallback: "Could not create new recovery codes",
+  });
+  return readRecoveryCodes(response);
 }

@@ -1921,6 +1921,10 @@
       "revoke": "Thu hồi",
       "adminBadge": "Quản trị",
       "disabledBadge": "Đã khoá",
+      "mfaBadge": "2FA",
+      "resetMfa": "Đặt lại 2FA",
+      "confirmMfaReset": "Đặt lại 2FA và đăng xuất",
+      "mfaResetDone": "Đã đặt lại xác thực hai bước cho {{username}}. Người dùng đăng nhập bằng mật khẩu rồi cài lại.",
       "accountDetail_other": "{{count}} phiên đang hoạt động · lần cuối {{date}}",
       "signOutAccount": "Đăng xuất mọi nơi",
       "disable": "Khoá",
@@ -1954,8 +1958,41 @@
         "email_changed": "Đổi địa chỉ email",
         "account_disabled": "Khoá tài khoản",
         "account_enabled": "Mở khoá tài khoản",
-        "sessions_revoked": "Quản trị viên đăng xuất tài khoản"
+        "sessions_revoked": "Quản trị viên đăng xuất tài khoản",
+        "mfa_enabled": "Bật xác thực hai bước",
+        "mfa_disabled": "Tắt xác thực hai bước",
+        "mfa_recovery_used": "Dùng mã khôi phục",
+        "mfa_recovery_regenerated": "Tạo mã khôi phục mới",
+        "mfa_failure": "Nhập sai mã hai bước",
+        "mfa_reset": "Quản trị viên đặt lại xác thực hai bước"
       }
+    },
+    "mfa": {
+      "title": "Xác thực hai bước",
+      "offDescription": "Đang tắt. Bật lên để mỗi lần đăng nhập cần thêm mã từ ứng dụng xác thực (Google Authenticator, Microsoft Authenticator, 1Password, …).",
+      "adminRequired": "Công cụ quản trị bị khoá cho tới khi tài khoản này bật xác thực hai bước.",
+      "setUp": "Cài đặt",
+      "scanDescription": "Quét mã này bằng ứng dụng xác thực, rồi nhập mã sáu số mà ứng dụng hiển thị.",
+      "manualEntry": "Không quét được? Nhập khoá này vào ứng dụng:",
+      "firstCode": "Mã từ ứng dụng",
+      "enable": "Bật",
+      "codesDescription": "Hãy cất các mã khôi phục này ở nơi an toàn. Mỗi mã dùng để đăng nhập một lần nếu bạn mất điện thoại. Chúng sẽ không được hiển thị lại.",
+      "codesLabel": "Mã khôi phục",
+      "copy": "Sao chép",
+      "copied": "Đã sao chép.",
+      "copyFailed": "Không sao chép được. Hãy bôi đen và sao chép thủ công.",
+      "download": "Tải xuống",
+      "savedConfirm": "Tôi đã lưu các mã này",
+      "done": "Xong",
+      "onDescription_other": "Đang bật. Còn {{count}} mã khôi phục.",
+      "regenerate": "Tạo mã khôi phục mới",
+      "disable": "Tắt",
+      "confirmDisable": "Tắt xác thực hai bước",
+      "code": "Mã xác thực hai bước",
+      "codeHint": "Sáu số trong ứng dụng xác thực, hoặc một mã khôi phục.",
+      "signInTitle": "Xác thực hai bước",
+      "signInDescription": "Nhập mã trong ứng dụng xác thực để hoàn tất đăng nhập.",
+      "verify": "Xác nhận"
     },
     "error": {
       "unknown": "Đã có lỗi xảy ra. Hãy thử lại.",
@@ -1983,7 +2020,13 @@
       "botUnavailable": "Bước kiểm tra bảo mật tạm thời không khả dụng. Hãy thử lại sau một phút.",
       "emailUnconfigured": "Triển khai này chưa cấu hình gửi email. Hãy liên hệ quản trị viên.",
       "sessionExpired": "Phiên đăng nhập đã kết thúc. Hãy đăng nhập lại.",
-      "forbidden": "Bạn không có quyền làm việc này."
+      "forbidden": "Bạn không có quyền làm việc này.",
+      "mfaInvalid": "Mã không đúng. Nhập mã sáu số hiện tại hoặc một mã khôi phục chưa dùng.",
+      "mfaRequired": "Hãy nhập thêm mã xác thực hai bước.",
+      "mfaExpired": "Bước đăng nhập đã quá hạn. Hãy nhập lại mật khẩu.",
+      "mfaLocked": "Nhập sai mã quá nhiều lần. Hãy nhờ quản trị viên đặt lại xác thực hai bước cho tài khoản này.",
+      "mfaUnavailable": "Máy chủ này chưa cấu hình xác thực hai bước. Hãy liên hệ quản trị viên.",
+      "adminMfaRequired": "Công cụ quản trị cần xác thực hai bước. Hãy bật trong Tài khoản & bảo mật trước."
     }
   },
   "basemapExtract": {

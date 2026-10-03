@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS accounts (
   email_verified_at   TEXT,
   password_changed_at TEXT,
   -- From schema-sessions-mfa.sql; apply that file to an existing database.
-  disabled_at         TEXT
+  disabled_at         TEXT,
+  mfa_secret          TEXT,
+  mfa_pending_secret  TEXT,
+  mfa_enabled_at      TEXT,
+  mfa_last_used_step  INTEGER,
+  mfa_failed_attempts INTEGER NOT NULL DEFAULT 0
 );
 -- See schema-auth.sql for why this index is partial. A database that already
 -- had `accounts` does not get these columns from the CREATE above; that file
@@ -60,6 +65,24 @@ CREATE TABLE IF NOT EXISTS auth_events (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_auth_events_account ON auth_events(account_id, kind);
+
+-- Two-factor recovery codes and sign-in tickets. See schema-sessions-mfa.sql.
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  digest      TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL,
+  used_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_account ON mfa_recovery_codes(account_id);
+CREATE TABLE IF NOT EXISTS mfa_tickets (
+  digest      TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  used_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_tickets_expires ON mfa_tickets(expires_at);
 
 -- Single-use invite, reset, and verify tokens. See schema-auth.sql.
 CREATE TABLE IF NOT EXISTS auth_actions (

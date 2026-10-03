@@ -415,6 +415,46 @@ export function disableRefusal(options: {
 }
 
 // ---------------------------------------------------------------------------
+// Second factor
+// ---------------------------------------------------------------------------
+
+/** How long the step between a right password and the code may take. */
+export const MFA_TICKET_TTL_MS = 5 * 60 * 1000;
+/** Wrong codes one ticket absorbs before the password has to be typed again. */
+export const MFA_TICKET_MAX_ATTEMPTS = 5;
+/**
+ * Consecutive wrong codes after which the account stops accepting them until
+ * an admin resets its second factor.
+ *
+ * Only someone who already has the password reaches this check, so stopping
+ * here cannot be used to lock a colleague out the way a password lockout can.
+ * Without it the per-ticket and per-minute limits still allow a slow, endless
+ * guess at a six-digit code (NIST SP 800-63B-4 §3.2.2 caps it at 100).
+ */
+export const MFA_MAX_CONSECUTIVE_FAILURES = 10;
+
+export interface MfaTicketRow {
+  digest: string;
+  account_id: string;
+  created_at: string;
+  expires_at: string;
+  attempts: number;
+  used_at: string | null;
+}
+
+/** Why a sign-in ticket cannot take another code, or null when it can. */
+export function mfaTicketRefusal(
+  row: MfaTicketRow | null,
+  nowIso: string,
+): "missing" | "used" | "expired" | "exhausted" | null {
+  if (row === null) return "missing";
+  if (row.used_at !== null && row.used_at !== "") return "used";
+  if (row.expires_at <= nowIso) return "expired";
+  if (row.attempts >= MFA_TICKET_MAX_ATTEMPTS) return "exhausted";
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Audit log (ASVS 5.0 V16)
 // ---------------------------------------------------------------------------
 
@@ -435,6 +475,9 @@ export const AUTH_EVENT_KINDS = [
   "mfa_enabled",
   "mfa_disabled",
   "mfa_recovery_used",
+  "mfa_recovery_regenerated",
+  "mfa_failure",
+  "mfa_reset",
   "account_disabled",
   "account_enabled",
   "sessions_revoked",
