@@ -15,7 +15,27 @@ import { spawnSync } from "node:child_process";
 // Severities that fail the build. Moderate/low are left to Dependabot PRs.
 const BLOCKING = new Set(["high", "critical"]);
 
-const ALLOWLIST = new Map();
+const ALLOWLIST = new Map([
+  [
+    "GHSA-vfj7-8cjw-p6xm",
+    "braces: npm audit reports every version affected and no fix available. It " +
+      "is reached only through patch-package → find-yarn-workspace-root → " +
+      "micromatch, i.e. the postinstall step expanding this repo's own fixed " +
+      "glob patterns at install time. No GeoLibre runtime path, and no " +
+      "attacker-supplied pattern, ever reaches it. Verified 2026-10-03.",
+  ],
+  [
+    "GHSA-86w9-cpqp-85rv",
+    "node-forge: npm audit reports every version affected and no fix available. " +
+      "It is reached only through @google/earthengine → googleapis → " +
+      "google-auth-library → gtoken → google-p12-pem, the Node-side path that " +
+      "converts a service-account .p12 key file to PEM; that path parses PKCS#12 " +
+      "and never verifies an RSA PKCS#1 v1.5 signature, which is what the " +
+      "advisory is about. The browser build uses OAuth tokens and contains no " +
+      "node-forge or google-p12-pem code (grepped apps/geolibre-desktop/dist). " +
+      "Verified 2026-10-03.",
+  ],
+]);
 
 const audit = spawnSync("npm", ["audit", "--omit=dev", "--json"], {
   encoding: "utf8",
