@@ -69,7 +69,18 @@
     "GEOLIBRE_EMAIL_FROM": "noreply@jonasnguyen.uk",
     "GEOLIBRE_MAX_PROJECT_BYTES": "52428800",
     "GEOLIBRE_MAX_THUMBNAIL_BYTES": "5242880",
-    "GEOLIBRE_ACTIVITY_RETENTION_DAYS": "90"
+    // Also the retention of the auth audit log (auth_events).
+    "GEOLIBRE_ACTIVITY_RETENTION_DAYS": "90",
+    // A bearer dies this many days after sign-in whatever happens (absolute),
+    // or after this many days without a request (idle), whichever is first.
+    // A leaked token used to be valid until someone revoked it by hand.
+    "GEOLIBRE_SESSION_TTL_DAYS": "30",
+    "GEOLIBRE_SESSION_IDLE_DAYS": "7"
+    // Secrets, set with `wrangler secret put … -c workers/projects-api/wrangler.jsonc`
+    // and never written here:
+    //   TURNSTILE_SECRET_KEY  bot check on register / reset. Unset skips it
+    //                         with a warning in the logs.
+    //   MFA_ENCRYPTION_KEY    base64 of 32 random bytes; encrypts TOTP secrets.
   },
 
   // docs/server-api.md lists rate limiting as something "the reference server
@@ -110,16 +121,34 @@
         "limit": 60,
         "period": 60
       }
+    },
+    {
+      // Sign-in attempts per identifier (username or email as typed), on top of
+      // the per-IP limit above. The IP limit alone lets a botnet spread guesses
+      // for one person across thousands of addresses. Throttling, not lockout:
+      // a lockout would let anyone who knows a username keep its owner out.
+      // 5/minute is far above what a person mistyping produces.
+      "name": "AUTH_ACCOUNT_RATE_LIMITER",
+      "namespace_id": "54704",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
     }
   ],
 
-  // scrypt at n=2^14 costs roughly 100-200 ms of CPU per call in WASM/JS, and
-  // POST /api/accounts and POST /api/auth/token each pay for exactly one. The
-  // 10 ms free-tier ceiling cannot fit that, so this Worker requires a paid
-  // plan; the sibling workers/tiles has the same requirement for its
-  // reprojection path.
+  // scrypt at n=2^14, r=8 measured in workerd (wrangler dev, scrypt-js) at
+  // ~67 ms per call with p=1 and ~333 ms with p=5, the parameter new hashes use
+  // (see src/auth.ts). A sign-in that upgrades a legacy p=1 hash pays both,
+  // ~400 ms. The 10 ms free-tier ceiling cannot fit any of that, so this Worker
+  // requires a paid plan, as workers/tiles does for its reprojection path.
+  //
+  // 2000 rather than the previous 1000 because Cloudflare's edge CPUs are not
+  // the laptop the numbers above came from, and exceeding the limit fails the
+  // request outright (error 1102) instead of slowing it. The limit is a
+  // ceiling, not a cost: billing is by CPU actually used.
   "limits": {
-    "cpu_ms": 1000
+    "cpu_ms": 2000
   },
 
   "observability": {

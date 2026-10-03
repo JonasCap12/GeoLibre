@@ -3,21 +3,48 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
   Label,
 } from "@geolibre/ui";
-import { LogOut, User } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { LogOut, Shield, User, Users } from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
 import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
+import { installSessionWatch } from "../../lib/session-watch";
 import {
+  MIN_PASSWORD_LENGTH,
+  ShareAccountError,
+  USERNAME_PATTERN,
+  confirmEmailChange,
+  confirmPasswordReset,
+  createAccount,
+  fetchAccount,
+  inspectInvite,
+  newPasswordProblem,
   requestPasswordReset,
   signIn,
+  signInProblem,
   signOut,
-  validateCredentials,
+  type AccountInfo,
+  type AuthErrorCode,
+  type InviteSummary,
 } from "../../lib/share-account";
+import { resolveShareBaseUrl } from "../../lib/share-geolibre";
+import {
+  captureSelfHostRoute,
+  leaveSelfHostRoute,
+  type SelfHostRoute,
+} from "../../lib/selfhost-routes";
+import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
+import { AccountSecurityDialog } from "./AccountSecurityDialog";
+import { AdminDialog } from "./AdminDialog";
+import { authCodeText, authErrorText } from "./auth-error-text";
+import { PasswordField } from "./PasswordField";
+import { TurnstileWidget, turnstileRequired } from "./TurnstileWidget";
 
 /**
  * Optional whole-app sign-in gate for a self-hosted deployment, backed by
@@ -29,17 +56,69 @@ import {
  * and project sharing already read. A second token store would leave those
  * features signed out after a successful login.
  *
- * Registration is invite-only, so this page has no create-account button. A
- * person without an invite uses the link in the invite email, or Settings on
- * an ungated build.
+ * Registration is invite-only. The links in invite, reset and email-change
+ * mails open `/register`, `/reset` and `/verify-email`; those are read from the
+ * path before the token check, so a link works whether or not someone is
+ * already signed in on this browser.
  */
 export function SelfHostGate({ children }: { children: ReactNode }) {
   // Same reason as Auth0Gate: App unmounts when the session ends, and the
   // project state survives in the module store, so the tab could otherwise
   // close with unsaved changes and no prompt.
   useBeforeUnloadGuard();
+  const { t } = useTranslation();
+  const [route, setRoute] = useState<SelfHostRoute>(() => captureSelfHostRoute());
+  const [notice, setNotice] = useState<string | null>(null);
   const token = useDesktopSettingsStore((state) => state.desktopSettings.shareToken.trim());
-  if (!token) return <SignInScreen />;
+
+  useEffect(() => {
+    const baseUrl = resolveShareBaseUrl();
+    if (!token || !baseUrl) return;
+    return installSessionWatch({
+      baseUrl,
+      getToken: () => useDesktopSettingsStore.getState().desktopSettings.shareToken.trim(),
+      onExpired: () => {
+        writeShareToken("");
+        setNotice(t("auth.sessionEnded"));
+      },
+    });
+  }, [token, t]);
+
+  const leave = (message: string | null = null) => {
+    leaveSelfHostRoute();
+    setRoute({ page: "app" });
+    setNotice(message);
+  };
+
+  if (route.page === "register") {
+    return (
+      <RegisterScreen
+        invite={route.token}
+        onDone={(fresh) => {
+          writeShareToken(fresh);
+          leave();
+        }}
+        onCancel={() => leave()}
+      />
+    );
+  }
+  if (route.page === "reset") {
+    return (
+      <ResetScreen
+        token={route.token}
+        onDone={() => {
+          // The server ended every session, this browser's included.
+          writeShareToken("");
+          leave(t("auth.resetDone"));
+        }}
+        onCancel={() => leave()}
+      />
+    );
+  }
+  if (route.page === "verify-email") {
+    return <VerifyEmailScreen token={route.token} onDone={() => leave()} />;
+  }
+  if (!token) return <SignInScreen notice={notice} />;
   return (
     <>
       {children}
@@ -49,14 +128,37 @@ export function SelfHostGate({ children }: { children: ReactNode }) {
 }
 
 /** Full-screen centered layout, matching Auth0Gate's signed-out screens. */
-function AuthScreen({ children, alert = false }: { children: ReactNode; alert?: boolean }) {
+function AuthScreen({ children }: { children: ReactNode }) {
   return (
-    <main
-      {...(alert ? { role: "alert" } : {})}
-      className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center"
-    >
+    <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
       {children}
     </main>
+  );
+}
+
+function AuthHeading({ title, description }: { title: string; description?: string }) {
+  return (
+    <div className="space-y-1">
+      <h1 className="text-lg font-semibold">{title}</h1>
+      {description ? <p className="max-w-md text-sm text-muted-foreground">{description}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Error and status lines. Always mounted, so a screen reader announces a
+ * message that appears after submit rather than only one present on load.
+ */
+export function FormMessages({ error, note }: { error: string | null; note?: string | null }) {
+  return (
+    <>
+      <div aria-live="assertive" aria-atomic="true">
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+      <div aria-live="polite" aria-atomic="true">
+        {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
+      </div>
+    </>
   );
 }
 
@@ -65,71 +167,87 @@ function writeShareToken(shareToken: string): void {
   setDesktopSettings({ ...desktopSettings, shareToken });
 }
 
-function SignInScreen() {
-  const { t } = useTranslation();
-  const [mode, setMode] = useState<"sign-in" | "reset">("sign-in");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [email, setEmail] = useState("");
+/** Shared form state: a busy flag, an error, a note, and a Turnstile response. */
+function useAuthForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [turnstile, setTurnstile] = useState<string | null>(null);
+  const [turnstileReset, setTurnstileReset] = useState(0);
+  return {
+    busy,
+    error,
+    note,
+    turnstile,
+    turnstileReset,
+    setTurnstile,
+    setNote,
+    fail: (message: string) => {
+      setError(message);
+      setNote(null);
+    },
+    /** Runs a submit, and asks for a fresh Turnstile response afterwards. */
+    run: async (work: () => Promise<void>, onError: (error: unknown) => void) => {
+      setBusy(true);
+      setError(null);
+      setNote(null);
+      try {
+        await work();
+      } catch (err) {
+        onError(err);
+      } finally {
+        setBusy(false);
+        setTurnstileReset((count) => count + 1);
+      }
+    },
+  };
+}
+
+function SignInScreen({ notice }: { notice: string | null }) {
+  const { t } = useTranslation();
+  const form = useAuthForm();
+  const [mode, setMode] = useState<"sign-in" | "forgot">("sign-in");
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
+  const codeText = (code: AuthErrorCode) => authCodeText(t, code);
 
   const onSignIn = async (event: FormEvent) => {
     event.preventDefault();
-    // Checked before the request so a typo does not spend one of the ten
+    // Checked before the request so a typo does not spend one of the
     // attempts a minute the auth limiter allows.
-    const problem = validateCredentials(username, password);
-    if (problem) {
-      setError(problem);
-      setNote(null);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      const fresh = await signIn({ username, password });
-      writeShareToken(fresh);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    const problem = signInProblem(login, password);
+    if (problem) return form.fail(codeText(problem));
+    await form.run(
+      async () => writeShareToken(await signIn({ username: login, password })),
+      (err) => form.fail(authErrorText(t, err)),
+    );
   };
 
-  const onReset = async (event: FormEvent) => {
+  const onForgot = async (event: FormEvent) => {
     event.preventDefault();
-    if (email.trim() === "" || !email.includes("@")) {
-      setError(t("auth.emailInvalid"));
-      setNote(null);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      await requestPasswordReset({ email });
-      setNote(t("auth.resetRequested"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    if (email.trim() === "" || !email.includes("@")) return form.fail(codeText("email-invalid"));
+    if (turnstileRequired() && !form.turnstile) return form.fail(t("auth.botCheckPending"));
+    await form.run(
+      async () => {
+        await requestPasswordReset({ email, turnstileToken: form.turnstile ?? "" });
+        form.setNote(t("auth.resetRequested"));
+      },
+      (err) => form.fail(authErrorText(t, err)),
+    );
   };
 
-  if (mode === "reset") {
+  if (mode === "forgot") {
     return (
-      <AuthScreen alert={error !== null}>
-        <div className="space-y-1">
-          <h1 className="text-lg font-semibold">{t("auth.forgotPasswordTitle")}</h1>
-          <p className="max-w-md text-sm text-muted-foreground">
-            {t("auth.forgotPasswordDescription")}
-          </p>
-        </div>
+      <AuthScreen>
+        <AuthHeading
+          title={t("auth.forgotPasswordTitle")}
+          description={t("auth.forgotPasswordDescription")}
+        />
         <form
-          onSubmit={(event) => void onReset(event)}
+          onSubmit={(event) => void onForgot(event)}
           className="w-full max-w-sm space-y-3 text-start"
+          noValidate
         >
           <div className="space-y-1.5">
             <Label htmlFor="selfhost-email">{t("auth.email")}</Label>
@@ -141,9 +259,13 @@ function SignInScreen() {
               onChange={(event) => setEmail(event.target.value)}
             />
           </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
-          <Button type="submit" className="w-full" disabled={busy}>
+          <TurnstileWidget
+            action={TURNSTILE_ACTIONS.resetRequest}
+            onToken={form.setTurnstile}
+            resetKey={form.turnstileReset}
+          />
+          <FormMessages error={form.error} note={form.note} />
+          <Button type="submit" className="w-full" disabled={form.busy}>
             {t("auth.sendResetLink")}
           </Button>
         </form>
@@ -152,8 +274,7 @@ function SignInScreen() {
           type="button"
           onClick={() => {
             setMode("sign-in");
-            setError(null);
-            setNote(null);
+            form.setNote(null);
           }}
         >
           {t("auth.backToSignIn")}
@@ -163,59 +284,381 @@ function SignInScreen() {
   }
 
   return (
-    <AuthScreen alert={error !== null}>
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold">{t("auth.signInTitle")}</h1>
-        <p className="max-w-md text-sm text-muted-foreground">{t("auth.selfHostDescription")}</p>
-      </div>
+    <AuthScreen>
+      <AuthHeading title={t("auth.signInTitle")} description={t("auth.selfHostDescription")} />
       <form
         onSubmit={(event) => void onSignIn(event)}
         className="w-full max-w-sm space-y-3 text-start"
+        noValidate
       >
         <div className="space-y-1.5">
-          <Label htmlFor="selfhost-username">{t("settings.env.accountUsername")}</Label>
+          <Label htmlFor="selfhost-login">{t("auth.usernameOrEmail")}</Label>
           <Input
-            id="selfhost-username"
+            id="selfhost-login"
             autoComplete="username"
-            placeholder={t("settings.env.accountUsernamePlaceholder")}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            value={login}
+            onChange={(event) => setLogin(event.target.value)}
+          />
+        </div>
+        <PasswordField
+          id="selfhost-password"
+          label={t("auth.password")}
+          autoComplete="current-password"
+          value={password}
+          onChange={setPassword}
+        />
+        <FormMessages error={form.error} note={form.error ? null : notice} />
+        <Button type="submit" className="w-full" disabled={form.busy}>
+          {form.busy ? t("auth.signingIn") : t("auth.signIn")}
+        </Button>
+      </form>
+      <Button variant="ghost" type="button" onClick={() => setMode("forgot")}>
+        {t("auth.forgotPassword")}
+      </Button>
+      <p className="max-w-sm text-xs text-muted-foreground">{t("auth.inviteOnly")}</p>
+    </AuthScreen>
+  );
+}
+
+type InviteState =
+  | { kind: "loading" }
+  | { kind: "ready"; invite: InviteSummary }
+  | { kind: "invalid" }
+  | { kind: "error"; message: string };
+
+function RegisterScreen({
+  invite,
+  onDone,
+  onCancel,
+}: {
+  invite: string | null;
+  onDone: (token: string) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const form = useAuthForm();
+  const [state, setState] = useState<InviteState>(
+    invite === null ? { kind: "invalid" } : { kind: "loading" },
+  );
+  const [attempt, setAttempt] = useState(0);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  useEffect(() => {
+    if (invite === null) return;
+    let cancelled = false;
+    inspectInvite({ invite })
+      .then((summary) => {
+        if (!cancelled) setState({ kind: "ready", invite: summary });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const unusable = err instanceof ShareAccountError && err.code === "invite-invalid";
+        setState(
+          unusable ? { kind: "invalid" } : { kind: "error", message: authErrorText(t, err) },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [invite, attempt, t]);
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (invite === null) return;
+    if (!USERNAME_PATTERN.test(username)) return form.fail(authCodeText(t, "username-invalid"));
+    const problem = newPasswordProblem(password);
+    if (problem) return form.fail(authCodeText(t, problem));
+    if (password !== confirm) return form.fail(authCodeText(t, "password-mismatch"));
+    if (turnstileRequired() && !form.turnstile) return form.fail(t("auth.botCheckPending"));
+    await form.run(
+      async () =>
+        onDone(
+          await createAccount({
+            username,
+            password,
+            invite,
+            turnstileToken: form.turnstile ?? "",
+          }),
+        ),
+      (err) => form.fail(authErrorText(t, err)),
+    );
+  };
+
+  if (state.kind === "invalid") {
+    return (
+      <LinkProblem
+        title={t("auth.register.invalidTitle")}
+        description={t("auth.register.invalidDescription")}
+        onContinue={onCancel}
+      />
+    );
+  }
+  if (state.kind === "loading") {
+    return (
+      <AuthScreen>
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          {t("auth.register.checking")}
+        </p>
+      </AuthScreen>
+    );
+  }
+  if (state.kind === "error") {
+    return (
+      <AuthScreen>
+        <AuthHeading title={t("auth.register.title")} />
+        <FormMessages error={state.message} />
+        <Button type="button" onClick={() => setAttempt((count) => count + 1)}>
+          {t("auth.retry")}
+        </Button>
+      </AuthScreen>
+    );
+  }
+
+  return (
+    <AuthScreen>
+      <AuthHeading title={t("auth.register.title")} description={t("auth.register.description")} />
+      <form
+        onSubmit={(event) => void onSubmit(event)}
+        className="w-full max-w-sm space-y-3 text-start"
+        noValidate
+      >
+        <div className="space-y-1.5">
+          <Label htmlFor="register-email">{t("auth.email")}</Label>
+          <Input id="register-email" value={state.invite.email} readOnly disabled />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="register-username">{t("auth.username")}</Label>
+          <Input
+            id="register-username"
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            aria-describedby="register-username-hint"
             value={username}
             onChange={(event) => setUsername(event.target.value.trim().toLowerCase())}
           />
+          <p id="register-username-hint" className="text-xs text-muted-foreground">
+            {t("auth.register.usernameHint")}
+          </p>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="selfhost-password">{t("settings.env.accountPassword")}</Label>
-          <Input
-            id="selfhost-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        <Button type="submit" className="w-full" disabled={busy}>
-          {busy ? t("auth.signingIn") : t("auth.signIn")}
+        <PasswordField
+          id="register-password"
+          label={t("auth.password")}
+          autoComplete="new-password"
+          value={password}
+          onChange={setPassword}
+          hint={t("auth.passwordHint", { count: MIN_PASSWORD_LENGTH })}
+        />
+        <PasswordField
+          id="register-confirm"
+          label={t("auth.confirmPassword")}
+          autoComplete="new-password"
+          value={confirm}
+          onChange={setConfirm}
+        />
+        <TurnstileWidget
+          action={TURNSTILE_ACTIONS.register}
+          onToken={form.setTurnstile}
+          resetKey={form.turnstileReset}
+        />
+        <FormMessages error={form.error} />
+        <Button type="submit" className="w-full" disabled={form.busy}>
+          {form.busy ? t("auth.register.creating") : t("auth.register.submit")}
         </Button>
       </form>
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={() => {
-          setMode("reset");
-          setError(null);
-        }}
+    </AuthScreen>
+  );
+}
+
+function ResetScreen({
+  token,
+  onDone,
+  onCancel,
+}: {
+  token: string | null;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const form = useAuthForm();
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  if (token === null) {
+    return (
+      <LinkProblem
+        title={t("auth.reset.invalidTitle")}
+        description={t("auth.reset.invalidDescription")}
+        onContinue={onCancel}
+      />
+    );
+  }
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const problem = newPasswordProblem(password);
+    if (problem) return form.fail(authCodeText(t, problem));
+    if (password !== confirm) return form.fail(authCodeText(t, "password-mismatch"));
+    if (turnstileRequired() && !form.turnstile) return form.fail(t("auth.botCheckPending"));
+    await form.run(
+      async () => {
+        await confirmPasswordReset({ token, password, turnstileToken: form.turnstile ?? "" });
+        onDone();
+      },
+      (err) => form.fail(authErrorText(t, err)),
+    );
+  };
+
+  return (
+    <AuthScreen>
+      <AuthHeading title={t("auth.reset.title")} description={t("auth.reset.description")} />
+      <form
+        onSubmit={(event) => void onSubmit(event)}
+        className="w-full max-w-sm space-y-3 text-start"
+        noValidate
       >
-        {t("auth.forgotPassword")}
+        {/* Lets a password manager file the new password under the right
+            account. The reset link does not say which username that is. */}
+        <input
+          type="text"
+          name="username"
+          autoComplete="username"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+          defaultValue=""
+        />
+        <PasswordField
+          id="reset-password"
+          label={t("auth.newPassword")}
+          autoComplete="new-password"
+          value={password}
+          onChange={setPassword}
+          hint={t("auth.passwordHint", { count: MIN_PASSWORD_LENGTH })}
+        />
+        <PasswordField
+          id="reset-confirm"
+          label={t("auth.confirmPassword")}
+          autoComplete="new-password"
+          value={confirm}
+          onChange={setConfirm}
+        />
+        <TurnstileWidget
+          action={TURNSTILE_ACTIONS.resetConfirm}
+          onToken={form.setTurnstile}
+          resetKey={form.turnstileReset}
+        />
+        <FormMessages error={form.error} />
+        <Button type="submit" className="w-full" disabled={form.busy}>
+          {t("auth.reset.submit")}
+        </Button>
+      </form>
+      <Button variant="ghost" type="button" onClick={onCancel}>
+        {t("auth.backToSignIn")}
       </Button>
     </AuthScreen>
   );
 }
 
-/** Sign-out. The server revoke runs before the saved token is cleared. */
+/**
+ * Confirming takes a click, not just opening the link: mail scanners open
+ * links, and one that did would otherwise change the address on its own.
+ */
+function VerifyEmailScreen({ token, onDone }: { token: string | null; onDone: () => void }) {
+  const { t } = useTranslation();
+  const form = useAuthForm();
+  const [done, setDone] = useState(false);
+
+  if (token === null) {
+    return (
+      <LinkProblem
+        title={t("auth.verify.invalidTitle")}
+        description={t("auth.verify.invalidDescription")}
+        onContinue={onDone}
+      />
+    );
+  }
+
+  return (
+    <AuthScreen>
+      <AuthHeading
+        title={t("auth.verify.title")}
+        description={done ? t("auth.verify.done") : t("auth.verify.description")}
+      />
+      <FormMessages error={form.error} />
+      {done ? (
+        <Button type="button" onClick={onDone}>
+          {t("auth.continue")}
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          disabled={form.busy}
+          onClick={() =>
+            void form.run(
+              async () => {
+                await confirmEmailChange({ token });
+                setDone(true);
+              },
+              (err) => form.fail(authErrorText(t, err)),
+            )
+          }
+        >
+          {t("auth.verify.submit")}
+        </Button>
+      )}
+    </AuthScreen>
+  );
+}
+
+function LinkProblem({
+  title,
+  description,
+  onContinue,
+}: {
+  title: string;
+  description: string;
+  onContinue: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <AuthScreen>
+      <div role="alert">
+        <AuthHeading title={title} description={description} />
+      </div>
+      <Button type="button" onClick={onContinue}>
+        {t("auth.continue")}
+      </Button>
+    </AuthScreen>
+  );
+}
+
+/** Account menu. The server revoke runs before the saved token is cleared. */
 function UserMenu({ token }: { token: string }) {
   const { t } = useTranslation();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [dialog, setDialog] = useState<"security" | "admin" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // A 401 here is caught by the session watch, which signs the tab out.
+    fetchAccount({ token })
+      .then((info) => {
+        if (!cancelled) setAccount(info);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const revoke = async () => {
     setBusy(true);
@@ -224,7 +667,7 @@ function UserMenu({ token }: { token: string }) {
       await signOut({ token });
       writeShareToken("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(authErrorText(t, err));
     } finally {
       setBusy(false);
     }
@@ -244,9 +687,30 @@ function UserMenu({ token }: { token: string }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          {error ? (
-            <p className="px-2 py-1.5 text-start text-xs text-destructive">{error}</p>
+          {account?.username ? (
+            <>
+              <DropdownMenuLabel className="truncate text-start">
+                {account.username}
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+            </>
           ) : null}
+          {error ? (
+            <p className="px-2 py-1.5 text-start text-xs text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <DropdownMenuItem onSelect={() => setDialog("security")}>
+            <Shield className="me-2 h-4 w-4" />
+            {t("auth.security.menu")}
+          </DropdownMenuItem>
+          {account?.isAdmin ? (
+            <DropdownMenuItem onSelect={() => setDialog("admin")}>
+              <Users className="me-2 h-4 w-4" />
+              {t("auth.admin.menu")}
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={busy}
             onSelect={(event) => {
@@ -259,6 +723,21 @@ function UserMenu({ token }: { token: string }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <AccountSecurityDialog
+        open={dialog === "security"}
+        onOpenChange={(open) => setDialog(open ? "security" : null)}
+        token={token}
+        account={account}
+        onToken={writeShareToken}
+      />
+      {account?.isAdmin ? (
+        <AdminDialog
+          open={dialog === "admin"}
+          onOpenChange={(open) => setDialog(open ? "admin" : null)}
+          token={token}
+          self={account}
+        />
+      ) : null}
     </div>
   );
 }

@@ -292,6 +292,114 @@ must not count failed or unauthorized reads.
 bytes with their image content type. `GET /api/projects/{id}/thumbnail` follows
 project visibility. `DELETE` removes it. Upload and delete responses are `204`.
 
+## Self-hosted account extensions
+
+The Cloudflare Worker in `workers/projects-api` adds invite-only accounts,
+session management and an admin console on top of the routes above. They are
+optional, additive extensions of version 1: a server without them stays
+compatible, and the app only calls them when it is built with
+`VITE_GEOLIBRE_SELFHOST_AUTH`. The Python reference server does not implement
+them. Design notes and the standards they follow are in
+[`selfhost-auth.md`](selfhost-auth.md).
+
+Every route under `/api/accounts`, `/api/account`, `/api/auth`, `/api/invites`,
+`/api/admin` and `/api/users/me` answers with `Cache-Control: no-store`.
+JSON bodies on these routes are capped at 16 KiB (`413` above that). A `429`
+carries `Retry-After` in seconds.
+
+### Changes to existing identity routes
+
+- `POST /api/accounts` additionally requires `invite` (the token from the
+  invite link) and, when the deployment enables Cloudflare Turnstile,
+  `turnstileToken`. The account takes the invite's email address, already
+  verified. A new password must be 15–1024 characters, must not contain the
+  username, the name part of the email or the product name, and must not appear
+  in a known breach corpus; `422` names the reason.
+- `POST /api/auth/token` accepts an email address in `username`; the key is
+  unchanged. Unknown account and wrong password are the same `401`. A disabled
+  account is `403` once the password is right. Passwords set before the
+  15-character rule keep working.
+- Tokens now expire: 30 days after issue and after 7 days unused (both
+  configurable). An expired token is `401`, like a revoked one.
+
+### Invites
+
+`POST /api/invites` (admin) — `{"email": "…"}`. Mails a single-use link valid
+for 72 hours. Response `201` `{"ok": true}`; `503` when the deployment cannot
+send mail.
+
+`POST /api/invites/inspect` (no bearer) — `{"invite": "…"}`. Read-only: does
+not spend the invite. Response `200` `{"email": "a***@example.com",
+"expiresAt": "…"}` with the address masked; `403` for an invalid, used or
+expired invite.
+
+### Password and email
+
+`POST /api/auth/password` — `{"currentPassword": "…", "password": "…"}`. Signs
+out every session, then returns a fresh one: `200` `{"token": "…"}`. `401` for
+a wrong current password.
+
+`POST /api/auth/reset-request` (no bearer) — `{"email": "…",
+"turnstileToken": "…"}`. Always `200` `{"ok": true}`, whether or not the
+address has an account.
+
+`POST /api/auth/reset-confirm` (no bearer) — `{"token": "…", "password": "…",
+"turnstileToken": "…"}`. Sets the password and signs out every session.
+`200` `{"ok": true}`; `403` for an invalid or expired link (30 minutes).
+
+`POST /api/auth/email` — `{"email": "…", "currentPassword": "…"}`. Mails a
+confirmation link to the new address and a notice to the old one; the address
+changes only when the link is used. `202` `{"ok": true}`; `403` for a wrong
+current password; `409` when another account has the address.
+
+`POST /api/auth/email-confirm` (no bearer) — `{"token": "…"}`. `200`
+`{"ok": true}`; `403` for an invalid or expired link (24 hours).
+
+### Account and sessions
+
+`GET /api/account` — the signed-in account with the fields the app needs to
+draw its menus:
+
+```json
+{"account": {"id": "uuid", "username": "ada", "createdAt": "…",
+  "email": "ada@example.com", "emailVerifiedAt": "…", "isAdmin": false}}
+```
+
+`isAdmin` only decides what the app shows; every admin route checks again.
+
+`GET /api/auth/sessions` — the account's live sessions, newest first:
+
+```json
+{"sessions": [{"id": "64-hex digest", "createdAt": "…", "lastUsedAt": "…",
+  "expiresAt": "…", "userAgent": "…", "ip": "…", "current": true}]}
+```
+
+`id` is the stored digest, never the token. `lastUsedAt` is updated at most
+once an hour.
+
+`DELETE /api/auth/sessions` signs out every session, including the caller's.
+`DELETE /api/auth/sessions/{id}` signs out one. Both `204`; `404` for an id the
+account does not own.
+
+### Administration
+
+Admins are the usernames listed in `GEOLIBRE_ADMIN_USERNAMES`. Every route here
+is `403` for anyone else.
+
+| Route | Effect |
+| --- | --- |
+| `GET /api/admin/invites` | `{"invites": [{id, email, status, createdAt, expiresAt, usedAt, createdBy, usedBy}]}`; `status` is `pending`, `used` or `expired` |
+| `DELETE /api/admin/invites/{id}` | Revokes an unused invite. `204`; `409` if used |
+| `POST /api/admin/invites/{id}/resend` | Replaces the invite with a fresh link and 72 hours. `201` |
+| `GET /api/admin/accounts` | `{"accounts": [{id, username, email, emailVerifiedAt, createdAt, disabledAt, isAdmin, sessions, lastSeenAt}]}` |
+| `POST /api/admin/accounts/{id}/disable` | Blocks sign-in and ends every session. `204`; `409` for the last enabled admin |
+| `POST /api/admin/accounts/{id}/enable` | `204` |
+| `DELETE /api/admin/accounts/{id}/sessions` | Ends every session of that account. `204` |
+| `GET /api/admin/events?limit=&offset=` | The audit log, newest first (`limit` default 100, maximum 500): `{"events": [{id, kind, accountId, username, ip, userAgent, createdAt, detail}]}` |
+
+The audit log never holds a password, token or one-time code. `detail` carries
+only masked addresses and the acting admin's username.
+
 ## Compatibility
 
 The API is additive within version 1. Implementations must not repurpose fields
