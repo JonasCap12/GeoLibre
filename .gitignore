@@ -70,6 +70,8 @@ python/examples/my-map.geolibre.json
 
 # Cloudflare Workers local dev state (wrangler dev / miniflare)
 .wrangler/
+# Local Worker secrets and var overrides read by wrangler dev
+.dev.vars
 
 # Rendered Homebrew cask, emitted to the working dir by scripts/render-*-cask.sh
 # for submission to a tap / homebrew-cask; not committed to this repo.

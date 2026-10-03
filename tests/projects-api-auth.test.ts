@@ -97,10 +97,10 @@ describe("password reset", () => {
 });
 
 describe("password policy", () => {
-  it("rejects 11 characters and accepts 12", () => {
-    assert.equal(MIN_PASSWORD_LENGTH, 12);
-    assert.equal(passwordPolicyError("x".repeat(11)), "too-short");
-    assert.equal(passwordPolicyError("x".repeat(12)), null);
+  it("rejects 14 characters and accepts 15 (NIST 800-63B-4, single factor)", () => {
+    assert.equal(MIN_PASSWORD_LENGTH, 15);
+    assert.equal(passwordPolicyError("x".repeat(14)), "too-short");
+    assert.equal(passwordPolicyError("x".repeat(15)), null);
   });
 
   it("requires the current password to be checked by the caller", () => {

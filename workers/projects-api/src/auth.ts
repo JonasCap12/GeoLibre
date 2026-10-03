@@ -1,11 +1,22 @@
 // Password hashing, bearer tokens, and account resolution.
 //
-// The hash encoding is byte-for-byte what backend/geolibre_server_api produces:
-// scrypt with n=2^14, r=8, p=1 and a 64-byte derived key (Python's
-// hashlib.scrypt default dklen), stored as `scrypt$<salt hex>$<digest hex>`.
-// Keeping the parameters identical is the whole reason an imported accounts
-// table keeps working -- change any of them and every stored password becomes
-// unverifiable, which is a forced reset for every user.
+// Two encodings, told apart by their prefix:
+//
+//   scrypt$<salt hex>$<digest hex>   n=2^14, r=8, p=1. Byte-for-byte what
+//                                    backend/geolibre_server_api produces, so an
+//                                    imported accounts table keeps verifying.
+//   scrypt2$<salt hex>$<digest hex>  n=2^14, r=8, p=5. What new hashes use.
+//
+// p=1 is below the OWASP Password Storage floor; n=2^14, r=8, p=5 is one of
+// its listed equivalents. The 128 MiB variant (n=2^17, p=1) does not fit an
+// isolate's memory, while p only repeats the 16 MiB mix and so costs CPU, not
+// memory. Measured in workerd (wrangler dev, scrypt-js): p=1 ~67 ms, p=5
+// ~333 ms per call. A sign-in that also rehashes pays both, ~400 ms, which is
+// why wrangler.jsonc raises cpu_ms.
+//
+// The cost of moving: the Python reference only reads `scrypt$`. Exporting
+// this table back to it would leave every rehashed account unable to sign in
+// there. Import in the other direction is unaffected.
 //
 // scrypt-js rather than node:crypto: the Workers Node compatibility layer does
 // not reliably expose scrypt, and WebCrypto has no scrypt at all (PBKDF2 and
@@ -16,8 +27,11 @@ import { scrypt } from "scrypt-js";
 
 const SCRYPT_N = 16384; // 2**14
 const SCRYPT_R = 8;
-const SCRYPT_P = 1;
 const SCRYPT_DKLEN = 64;
+
+/** Parallelism per encoding prefix. Never edit an existing entry; add a new prefix. */
+const SCRYPT_P_BY_PREFIX: Record<string, number> = { scrypt: 1, scrypt2: 5 };
+const CURRENT_PREFIX = "scrypt2";
 
 const encoder = new TextEncoder();
 
@@ -46,15 +60,8 @@ function constantTimeEquals(left: string, right: string): boolean {
   return diff === 0;
 }
 
-async function derive(password: string, salt: Uint8Array): Promise<string> {
-  const key = await scrypt(
-    encoder.encode(password),
-    salt,
-    SCRYPT_N,
-    SCRYPT_R,
-    SCRYPT_P,
-    SCRYPT_DKLEN,
-  );
+async function derive(password: string, salt: Uint8Array, p: number): Promise<string> {
+  const key = await scrypt(encoder.encode(password), salt, SCRYPT_N, SCRYPT_R, p, SCRYPT_DKLEN);
   return toHex(new Uint8Array(key));
 }
 
@@ -62,7 +69,8 @@ async function derive(password: string, salt: Uint8Array): Promise<string> {
 export async function passwordHash(password: string): Promise<string> {
   if (!password) throw new Error("password is required");
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  return `scrypt$${toHex(salt)}$${await derive(password, salt)}`;
+  const p = SCRYPT_P_BY_PREFIX[CURRENT_PREFIX];
+  return `${CURRENT_PREFIX}$${toHex(salt)}$${await derive(password, salt, p)}`;
 }
 
 /**
@@ -73,14 +81,21 @@ export async function passwordHash(password: string): Promise<string> {
 export async function passwordMatches(password: string, encoded: string): Promise<boolean> {
   if (!password) return false;
   const parts = encoded.split("$");
-  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  if (parts.length !== 3) return false;
+  const p = SCRYPT_P_BY_PREFIX[parts[0]];
+  if (p === undefined) return false;
   let salt: Uint8Array;
   try {
     salt = fromHex(parts[1]);
   } catch {
     return false;
   }
-  return constantTimeEquals(await derive(password, salt), parts[2]);
+  return constantTimeEquals(await derive(password, salt, p), parts[2]);
+}
+
+/** True when a hash that just verified should be replaced with the current encoding. */
+export function passwordNeedsRehash(encoded: string): boolean {
+  return encoded.split("$")[0] !== CURRENT_PREFIX;
 }
 
 /**
@@ -90,7 +105,21 @@ export async function passwordMatches(password: string, encoded: string): Promis
  * which a request-count rate limiter does not address.
  */
 export async function burnPasswordHash(password: string): Promise<void> {
-  await derive(password || "unused", new Uint8Array(16));
+  await derive(password || "unused", new Uint8Array(16), SCRYPT_P_BY_PREFIX[CURRENT_PREFIX]);
+}
+
+/**
+ * Tops a failed legacy verification up to the current cost.
+ *
+ * A `scrypt$` row verifies five times faster than {@link burnPasswordHash}, so
+ * without this a quick 401 would mean "this username exists" for every account
+ * not yet rehashed. A successful verification needs nothing: the rehash that
+ * follows costs more than the gap.
+ */
+export async function burnRemainingCost(password: string, encoded: string): Promise<void> {
+  const paid = SCRYPT_P_BY_PREFIX[encoded.split("$")[0]] ?? 0;
+  const owed = SCRYPT_P_BY_PREFIX[CURRENT_PREFIX] - paid;
+  if (owed > 0) await derive(password || "unused", new Uint8Array(16), owed);
 }
 
 /** A new opaque bearer token: 32 random bytes, base64url, unpadded. */

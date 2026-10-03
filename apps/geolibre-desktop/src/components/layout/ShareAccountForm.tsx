@@ -2,14 +2,20 @@ import { Button, Input, Label } from "@geolibre/ui";
 import { LogIn, LogOut, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { isTauri } from "../../lib/is-tauri";
 import {
   MIN_PASSWORD_LENGTH,
+  USERNAME_PATTERN,
   changePassword,
   createAccount,
+  newPasswordProblem,
   signIn,
+  signInProblem,
   signOut,
-  validateCredentials,
 } from "../../lib/share-account";
+import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
+import { authCodeText, authErrorText } from "../auth/auth-error-text";
+import { TurnstileWidget, turnstileRequired } from "../auth/TurnstileWidget";
 
 interface ShareAccountFormProps {
   /** Called with a fresh token, to store in Settings. */
@@ -34,9 +40,14 @@ interface ShareAccountFormProps {
  *
  * It sits next to the token field rather than in a dialog of its own because
  * that is where someone looking for "how do I get a token" already is.
+ *
+ * The desktop app signs in here but does not register: registration carries a
+ * Turnstile check, which cannot run from the app's origin, so the invite link
+ * is opened in a browser instead.
  */
 export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: ShareAccountFormProps) {
   const { t } = useTranslation();
+  const desktop = isTauri();
   const [open, setOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -46,14 +57,21 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [turnstile, setTurnstile] = useState<string | null>(null);
+  const [turnstileReset, setTurnstileReset] = useState(0);
 
   const run = async (mode: "signIn" | "create") => {
     // Checked here as well as in the client so a typo does not spend one of the
-    // ten attempts a minute the API's rate limiter allows.
-    const problem = validateCredentials(username, password);
-    if (problem) {
-      setError(problem);
-      return;
+    // attempts a minute the API's rate limiter allows. Sign-in has no length
+    // floor: older accounts have passwords shorter than today's minimum.
+    if (mode === "signIn") {
+      const problem = signInProblem(username, password);
+      if (problem) return setError(authCodeText(t, problem));
+    } else {
+      if (!USERNAME_PATTERN.test(username)) return setError(authCodeText(t, "username-invalid"));
+      const problem = newPasswordProblem(password);
+      if (problem) return setError(authCodeText(t, problem));
+      if (turnstileRequired() && !turnstile) return setError(t("auth.botCheckPending"));
     }
     setBusy(true);
     setError(null);
@@ -61,15 +79,16 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
     try {
       const fresh =
         mode === "create"
-          ? await createAccount({ username, password, invite })
+          ? await createAccount({ username, password, invite, turnstileToken: turnstile ?? "" })
           : await signIn({ username, password });
       onToken(fresh);
       setPassword("");
-      setNote(t("settings.env.accountSignedIn", { username }));
+      setNote(t("settings.env.accountSignedIn", { username: username.trim() }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(authErrorText(t, err));
     } finally {
       setBusy(false);
+      if (mode === "create") setTurnstileReset((count) => count + 1);
     }
   };
 
@@ -83,14 +102,14 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
       onSignedOut();
       setNote(t("settings.env.accountSignedOut"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(authErrorText(t, err));
     } finally {
       setBusy(false);
     }
   };
 
   const change = async () => {
-    if (nextPassword.length < MIN_PASSWORD_LENGTH) {
+    if (newPasswordProblem(nextPassword) !== null) {
       setError(t("settings.env.accountPasswordShort", { count: MIN_PASSWORD_LENGTH }));
       return;
     }
@@ -104,11 +123,22 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
       setNextPassword("");
       setNote(t("settings.env.accountPasswordChanged"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(authErrorText(t, err));
     } finally {
       setBusy(false);
     }
   };
+
+  const messages = (
+    <>
+      <div aria-live="assertive" aria-atomic="true">
+        {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      </div>
+      <div aria-live="polite" aria-atomic="true">
+        {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+      </div>
+    </>
+  );
 
   if (!open) {
     return (
@@ -131,8 +161,7 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
             </Button>
           ) : null}
         </div>
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
-        {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+        {messages}
       </div>
     );
   }
@@ -141,11 +170,12 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
     <div className="space-y-2 rounded-md border p-3">
       <p className="text-xs text-muted-foreground">{t("settings.env.accountHelp")}</p>
       <div className="space-y-1.5">
-        <Label htmlFor="share-account-username">{t("settings.env.accountUsername")}</Label>
+        <Label htmlFor="share-account-username">{t("settings.env.accountUsernameOrEmail")}</Label>
         <Input
           id="share-account-username"
           autoComplete="username"
-          placeholder={t("settings.env.accountUsernamePlaceholder")}
+          autoCapitalize="none"
+          spellCheck={false}
           value={username}
           onChange={(event) => setUsername(event.target.value.trim().toLowerCase())}
         />
@@ -160,31 +190,46 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
           onChange={(event) => setPassword(event.target.value)}
         />
       </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="share-account-invite">{t("settings.env.accountInvite")}</Label>
-        <Input
-          id="share-account-invite"
-          autoComplete="off"
-          placeholder={t("settings.env.accountInvitePlaceholder")}
-          value={invite}
-          onChange={(event) => setInvite(event.target.value.trim())}
-        />
-      </div>
+      {desktop ? (
+        <p className="text-xs text-muted-foreground">{t("settings.env.accountCreateInBrowser")}</p>
+      ) : (
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="share-account-invite">{t("settings.env.accountInvite")}</Label>
+            <Input
+              id="share-account-invite"
+              autoComplete="off"
+              placeholder={t("settings.env.accountInvitePlaceholder")}
+              value={invite}
+              onChange={(event) => setInvite(event.target.value.trim())}
+            />
+          </div>
+          {invite ? (
+            <TurnstileWidget
+              action={TURNSTILE_ACTIONS.register}
+              onToken={setTurnstile}
+              resetKey={turnstileReset}
+            />
+          ) : null}
+        </>
+      )}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" disabled={busy} onClick={() => void run("signIn")}>
           <LogIn className="me-2 h-3.5 w-3.5" />
           {t("settings.env.accountSignIn")}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => void run("create")}
-        >
-          <UserPlus className="me-2 h-3.5 w-3.5" />
-          {t("settings.env.accountCreate")}
-        </Button>
+        {desktop ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void run("create")}
+          >
+            <UserPlus className="me-2 h-3.5 w-3.5" />
+            {t("settings.env.accountCreate")}
+          </Button>
+        )}
         <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
           {t("settings.env.accountClose")}
         </Button>
@@ -231,8 +276,7 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
           </Button>
         </div>
       ) : null}
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
-      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+      {messages}
     </div>
   );
 }

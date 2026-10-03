@@ -15,20 +15,28 @@ extension.
 - **Object keys** — `projects/<id>/versions/<n>.json` and
   `projects/<id>/thumbnail`. An existing S3/filesystem bucket can be copied into
   R2 unchanged, and an imported `versions.object_key` stays correct.
-- **Password hashes** — scrypt, `n=2^14, r=8, p=1`, 64-byte key, stored as
-  `scrypt$<salt hex>$<digest hex>`. An imported `accounts` table keeps working;
-  nobody has to reset a password. Changing any parameter would make every stored
-  hash unverifiable, so don't.
+- **Password hashes still verify** — an imported `accounts` table with
+  `scrypt$<salt hex>$<digest hex>` (`n=2^14, r=8, p=1`) keeps working; nobody
+  has to reset a password. See below for what new hashes look like.
 - **Table and column names** — so a `.dump` from the SQLite deployment imports
-  with no rewriting.
+  with no rewriting. Columns this Worker added are nullable.
 
 ## What is deliberately different
 
+- **New password hashes use `p=5`**, stored as `scrypt2$<salt hex>$<digest hex>`,
+  to reach the OWASP minimum for scrypt. Old `scrypt$` hashes are upgraded on the
+  next successful sign-in. The Python reference cannot verify `scrypt2$`, so a
+  database moved back to it needs those accounts to reset their password.
 - **Rate limiting is implemented here.** `docs/server-api.md` lists it under
   "what the reference server leaves to the operator", to be supplied by a reverse
-  proxy or WAF. The platform offers it directly, so the two unauthenticated
-  scrypt routes (`POST /api/accounts`, `POST /api/auth/token`) are limited in the
-  Worker instead of in a deployment footnote.
+  proxy or WAF. The platform offers it directly, so the unauthenticated auth
+  routes are limited per IP, and sign-in additionally per username/email
+  (`AUTH_ACCOUNT_RATE_LIMITER`).
+- **Tokens expire.** 30 days after sign-in, or 7 days without use
+  (`GEOLIBRE_SESSION_TTL_DAYS`, `GEOLIBRE_SESSION_IDLE_DAYS`). The reference
+  keeps them until `DELETE /api/auth/token`.
+- **Invite-only accounts, password reset by email, sessions list, admin routes
+  and an audit log** — see the self-hosted section of `docs/server-api.md`.
 - **Atomic SQL replaces retry loops.** Version numbers are allocated by one
   `INSERT … SELECT MAX(number)+1 … RETURNING`, and anonymous activity buckets are
   counted by one `INSERT … ON CONFLICT DO UPDATE`. The reference needs
@@ -38,8 +46,8 @@ extension.
   `*`; here the app and the API are on different hostnames, so an operator must
   name the app origin anyway, and forgetting should fail visibly in the browser
   rather than quietly accept every origin.
-- **Paid plan required.** scrypt at `n=2^14` is 100–200 ms of CPU per login,
-  which does not fit the 10 ms free-tier ceiling. `workers/tiles` has the same
+- **Paid plan required.** scrypt with `p=5` is ~330 ms of CPU per login, which
+  does not fit the 10 ms free-tier ceiling. `workers/tiles` has the same
   requirement for its reprojection path.
 
 ## Setup
@@ -85,5 +93,29 @@ syntax differs.
   the frontend tests for `share-geolibre.ts` and `share-gallery.ts`. Running it
   against this Worker needs `@cloudflare/vitest-pool-workers`, and until that
   exists this implementation is verified by typecheck and review only.
-- **Token expiry** is absent, exactly as in the reference: tokens stay valid
-  until `DELETE /api/auth/token` revokes them.
+
+## Local development
+
+```bash
+# From the repo root. Creates the local D1 under .wrangler/ and applies the schema.
+npx wrangler d1 execute geolibre-projects --local --file=workers/projects-api/schema.sql -c workers/projects-api/wrangler.jsonc
+
+# workers/projects-api/.dev.vars (git-ignored) — print mail to the console
+# instead of needing the Email Service binding:
+#   GEOLIBRE_EMAIL_LOG_ONLY=1
+#   GEOLIBRE_EMAIL_FROM=noreply@localhost
+#   GEOLIBRE_VIEWER_URL=http://localhost:5173/
+#   GEOLIBRE_CORS_ORIGINS=http://localhost:5173
+npx wrangler dev -c workers/projects-api/wrangler.jsonc --local
+```
+
+The first account comes from an invite row inserted by hand, since issuing an
+invite needs an admin:
+
+```bash
+npx wrangler d1 execute geolibre-projects --local -c workers/projects-api/wrangler.jsonc \
+  --command "INSERT INTO auth_actions (digest, kind, email, created_at, expires_at) VALUES ('<sha256 hex of a token>', 'invite', 'you@example.com', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now','+7 days'))"
+```
+
+Timestamps must be ISO-8601 with the `T` and `Z`, as above: expiry is compared
+as a string, and `datetime('now')` (with a space) sorts wrongly against it.
