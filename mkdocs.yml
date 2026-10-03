@@ -87,6 +87,7 @@ nav:
       - Architecture: architecture.md
       - Self-Hosting: self-hosting.md
       - Server API: server-api.md
+      - Self-Hosted Accounts: selfhost-auth.md
       - Android: android.md
       - iOS: ios.md
       - Mac App Store: mac-app-store.md

@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   -- schema-auth.sql once on that database.
   email               TEXT,
   email_verified_at   TEXT,
-  password_changed_at TEXT
+  password_changed_at TEXT,
+  -- From schema-sessions-mfa.sql; apply that file to an existing database.
+  disabled_at         TEXT
 );
 -- See schema-auth.sql for why this index is partial. A database that already
 -- had `accounts` does not get these columns from the CREATE above; that file
@@ -34,11 +36,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_email
 
 CREATE TABLE IF NOT EXISTS tokens (
   -- The SHA-256 hex digest of the bearer token, never the token itself.
-  digest     TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL
+  digest       TEXT PRIMARY KEY,
+  account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_at   TEXT NOT NULL,
+  -- Expiry, idle tracking and device columns. See schema-sessions-mfa.sql.
+  expires_at   TEXT,
+  last_used_at TEXT,
+  user_agent   TEXT,
+  created_ip   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_account ON tokens(account_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_expires ON tokens(expires_at);
+
+-- Security audit log. See schema-sessions-mfa.sql.
+CREATE TABLE IF NOT EXISTS auth_events (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+  kind        TEXT NOT NULL,
+  ip          TEXT,
+  user_agent  TEXT,
+  created_at  TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_auth_events_account ON auth_events(account_id, kind);
 
 -- Single-use invite, reset, and verify tokens. See schema-auth.sql.
 CREATE TABLE IF NOT EXISTS auth_actions (

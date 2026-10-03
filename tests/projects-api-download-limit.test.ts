@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 /**
  * `GET /api/datasets/:id/content` is the cheapest way to spend someone else's
@@ -15,7 +16,8 @@ import { describe, it } from "node:test";
  * allowance up to where brute-forcing becomes practical again.
  */
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+// fileURLToPath, not .pathname: the latter keeps %20 for a space in the path.
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const source = readFileSync(`${ROOT}workers/projects-api/src/index.ts`, "utf8");
 const config = readFileSync(`${ROOT}workers/projects-api/wrangler.jsonc`, "utf8");
 
@@ -90,10 +92,7 @@ describe("dataset download rate limit", () => {
 
   it("does not spend the auth limiter's budget on downloads", () => {
     const helper = source.slice(source.indexOf("async function rateLimitDownload"));
-    assert.ok(
-      helper.includes("env.DOWNLOAD_RATE_LIMITER"),
-      "downloads must use their own binding",
-    );
+    assert.ok(helper.includes("env.DOWNLOAD_RATE_LIMITER"), "downloads must use their own binding");
     assert.ok(
       !helper.slice(0, 400).includes("AUTH_RATE_LIMITER"),
       "downloads must not fall back to the auth binding",

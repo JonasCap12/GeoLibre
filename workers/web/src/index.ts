@@ -24,6 +24,13 @@
 const NEVER_FALLBACK = ["/assets/", "/jupyterlite/", "/plugins/"];
 
 /**
+ * The self-hosted auth pages that emails link to. They take a password, so
+ * they must not render inside someone else's frame (clickjacking). The rest of
+ * the app is embeddable by design, which is why this is not in _headers.
+ */
+const LINK_PAGES = new Set(["register", "reset", "verify-email"]);
+
+/**
  * True when the path names a file rather than an app route.
  *
  * Anything with an extension was requested as a file — a script, an image, a
@@ -123,9 +130,16 @@ export default {
     const index = await env.ASSETS.fetch(new URL("/index.html", url));
     // The app shell is served for a path that is not `/`, so its own _headers
     // rule (revalidate, never immutable) is the right one to keep.
+    const headers = new Headers(index.headers);
+    const segments = url.pathname.split("/").filter((part) => part !== "");
+    if (LINK_PAGES.has(segments[segments.length - 1] ?? "")) {
+      // A second policy, appended: the browser enforces both, so this only
+      // narrows the app policy and cannot loosen it.
+      headers.append("Content-Security-Policy", "frame-ancestors 'self'");
+    }
     return new Response(index.body, {
       status: index.status === 404 ? 404 : 200,
-      headers: index.headers,
+      headers,
     });
   },
 };

@@ -15,6 +15,7 @@ export interface Config {
   maxDatasetBytes: number;
   activityRetentionDays: number;
   corsOrigins: string[];
+  session: { ttlMs: number; idleMs: number };
 }
 
 export interface AccountRow {
@@ -22,11 +23,12 @@ export interface AccountRow {
   username: string | null;
   password_hash: string;
   created_at: string;
-  // Absent on a database that has not applied schema-auth.sql yet. Sign-in
-  // does not read them, so those accounts keep working.
+  // Added by schema-auth.sql.
   email?: string | null;
   email_verified_at?: string | null;
   password_changed_at?: string | null;
+  // Added by schema-sessions-mfa.sql. A disabled account's tokens all answer 401.
+  disabled_at?: string | null;
 }
 
 /** A project joined with its owner's username and its version count. */
@@ -233,6 +235,7 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }

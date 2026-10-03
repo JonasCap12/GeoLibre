@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 /**
  * Guards this fork's independence from the upstream project's servers.
@@ -32,7 +33,8 @@ const ROOTS = [
   "packages/embed/src",
 ];
 
-const REPO_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+// fileURLToPath, not .pathname: the latter keeps %20 for a space in the path.
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
  * Endpoints the app calls on its own. Each must name the variable that
