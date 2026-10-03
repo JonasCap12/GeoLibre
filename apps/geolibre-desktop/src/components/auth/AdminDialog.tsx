@@ -16,6 +16,7 @@ import {
   listAuthEvents,
   listInvites,
   resendInvite,
+  resetAccountMfa,
   revokeAccountSessions,
   revokeInvite,
   sendInvite,
@@ -52,6 +53,12 @@ const EVENT_LABELS = {
   invite_revoked: "auth.admin.event.invite_revoked",
   email_change_requested: "auth.admin.event.email_change_requested",
   email_changed: "auth.admin.event.email_changed",
+  mfa_enabled: "auth.admin.event.mfa_enabled",
+  mfa_disabled: "auth.admin.event.mfa_disabled",
+  mfa_recovery_used: "auth.admin.event.mfa_recovery_used",
+  mfa_recovery_regenerated: "auth.admin.event.mfa_recovery_regenerated",
+  mfa_failure: "auth.admin.event.mfa_failure",
+  mfa_reset: "auth.admin.event.mfa_reset",
   account_disabled: "auth.admin.event.account_disabled",
   account_enabled: "auth.admin.event.account_enabled",
   sessions_revoked: "auth.admin.event.sessions_revoked",
@@ -102,27 +109,36 @@ export function AdminDialog({ open, onOpenChange, token, self }: AdminDialogProp
           <DialogTitle>{t("auth.admin.title")}</DialogTitle>
           <DialogDescription>{t("auth.admin.description")}</DialogDescription>
         </DialogHeader>
-        <div role="tablist" aria-label={t("auth.admin.title")} className="flex gap-1 border-b">
-          {tabs.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              id={`admin-tab-${item.id}`}
-              aria-selected={tab === item.id}
-              aria-controls={`admin-panel-${item.id}`}
-              className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${
-                tab === item.id
-                  ? "border-primary font-medium text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-              onClick={() => setTab(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        {open ? (
+        {/* Every tab would answer the same 403; say why once instead. The
+            server enforces this either way. */}
+        {self.mfaEnabled ? null : (
+          <p role="alert" className="text-sm text-destructive">
+            {t("auth.error.adminMfaRequired")}
+          </p>
+        )}
+        {self.mfaEnabled ? (
+          <div role="tablist" aria-label={t("auth.admin.title")} className="flex gap-1 border-b">
+            {tabs.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                id={`admin-tab-${item.id}`}
+                aria-selected={tab === item.id}
+                aria-controls={`admin-panel-${item.id}`}
+                className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${
+                  tab === item.id
+                    ? "border-primary font-medium text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => setTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {open && self.mfaEnabled ? (
           <div role="tabpanel" id={`admin-panel-${tab}`} aria-labelledby={`admin-tab-${tab}`}>
             {tab === "invites" ? <InvitesTab token={token} /> : null}
             {tab === "accounts" ? <AccountsTab token={token} self={self} /> : null}
@@ -261,6 +277,7 @@ function AccountsTab({ token, self }: { token: string; self: AccountInfo }) {
   const { t } = useTranslation();
   const action = useAction();
   const [accounts, setAccounts] = useState<AdminAccount[] | null>(null);
+  const [confirmReset, setConfirmReset] = useState<string | null>(null);
   const { setError } = action;
 
   const load = useCallback(async () => {
@@ -297,6 +314,11 @@ function AccountsTab({ token, self }: { token: string; self: AccountInfo }) {
                     {t("auth.admin.disabledBadge")}
                   </span>
                 ) : null}
+                {account.mfaEnabled ? (
+                  <span className="ms-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold">
+                    {t("auth.admin.mfaBadge")}
+                  </span>
+                ) : null}
               </p>
               <p className="truncate text-muted-foreground">
                 {account.email ?? t("auth.emailChange.noAddress")}
@@ -308,7 +330,47 @@ function AccountsTab({ token, self }: { token: string; self: AccountInfo }) {
                 })}
               </p>
             </div>
-            <div className="flex shrink-0 gap-1">
+            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+              {account.mfaEnabled && confirmReset === account.id ? (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={action.busy}
+                    onClick={() =>
+                      void action.run(
+                        async () => {
+                          await resetAccountMfa({ token, id: account.id });
+                          setConfirmReset(null);
+                          await load();
+                        },
+                        t("auth.admin.mfaResetDone", { username: account.username ?? "—" }),
+                      )
+                    }
+                  >
+                    {t("auth.admin.confirmMfaReset")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmReset(null)}
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                </>
+              ) : account.mfaEnabled ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={action.busy}
+                  onClick={() => setConfirmReset(account.id)}
+                >
+                  {t("auth.admin.resetMfa")}
+                </Button>
+              ) : null}
               {account.sessions > 0 ? (
                 <Button
                   type="button"

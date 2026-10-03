@@ -31,6 +31,12 @@ const KEYS = {
   "email-unconfigured": "auth.error.emailUnconfigured",
   "session-expired": "auth.error.sessionExpired",
   forbidden: "auth.error.forbidden",
+  "mfa-invalid": "auth.error.mfaInvalid",
+  "mfa-required": "auth.error.mfaRequired",
+  "mfa-expired": "auth.error.mfaExpired",
+  "mfa-locked": "auth.error.mfaLocked",
+  "mfa-unavailable": "auth.error.mfaUnavailable",
+  "admin-mfa-required": "auth.error.adminMfaRequired",
 } as const satisfies Record<Exclude<AuthErrorCode, "unknown">, string>;
 
 /** The translated message for a code produced on the client. */

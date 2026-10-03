@@ -29,6 +29,14 @@ export interface AccountRow {
   password_changed_at?: string | null;
   // Added by schema-sessions-mfa.sql. A disabled account's tokens all answer 401.
   disabled_at?: string | null;
+  // The TOTP secret, sealed with MFA_ENCRYPTION_KEY (see totp.ts). Non-null
+  // with mfa_enabled_at set means sign-in asks for a code.
+  mfa_secret?: string | null;
+  // Sealed secret shown during setup, promoted to mfa_secret by the first code.
+  mfa_pending_secret?: string | null;
+  mfa_enabled_at?: string | null;
+  mfa_last_used_step?: number | null;
+  mfa_failed_attempts?: number | null;
 }
 
 /** A project joined with its owner's username and its version count. */

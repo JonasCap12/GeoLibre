@@ -105,6 +105,60 @@ old hash rehashes it. The trade-off: the Python server cannot verify
   `GET /api/account` and, if the token is really dead, clears it and returns to
   the sign-in screen with a notice instead of failing request by request.
 
+## Two-factor authentication
+
+The second factor is a TOTP authenticator app (RFC 6238), with recovery codes
+for a lost phone. It is optional for members and **required for admins**: an
+admin without it gets `403` from every admin route until they turn it on in
+**Account & security**. The Administration dialog says so instead of showing
+empty tabs.
+
+- **Algorithm.** HMAC-SHA-1, six digits, 30-second step, and one step either
+  side for clock drift. SHA-1 is what every authenticator app supports by
+  default; its collision weakness does not apply to HMAC. Implemented on
+  WebCrypto in `totp.ts`, no new dependency, and checked against the RFC 6238
+  and RFC 4226 test vectors.
+- **One use per code.** The account stores the last accepted time step, and
+  a code is accepted only for a later step. The update is conditional, so two
+  requests racing with the same code cannot both pass.
+- **Secret at rest.** The 160-bit secret is sealed with AES-256-GCM under
+  `MFA_ENCRYPTION_KEY` (a Worker secret, 32 random bytes), with the account id
+  as associated data so a sealed value copied to another row does not open.
+  A D1 export alone does not reveal any secret. Without the key, the MFA
+  routes answer `503`, which locks admins out of admin routes, so the key must
+  be set before deploying.
+- **Enrolment.** Setup needs the current password and keeps the new secret
+  *pending*. The QR code is drawn in the browser from the `otpauth://` URI
+  (`qrcode.react`, already a dependency), so the secret is never sent to a
+  QR service. Two-factor turns on only after the first correct code, which
+  proves the app saved the secret.
+- **Recovery codes.** Ten codes of 120 random bits
+  (`XXXX-XXXX-XXXX-XXXX-XXXX-XXXX`), shown once, stored as SHA-256, each
+  usable once. ASVS 5.0 V6.5.2 allows a plain hash only above 112 bits; a
+  shorter code would need a slow hash per stored code on every attempt.
+  Regenerating replaces all ten. Using one sends a notice email.
+- **Sign-in.** A correct password on an account with two-factor returns a
+  ticket instead of a token. The ticket is a 256-bit random value stored as a
+  digest, valid for 5 minutes, single-use, and good for 5 wrong codes; then the
+  password is needed again. The ticket is a new table, `mfa_tickets`, not
+  another `auth_actions` kind, because it has an attempt counter and is
+  deleted on a schedule the email links do not share.
+- **Guessing.** Codes are limited per account (5 a minute) as well as per IP,
+  so minting fresh tickets from many addresses does not buy more guesses.
+  After 10 wrong codes in a row the account accepts no code at all until an
+  admin resets two-factor. Unlike the password, this is a hard lockout,
+  because only someone who already knows the password can reach it.
+- **Re-authentication.** Changing the password or email, regenerating
+  recovery codes and turning two-factor off need the current password *and*
+  a current code (ASVS V7.5.1).
+- **Admin reset.** For a lost phone with no codes left, an admin can turn
+  two-factor off for an account. This also ends its sessions and mails the
+  owner. If the *only* admin is locked out there is no one to reset them; the
+  operator clears the `mfa_*` columns for that account directly in D1.
+- **Older clients** that do not know the ticket see a `200` without a token
+  and report "The server did not return a token". Members without two-factor
+  are unaffected.
+
 ## Bot defence and rate limits
 
 Cloudflare Turnstile guards the three unauthenticated routes that send mail or
@@ -153,14 +207,16 @@ Admins are the usernames in `GEOLIBRE_ADMIN_USERNAMES`. `GET /api/account`
 returns `isAdmin` so the app can show the **Administration** dialog; every
 admin route checks again on the server. Admins can send, resend and revoke
 invites, list accounts, disable or re-enable an account (which also ends its
-sessions), and end every session of an account. The last enabled admin cannot
-be disabled.
+sessions), end every session of an account, and reset an account's two-factor.
+The last enabled admin cannot be disabled. Every admin route requires the
+admin to have two-factor on.
 
 ## Audit log
 
 `auth_events` records sign-in success and failure, sign-out, password change,
 reset request and completion, invite creation, use and revocation, email
-change, session revocation, and account disable/enable, with IP and
+change, session revocation, account disable/enable, and two-factor changes
+(on, off, wrong code, recovery code used, codes regenerated, admin reset), with IP and
 User-Agent. It never stores a password, token or one-time code. A failed
 sign-in records the name that was typed, truncated, and nothing else. Addresses
 in `detail` are masked. Rows older than `GEOLIBRE_ACTIVITY_RETENTION_DAYS` (the
@@ -182,7 +238,10 @@ written. Admins read it in the **Activity** tab.
 
 ## Known gaps against ASVS Level 2
 
-- **No second factor yet.** Multi-factor authentication is the next phase.
+- **Two-factor is optional for members.** Only admins are required to use it.
+  There is no phishing-resistant factor yet.
+- **A locked-out sole admin needs D1 access** to recover; there is no
+  break-glass route.
 - **Token readable by page script.** See
   [Token transport](#token-transport-bearer-not-cookies); mitigated by CSP and
   short lifetimes, not eliminated.

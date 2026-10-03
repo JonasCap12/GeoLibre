@@ -35,8 +35,9 @@ extension.
 - **Tokens expire.** 30 days after sign-in, or 7 days without use
   (`GEOLIBRE_SESSION_TTL_DAYS`, `GEOLIBRE_SESSION_IDLE_DAYS`). The reference
   keeps them until `DELETE /api/auth/token`.
-- **Invite-only accounts, password reset by email, sessions list, admin routes
-  and an audit log** — see the self-hosted section of `docs/server-api.md`.
+- **Invite-only accounts, password reset by email, sessions list, two-factor
+  authentication, admin routes and an audit log** — see the self-hosted section
+  of `docs/server-api.md`.
 - **Atomic SQL replaces retry loops.** Version numbers are allocated by one
   `INSERT … SELECT MAX(number)+1 … RETURNING`, and anonymous activity buckets are
   counted by one `INSERT … ON CONFLICT DO UPDATE`. The reference needs
@@ -60,7 +61,15 @@ wrangler r2 bucket create geolibre-projects
 # 2. Apply the schema
 wrangler d1 execute geolibre-projects --remote --file=schema.sql
 
-# 3. Set the origins in wrangler.jsonc (GEOLIBRE_PUBLIC_URL, GEOLIBRE_VIEWER_URL,
+# 3. Secrets. MFA_ENCRYPTION_KEY seals the two-factor secrets and must exist
+#    before the first deploy: without it two-factor answers 503, and admins,
+#    who are required to use two-factor, cannot reach any admin route.
+#    Losing or changing it disables every enrolled authenticator.
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
+  | wrangler secret put MFA_ENCRYPTION_KEY
+wrangler secret put TURNSTILE_SECRET_KEY   # optional; see docs/selfhost-auth.md
+
+# 4. Set the origins in wrangler.jsonc (GEOLIBRE_PUBLIC_URL, GEOLIBRE_VIEWER_URL,
 #    GEOLIBRE_CORS_ORIGINS), create a rate-limit namespace id, then deploy
 wrangler deploy
 ```
@@ -106,6 +115,7 @@ npx wrangler d1 execute geolibre-projects --local --file=workers/projects-api/sc
 #   GEOLIBRE_EMAIL_FROM=noreply@localhost
 #   GEOLIBRE_VIEWER_URL=http://localhost:5173/
 #   GEOLIBRE_CORS_ORIGINS=http://localhost:5173
+#   MFA_ENCRYPTION_KEY=<32 random bytes, base64; same command as step 3 above>
 npx wrangler dev -c workers/projects-api/wrangler.jsonc --local
 ```
 

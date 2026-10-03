@@ -71,6 +71,14 @@ import {
   type Scope,
 } from "./context";
 import { newSignInEmail, passwordChangedEmail, resetEmail } from "./email";
+import {
+  issueMfaTicket,
+  mfaEnabled,
+  mfaRoute,
+  recoveryCodesLeft,
+  redeemMfaTicket,
+  requireSecondFactor,
+} from "./mfa-routes";
 import { isAuthRoute, isPublicRoute } from "./public-routes";
 import { TURNSTILE_ACTIONS } from "./turnstile";
 import {
@@ -563,6 +571,11 @@ async function apiRoute(
           .bind(account.password_hash, account.id)
           .run();
       }
+      // 200 without a token: a client that predates two-factor reports "no
+      // token returned" instead of storing something that is not a bearer.
+      if (mfaEnabled(account)) {
+        return json({ mfaRequired: true, mfaTicket: await issueMfaTicket(scope, account) });
+      }
       return await completeSignIn(scope, account);
     }
     if (method === "DELETE") {
@@ -571,6 +584,11 @@ async function apiRoute(
       recordAuthEvent(scope, "logout", session.account.id);
       return empty(204);
     }
+  }
+
+  if (path.length === 2 && path[0] === "auth" && path[1] === "mfa" && method === "POST") {
+    await rateLimit(env, request, "mfa");
+    return await completeSignIn(scope, await redeemMfaTicket(scope));
   }
 
   if (path.length === 2 && path[0] === "auth" && path[1] === "password" && method === "POST") {
@@ -590,6 +608,8 @@ async function apiRoute(
     if (!(await passwordMatches(current, account.password_hash))) {
       throw new ApiError(401, "current password is incorrect");
     }
+    // Only accounts that turned two-factor on are asked; others see the route unchanged.
+    await requireSecondFactor(scope, account, body);
     await assertNewPassword(next, account);
     const changedAt = now();
     await db
@@ -713,6 +733,8 @@ async function apiRoute(
           email: account.email ?? null,
           emailVerifiedAt: account.email_verified_at ?? null,
           isAdmin: isAdminUsername(account.username, env.GEOLIBRE_ADMIN_USERNAMES),
+          mfaEnabled: mfaEnabled(account),
+          recoveryCodesLeft: mfaEnabled(account) ? await recoveryCodesLeft(scope, account.id) : 0,
         },
       },
       200,
@@ -721,7 +743,9 @@ async function apiRoute(
   }
 
   const handled =
-    (await accountRoute(scope, path, method)) ?? (await adminRoute(scope, path, method));
+    (await accountRoute(scope, path, method)) ??
+    (await mfaRoute(scope, path, method)) ??
+    (await adminRoute(scope, path, method));
   if (handled !== null) return handled;
 
   if (path.length === 2 && path[0] === "users" && path[1] === "me" && method === "GET") {

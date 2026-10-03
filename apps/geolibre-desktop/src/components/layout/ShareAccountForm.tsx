@@ -5,9 +5,12 @@ import { useTranslation } from "react-i18next";
 import { isTauri } from "../../lib/is-tauri";
 import {
   MIN_PASSWORD_LENGTH,
+  ShareAccountError,
   USERNAME_PATTERN,
   changePassword,
+  completeMfaSignIn,
   createAccount,
+  mfaCodeProblem,
   newPasswordProblem,
   signIn,
   signInProblem,
@@ -15,6 +18,7 @@ import {
 } from "../../lib/share-account";
 import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
 import { authCodeText, authErrorText } from "../auth/auth-error-text";
+import { MfaCodeField } from "../auth/MfaCodeField";
 import { TurnstileWidget, turnstileRequired } from "../auth/TurnstileWidget";
 
 interface ShareAccountFormProps {
@@ -59,6 +63,37 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
   const [note, setNote] = useState<string | null>(null);
   const [turnstile, setTurnstile] = useState<string | null>(null);
   const [turnstileReset, setTurnstileReset] = useState(0);
+  // Set once the password was right on an account with two-factor on.
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [changeCode, setChangeCode] = useState("");
+
+  const signedIn = (fresh: string) => {
+    onToken(fresh);
+    setPassword("");
+    setTicket(null);
+    setCode("");
+    setNote(t("settings.env.accountSignedIn", { username: username.trim() }));
+  };
+
+  const verify = async () => {
+    if (ticket === null) return;
+    const problem = mfaCodeProblem(code);
+    if (problem) return setError(authCodeText(t, problem));
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      signedIn(await completeMfaSignIn({ ticket, code }));
+    } catch (err) {
+      // A spent or expired ticket takes no more codes: back to the password.
+      if (err instanceof ShareAccountError && err.code === "mfa-expired") setTicket(null);
+      setCode("");
+      setError(authErrorText(t, err));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const run = async (mode: "signIn" | "create") => {
     // Checked here as well as in the client so a typo does not spend one of the
@@ -77,13 +112,20 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
     setError(null);
     setNote(null);
     try {
-      const fresh =
-        mode === "create"
-          ? await createAccount({ username, password, invite, turnstileToken: turnstile ?? "" })
-          : await signIn({ username, password });
-      onToken(fresh);
-      setPassword("");
-      setNote(t("settings.env.accountSignedIn", { username: username.trim() }));
+      if (mode === "create") {
+        signedIn(
+          await createAccount({ username, password, invite, turnstileToken: turnstile ?? "" }),
+        );
+      } else {
+        const result = await signIn({ username, password });
+        if (result.kind === "token") {
+          signedIn(result.token);
+        } else {
+          setPassword("");
+          setTicket(result.ticket);
+          setNote(t("settings.env.accountMfaPrompt"));
+        }
+      }
     } catch (err) {
       setError(authErrorText(t, err));
     } finally {
@@ -117,10 +159,16 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
     setError(null);
     setNote(null);
     try {
-      const fresh = await changePassword({ token, currentPassword, password: nextPassword });
+      const fresh = await changePassword({
+        token,
+        currentPassword,
+        password: nextPassword,
+        code: changeCode,
+      });
       onToken(fresh);
       setCurrentPassword("");
       setNextPassword("");
+      setChangeCode("");
       setNote(t("settings.env.accountPasswordChanged"));
     } catch (err) {
       setError(authErrorText(t, err));
@@ -163,6 +211,39 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
         </div>
         {messages}
       </div>
+    );
+  }
+
+  if (ticket !== null) {
+    return (
+      <form
+        className="space-y-2 rounded-md border p-3"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          void verify();
+        }}
+      >
+        <MfaCodeField id="share-account-mfa-code" value={code} onChange={setCode} autoFocus />
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" size="sm" disabled={busy}>
+            {t("auth.mfa.verify")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setTicket(null);
+              setCode("");
+              setNote(null);
+            }}
+          >
+            {t("auth.backToSignIn")}
+          </Button>
+        </div>
+        {messages}
+      </form>
     );
   }
 
@@ -271,6 +352,12 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
               onChange={(event) => setNextPassword(event.target.value)}
             />
           </div>
+          <MfaCodeField
+            id="share-account-change-code"
+            label={t("settings.env.accountMfaCodeOptional")}
+            value={changeCode}
+            onChange={setChangeCode}
+          />
           <Button type="button" size="sm" disabled={busy} onClick={() => void change()}>
             {t("settings.env.accountChangePassword")}
           </Button>

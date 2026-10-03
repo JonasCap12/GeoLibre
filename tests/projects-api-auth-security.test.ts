@@ -384,10 +384,16 @@ describe("new auth routes", () => {
       ["POST", "/api/invites/inspect"],
       ["POST", "/api/auth/email-confirm"],
       ["POST", "/api/auth/reset-confirm"],
+      ["POST", "/api/auth/mfa"],
     ] as const) {
       assert.equal(isPublicRoute(method, path.split("/").filter(Boolean)), true, path);
     }
     for (const [method, path] of [
+      ["POST", "/api/auth/mfa/setup"],
+      ["POST", "/api/auth/mfa/enable"],
+      ["POST", "/api/auth/mfa/disable"],
+      ["POST", "/api/auth/mfa/recovery-codes"],
+      ["DELETE", "/api/admin/accounts/x/mfa"],
       ["GET", "/api/auth/sessions"],
       ["DELETE", "/api/auth/sessions"],
       ["POST", "/api/auth/email"],
