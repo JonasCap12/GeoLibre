@@ -19,11 +19,13 @@ import {
   MIN_PASSWORD_LENGTH,
   ShareAccountError,
   USERNAME_PATTERN,
+  completeMfaSignIn,
   confirmEmailChange,
   confirmPasswordReset,
   createAccount,
   fetchAccount,
   inspectInvite,
+  mfaCodeProblem,
   newPasswordProblem,
   requestPasswordReset,
   signIn,
@@ -43,6 +45,7 @@ import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
 import { AccountSecurityDialog } from "./AccountSecurityDialog";
 import { AdminDialog } from "./AdminDialog";
 import { authCodeText, authErrorText } from "./auth-error-text";
+import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
 import { TurnstileWidget, turnstileRequired } from "./TurnstileWidget";
 
@@ -206,11 +209,19 @@ function useAuthForm() {
 function SignInScreen({ notice }: { notice: string | null }) {
   const { t } = useTranslation();
   const form = useAuthForm();
-  const [mode, setMode] = useState<"sign-in" | "forgot">("sign-in");
+  const [mode, setMode] = useState<"sign-in" | "forgot" | "mfa">("sign-in");
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
+  const [ticket, setTicket] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const codeText = (code: AuthErrorCode) => authCodeText(t, code);
+
+  const backToSignIn = () => {
+    setMode("sign-in");
+    setTicket(null);
+    setCode("");
+  };
 
   const onSignIn = async (event: FormEvent) => {
     event.preventDefault();
@@ -219,10 +230,59 @@ function SignInScreen({ notice }: { notice: string | null }) {
     const problem = signInProblem(login, password);
     if (problem) return form.fail(codeText(problem));
     await form.run(
-      async () => writeShareToken(await signIn({ username: login, password })),
+      async () => {
+        const result = await signIn({ username: login, password });
+        if (result.kind === "token") return writeShareToken(result.token);
+        // The password is not needed again; do not keep it in memory.
+        setPassword("");
+        setTicket(result.ticket);
+        setMode("mfa");
+      },
       (err) => form.fail(authErrorText(t, err)),
     );
   };
+
+  const onMfa = async (event: FormEvent) => {
+    event.preventDefault();
+    if (ticket === null) return backToSignIn();
+    const problem = mfaCodeProblem(code);
+    if (problem) return form.fail(codeText(problem));
+    await form.run(
+      async () => writeShareToken(await completeMfaSignIn({ ticket, code })),
+      (err) => {
+        // A spent or expired ticket cannot take another code; the password
+        // has to be typed again.
+        if (err instanceof ShareAccountError && err.code === "mfa-expired") backToSignIn();
+        setCode("");
+        form.fail(authErrorText(t, err));
+      },
+    );
+  };
+
+  if (mode === "mfa") {
+    return (
+      <AuthScreen>
+        <AuthHeading
+          title={t("auth.mfa.signInTitle")}
+          description={t("auth.mfa.signInDescription")}
+        />
+        <form
+          onSubmit={(event) => void onMfa(event)}
+          className="w-full max-w-sm space-y-3 text-start"
+          noValidate
+        >
+          <MfaCodeField id="selfhost-mfa-code" value={code} onChange={setCode} autoFocus />
+          <FormMessages error={form.error} />
+          <Button type="submit" className="w-full" disabled={form.busy}>
+            {form.busy ? t("auth.signingIn") : t("auth.mfa.verify")}
+          </Button>
+        </form>
+        <Button variant="ghost" type="button" onClick={backToSignIn}>
+          {t("auth.backToSignIn")}
+        </Button>
+      </AuthScreen>
+    );
+  }
 
   const onForgot = async (event: FormEvent) => {
     event.preventDefault();
@@ -660,6 +720,8 @@ function UserMenu({ token }: { token: string }) {
     };
   }, [token]);
 
+  const reloadAccount = async () => setAccount(await fetchAccount({ token }));
+
   const revoke = async () => {
     setBusy(true);
     setError(null);
@@ -729,6 +791,7 @@ function UserMenu({ token }: { token: string }) {
         token={token}
         account={account}
         onToken={writeShareToken}
+        onAccountChange={reloadAccount}
       />
       {account?.isAdmin ? (
         <AdminDialog

@@ -32,6 +32,7 @@ import {
   type Scope,
 } from "./context";
 import { emailChangeNoticeEmail, verifyEmailChangeEmail } from "./email";
+import { requireSecondFactor } from "./mfa-routes";
 import { ApiError, now } from "./model";
 
 interface TokenRow {
@@ -44,7 +45,8 @@ interface TokenRow {
 }
 
 /**
- * Re-authentication for a sensitive change: the current password.
+ * Re-authentication for a sensitive change: the current password, plus a
+ * current code when two-factor is on.
  *
  * 403, not 401. A 401 means the bearer is bad (docs/server-api.md), and the
  * app signs out on a 401; a mistyped password must not do that. The older
@@ -61,6 +63,7 @@ export async function requireReauthentication(
   if (!(await passwordMatches(current, account.password_hash))) {
     throw new ApiError(403, "current password is incorrect");
   }
+  await requireSecondFactor(scope, account, body);
 }
 
 export async function accountRoute(

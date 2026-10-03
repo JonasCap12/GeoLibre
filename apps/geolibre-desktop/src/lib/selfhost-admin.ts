@@ -37,6 +37,7 @@ export interface AdminAccount {
   createdAt: string;
   disabledAt: string | null;
   isAdmin: boolean;
+  mfaEnabled: boolean;
   sessions: number;
   lastSeenAt: string | null;
 }
@@ -114,6 +115,15 @@ export async function revokeAccountSessions(options: AdminOptions & { id: string
     ...options,
     method: "DELETE",
     fallback: "Could not sign the account out",
+  });
+}
+
+/** For a lost phone: clears the account's second factor and signs it out everywhere. */
+export async function resetAccountMfa(options: AdminOptions & { id: string }): Promise<void> {
+  await authRequest(`/api/admin/accounts/${encodeURIComponent(options.id)}/mfa`, {
+    ...options,
+    method: "DELETE",
+    fallback: "Could not reset two-factor authentication",
   });
 }
 

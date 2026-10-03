@@ -9,22 +9,29 @@ import {
   Label,
 } from "@geolibre/ui";
 import { Monitor } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   MIN_PASSWORD_LENGTH,
   changePassword,
+  disableMfa,
+  enableMfa,
   listSessions,
   newPasswordProblem,
+  regenerateRecoveryCodes,
   requestEmailChange,
   revokeSession,
   signOutEverywhere,
+  startMfaSetup,
   type AccountInfo,
+  type MfaSetup,
   type SessionInfo,
 } from "../../lib/share-account";
 import { describeUserAgent } from "../../lib/user-agent";
 import { authCodeText, authErrorText } from "./auth-error-text";
+import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
 
 interface AccountSecurityDialogProps {
@@ -34,6 +41,8 @@ interface AccountSecurityDialogProps {
   account: AccountInfo | null;
   /** Stores a replacement bearer, or "" once this session has ended. */
   onToken: (token: string) => void;
+  /** Reloads `account` after a change this dialog made (two-factor on or off). */
+  onAccountChange: () => Promise<void>;
 }
 
 export function formatAuthDate(iso: string | null): string {
@@ -80,6 +89,7 @@ export function AccountSecurityDialog({
   token,
   account,
   onToken,
+  onAccountChange,
 }: AccountSecurityDialogProps) {
   const { t } = useTranslation();
   return (
@@ -96,8 +106,9 @@ export function AccountSecurityDialog({
         {open ? (
           <div className="space-y-4">
             <SessionsSection token={token} onToken={onToken} />
+            <MfaSection token={token} account={account} onAccountChange={onAccountChange} />
             <EmailSection token={token} account={account} />
-            <PasswordSection token={token} onToken={onToken} />
+            <PasswordSection token={token} account={account} onToken={onToken} />
           </div>
         ) : null}
       </DialogContent>
@@ -216,10 +227,288 @@ function SessionsSection({ token, onToken }: { token: string; onToken: (token: s
   );
 }
 
+/** `ABCD EFGH …` so a secret typed by hand is easy to check against the screen. */
+export function groupSecret(secret: string): string {
+  return secret.replace(/(.{4})(?=.)/g, "$1 ");
+}
+
+type MfaStage =
+  | { kind: "idle" }
+  | { kind: "scan"; setup: MfaSetup }
+  | { kind: "codes"; codes: string[] };
+
+function MfaSection({
+  token,
+  account,
+  onAccountChange,
+}: {
+  token: string;
+  account: AccountInfo | null;
+  onAccountChange: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [stage, setStage] = useState<MfaStage>({ kind: "idle" });
+  const [current, setCurrent] = useState("");
+  const [code, setCode] = useState("");
+  const [confirmOff, setConfirmOff] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const act = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await work();
+    } catch (err) {
+      setError(authErrorText(t, err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const showCodes = (codes: string[]) => {
+    // Neither factor is needed again on this screen; do not keep them typed in.
+    setCurrent("");
+    setCode("");
+    setSaved(false);
+    setStage({ kind: "codes", codes });
+  };
+
+  if (account === null) return null;
+
+  if (stage.kind === "codes") {
+    const text = stage.codes.join("\n");
+    return (
+      <Section title={t("auth.mfa.title")}>
+        <p className="text-xs text-muted-foreground">{t("auth.mfa.codesDescription")}</p>
+        <ul
+          className="grid grid-cols-2 gap-1 rounded-md border bg-muted/40 p-2 font-mono text-xs"
+          aria-label={t("auth.mfa.codesLabel")}
+        >
+          {stage.codes.map((recovery) => (
+            <li key={recovery} dir="ltr" className="text-start">
+              {recovery}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              void (async () => {
+                try {
+                  await navigator.clipboard.writeText(text);
+                  setNote(t("auth.mfa.copied"));
+                } catch {
+                  setError(t("auth.mfa.copyFailed"));
+                }
+              })()
+            }
+          >
+            {t("auth.mfa.copy")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => downloadText("geolibre-recovery-codes.txt", `${text}\n`)}
+          >
+            {t("auth.mfa.download")}
+          </Button>
+        </div>
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={saved}
+            onChange={(event) => setSaved(event.target.checked)}
+          />
+          {t("auth.mfa.savedConfirm")}
+        </label>
+        <Button
+          type="button"
+          size="sm"
+          disabled={!saved || busy}
+          onClick={() =>
+            // Reload first: going idle on the stale account would flash "Off".
+            void act(async () => {
+              await onAccountChange();
+              setStage({ kind: "idle" });
+            })
+          }
+        >
+          {t("auth.mfa.done")}
+        </Button>
+        <StatusLines error={error} note={note} />
+      </Section>
+    );
+  }
+
+  if (stage.kind === "scan") {
+    return (
+      <Section title={t("auth.mfa.title")}>
+        <p className="text-xs text-muted-foreground">{t("auth.mfa.scanDescription")}</p>
+        <div className="flex flex-wrap items-start gap-3">
+          {/* Drawn here from the URI: the secret never goes to a QR service. */}
+          <div className="rounded-md bg-white p-2">
+            <QRCodeSVG value={stage.setup.otpauthUri} size={152} marginSize={0} />
+          </div>
+          <div className="min-w-0 flex-1 space-y-1 text-xs">
+            <p className="text-muted-foreground">{t("auth.mfa.manualEntry")}</p>
+            <code dir="ltr" className="block break-all rounded bg-muted px-2 py-1 font-mono">
+              {groupSecret(stage.setup.secret)}
+            </code>
+          </div>
+        </div>
+        <form
+          className="space-y-2"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act(async () => showCodes(await enableMfa({ token, code })));
+          }}
+        >
+          <MfaCodeField
+            id="security-mfa-enable-code"
+            label={t("auth.mfa.firstCode")}
+            value={code}
+            onChange={setCode}
+            autoFocus
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" disabled={busy || code.trim() === ""}>
+              {t("auth.mfa.enable")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setStage({ kind: "idle" });
+                setCode("");
+              }}
+            >
+              {t("common.cancel")}
+            </Button>
+          </div>
+        </form>
+        <StatusLines error={error} note={note} />
+      </Section>
+    );
+  }
+
+  if (!account.mfaEnabled) {
+    return (
+      <Section title={t("auth.mfa.title")}>
+        <p className="text-xs text-muted-foreground">{t("auth.mfa.offDescription")}</p>
+        {account.isAdmin ? (
+          <p className="text-xs font-medium text-destructive">{t("auth.mfa.adminRequired")}</p>
+        ) : null}
+        <form
+          className="space-y-2"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act(async () => {
+              const setup = await startMfaSetup({ token, currentPassword: current });
+              setCurrent("");
+              setCode("");
+              setStage({ kind: "scan", setup });
+            });
+          }}
+        >
+          <PasswordField
+            id="security-mfa-setup-password"
+            label={t("auth.currentPassword")}
+            autoComplete="current-password"
+            value={current}
+            onChange={setCurrent}
+          />
+          <Button type="submit" size="sm" disabled={busy || current === ""}>
+            {t("auth.mfa.setUp")}
+          </Button>
+        </form>
+        <StatusLines error={error} note={note} />
+      </Section>
+    );
+  }
+
+  const reauth = { token, currentPassword: current, code };
+  return (
+    <Section title={t("auth.mfa.title")}>
+      <p className="text-xs text-muted-foreground">
+        {t("auth.mfa.onDescription", { count: account.recoveryCodesLeft })}
+      </p>
+      <PasswordField
+        id="security-mfa-password"
+        label={t("auth.currentPassword")}
+        autoComplete="current-password"
+        value={current}
+        onChange={setCurrent}
+      />
+      <MfaCodeField id="security-mfa-code" value={code} onChange={setCode} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => void act(async () => showCodes(await regenerateRecoveryCodes(reauth)))}
+        >
+          {t("auth.mfa.regenerate")}
+        </Button>
+        {confirmOff ? (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  await disableMfa(reauth);
+                  setCurrent("");
+                  setCode("");
+                  setConfirmOff(false);
+                  await onAccountChange();
+                })
+              }
+            >
+              {t("auth.mfa.confirmDisable")}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmOff(false)}>
+              {t("common.cancel")}
+            </Button>
+          </>
+        ) : (
+          <Button type="button" size="sm" variant="outline" onClick={() => setConfirmOff(true)}>
+            {t("auth.mfa.disable")}
+          </Button>
+        )}
+      </div>
+      <StatusLines error={error} note={note} />
+    </Section>
+  );
+}
+
+function downloadText(filename: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function EmailSection({ token, account }: { token: string; account: AccountInfo | null }) {
   const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [current, setCurrent] = useState("");
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -231,10 +520,11 @@ function EmailSection({ token, account }: { token: string; account: AccountInfo 
     setError(null);
     setNote(null);
     try {
-      await requestEmailChange({ token, email, currentPassword: current });
+      await requestEmailChange({ token, email, currentPassword: current, code });
       // The address on the account is unchanged until the link is opened.
       setNote(t("auth.emailChange.sent", { email: email.trim() }));
       setCurrent("");
+      setCode("");
     } catch (err) {
       setError(authErrorText(t, err));
     } finally {
@@ -267,6 +557,9 @@ function EmailSection({ token, account }: { token: string; account: AccountInfo 
           value={current}
           onChange={setCurrent}
         />
+        {account?.mfaEnabled ? (
+          <MfaCodeField id="security-email-code" value={code} onChange={setCode} />
+        ) : null}
         <Button type="submit" size="sm" disabled={busy}>
           {t("auth.emailChange.submit")}
         </Button>
@@ -276,11 +569,20 @@ function EmailSection({ token, account }: { token: string; account: AccountInfo 
   );
 }
 
-function PasswordSection({ token, onToken }: { token: string; onToken: (token: string) => void }) {
+function PasswordSection({
+  token,
+  account,
+  onToken,
+}: {
+  token: string;
+  account: AccountInfo | null;
+  onToken: (token: string) => void;
+}) {
   const { t } = useTranslation();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -294,10 +596,16 @@ function PasswordSection({ token, onToken }: { token: string; onToken: (token: s
     setError(null);
     setNote(null);
     try {
-      const fresh = await changePassword({ token, currentPassword: current, password: next });
+      const fresh = await changePassword({
+        token,
+        currentPassword: current,
+        password: next,
+        code,
+      });
       setCurrent("");
       setNext("");
       setConfirm("");
+      setCode("");
       setNote(t("auth.passwordChange.changed"));
       onToken(fresh);
     } catch (err) {
@@ -333,6 +641,9 @@ function PasswordSection({ token, onToken }: { token: string; onToken: (token: s
           value={confirm}
           onChange={setConfirm}
         />
+        {account?.mfaEnabled ? (
+          <MfaCodeField id="security-password-code" value={code} onChange={setCode} />
+        ) : null}
         <Button type="submit" size="sm" disabled={busy}>
           {t("auth.passwordChange.submit")}
         </Button>

@@ -16,15 +16,20 @@ import {
   type AuthActionRow,
 } from "./auth-policy";
 import {
+  accountEmail,
+  accountHasEmail,
   emailFrom,
+  emailFromOrNull,
   empty,
   json,
   recordAuthEvent,
   requireAdmin,
   sendEmail,
+  sendEmailLater,
   type Scope,
 } from "./context";
-import { inviteEmail } from "./email";
+import { inviteEmail, mfaChangedEmail } from "./email";
+import { clearMfaStatements } from "./mfa-routes";
 import { ApiError, now, type AccountRow } from "./model";
 
 /**
@@ -79,6 +84,7 @@ interface AccountListRow {
   email_verified_at: string | null;
   created_at: string;
   disabled_at: string | null;
+  mfa_enabled_at: string | null;
   sessions: number;
   last_seen_at: string | null;
 }
@@ -191,6 +197,7 @@ export async function adminRoute(
     const rows = await db
       .prepare(
         `SELECT a.id, a.username, a.email, a.email_verified_at, a.created_at, a.disabled_at,
+                a.mfa_enabled_at,
                 (SELECT COUNT(*) FROM tokens t WHERE ${live}) AS sessions,
                 (SELECT MAX(COALESCE(t.last_used_at, t.created_at)) FROM tokens t WHERE ${live})
                   AS last_seen_at
@@ -207,6 +214,7 @@ export async function adminRoute(
         createdAt: row.created_at,
         disabledAt: row.disabled_at,
         isAdmin: row.username !== null && adminNames.has(row.username),
+        mfaEnabled: row.mfa_enabled_at !== null,
         sessions: row.sessions,
         lastSeenAt: row.last_seen_at,
       })),
@@ -252,6 +260,22 @@ export async function adminRoute(
     const target = await loadAccount(db, path[2]);
     await db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(target.id).run();
     recordAuthEvent(scope, "sessions_revoked", target.id, { by: admin.username });
+    return empty(204);
+  }
+
+  // For a lost phone with no recovery codes left. Signs the account out too:
+  // whoever has the phone may also have a session.
+  if (path.length === 4 && path[1] === "accounts" && path[3] === "mfa" && method === "DELETE") {
+    const target = await loadAccount(db, path[2]);
+    await db.batch([
+      ...clearMfaStatements(db, target.id),
+      db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(target.id),
+    ]);
+    recordAuthEvent(scope, "mfa_reset", target.id, { by: admin.username });
+    const from = emailFromOrNull(env);
+    if (from !== null && accountHasEmail(target)) {
+      sendEmailLater(scope, mfaChangedEmail(accountEmail(target), from, "reset"), "mfa reset");
+    }
     return empty(204);
   }
 

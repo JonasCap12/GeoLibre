@@ -4,13 +4,21 @@ import {
   MIN_PASSWORD_LENGTH,
   ShareAccountError,
   authErrorCode,
+  changePassword,
+  completeMfaSignIn,
   confirmEmailChange,
   confirmPasswordReset,
   createAccount,
+  disableMfa,
+  enableMfa,
   fetchAccount,
   inspectInvite,
+  mfaCodeProblem,
+  regenerateRecoveryCodes,
+  requestEmailChange,
   requestPasswordReset,
   signIn,
+  startMfaSetup,
   validateCredentials,
   validateSignIn,
 } from "../apps/geolibre-desktop/src/lib/share-account";
@@ -200,15 +208,29 @@ describe("createAccount", () => {
 describe("signIn", () => {
   it("returns the token", async () => {
     const { fetch, calls } = stubFetch(() => ({ status: 200, body: { token: "tok" } }));
-    const token = await signIn({
+    const result = await signIn({
       username: "ky-thuat-1",
       password: "longenough12",
       invite: "invite-token",
       baseUrl: BASE,
       fetchImpl: fetch,
     });
-    assert.equal(token, "tok");
+    assert.deepEqual(result, { kind: "token", token: "tok" });
     assert.deepEqual(calls[0].body, { username: "ky-thuat-1", password: "longenough12" });
+  });
+
+  it("returns the ticket when the account has two-factor on", async () => {
+    const { fetch } = stubFetch(() => ({
+      status: 200,
+      body: { mfaRequired: true, mfaTicket: "ticket-1" },
+    }));
+    const result = await signIn({
+      username: "ky-thuat-1",
+      password: "longenough12",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.deepEqual(result, { kind: "mfa", ticket: "ticket-1" });
   });
 
   it("surfaces the server's own message", async () => {
@@ -322,6 +344,26 @@ describe("authErrorCode", () => {
     );
     assert.equal(authErrorCode(401, "invalid or expired token"), "session-expired");
     assert.equal(authErrorCode(429, "anything"), "rate-limited");
+    assert.equal(authErrorCode(401, "two-factor code is incorrect"), "mfa-invalid");
+    assert.equal(authErrorCode(403, "two-factor code is incorrect"), "mfa-invalid");
+    assert.equal(authErrorCode(403, "two-factor code required"), "mfa-required");
+    assert.equal(authErrorCode(401, "sign-in step expired; sign in again"), "mfa-expired");
+    assert.equal(
+      authErrorCode(
+        403,
+        "too many wrong two-factor codes; ask an admin to reset two-factor authentication",
+      ),
+      "mfa-locked",
+    );
+    assert.equal(
+      authErrorCode(503, "two-factor authentication is not configured on this deployment"),
+      "mfa-unavailable",
+    );
+    assert.equal(
+      authErrorCode(403, "admin accounts must turn on two-factor authentication first"),
+      "admin-mfa-required",
+    );
+    assert.equal(authErrorCode(403, "admin only"), "forbidden");
   });
 
   it("leaves an unrecognised message as unknown, so the UI shows it verbatim", () => {
@@ -384,6 +426,158 @@ describe("fetchAccount", () => {
     }));
     const account = await fetchAccount({ token: "tok", baseUrl: BASE, fetchImpl: fetch });
     assert.equal(account.isAdmin, false);
+    assert.equal(account.mfaEnabled, false);
+    assert.equal(account.recoveryCodesLeft, 0);
     assert.equal(calls[0].headers.get("Authorization"), "Bearer tok");
+  });
+
+  it("reads the two-factor state", async () => {
+    const { fetch } = stubFetch(() => ({
+      status: 200,
+      body: { account: { id: "1", mfaEnabled: true, recoveryCodesLeft: 7 } },
+    }));
+    const account = await fetchAccount({ token: "tok", baseUrl: BASE, fetchImpl: fetch });
+    assert.equal(account.mfaEnabled, true);
+    assert.equal(account.recoveryCodesLeft, 7);
+  });
+});
+
+describe("two-factor", () => {
+  it("trades the ticket and a code for a token, with no bearer", async () => {
+    const { fetch, calls } = stubFetch(() => ({ status: 200, body: { token: "tok" } }));
+    const token = await completeMfaSignIn({
+      ticket: "ticket-1",
+      code: " 123 456 ",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.equal(token, "tok");
+    assert.equal(calls[0].url, `${BASE}/api/auth/mfa`);
+    assert.deepEqual(calls[0].body, { ticket: "ticket-1", code: "123 456" });
+    assert.equal(calls[0].headers.get("Authorization"), null);
+  });
+
+  it("checks the code's shape before spending one of the ticket's attempts", async () => {
+    const { fetch, calls } = stubFetch(() => ({ status: 200, body: { token: "tok" } }));
+    for (const code of ["", "12345", "1234567", "not-a-code"]) {
+      await assert.rejects(
+        () => completeMfaSignIn({ ticket: "t", code, baseUrl: BASE, fetchImpl: fetch }),
+        (error: ShareAccountError) => error.code === "mfa-invalid",
+      );
+    }
+    assert.equal(calls.length, 0);
+    assert.equal(mfaCodeProblem("123456"), null);
+    assert.equal(mfaCodeProblem("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"), null);
+    assert.equal(mfaCodeProblem("abcd efgh ijkl mnop qrst uvwx"), null);
+    assert.equal(mfaCodeProblem("ABCD-EFGH-JKLM-NPQR"), "mfa-invalid");
+  });
+
+  it("sends a code with a sensitive change only when one was typed", async () => {
+    const { fetch, calls } = stubFetch(() => ({ status: 200, body: { token: "fresh" } }));
+    await changePassword({
+      token: "tok",
+      currentPassword: "old",
+      password: NEW_PASSWORD,
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    await changePassword({
+      token: "tok",
+      currentPassword: "old",
+      password: NEW_PASSWORD,
+      code: "123456",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    await requestEmailChange({
+      token: "tok",
+      email: "new@example.test",
+      currentPassword: "old",
+      code: " ",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    // The body a server without two-factor receives is the one it always did.
+    assert.deepEqual(calls[0].body, { currentPassword: "old", password: NEW_PASSWORD });
+    assert.deepEqual(calls[1].body, {
+      currentPassword: "old",
+      password: NEW_PASSWORD,
+      code: "123456",
+    });
+    assert.deepEqual(calls[2].body, { email: "new@example.test", currentPassword: "old" });
+  });
+
+  it("reads setup and recovery codes", async () => {
+    const { fetch, calls } = stubFetch((url) =>
+      url.endsWith("/setup")
+        ? { status: 200, body: { secret: "JBSWY3DP", otpauthUri: "otpauth://totp/x" } }
+        : { status: 200, body: { recoveryCodes: ["AAAA-BBBB-CCCC-DDDD", 3] } },
+    );
+    const setup = await startMfaSetup({
+      token: "tok",
+      currentPassword: "pw",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.deepEqual(setup, { secret: "JBSWY3DP", otpauthUri: "otpauth://totp/x" });
+    const codes = await enableMfa({
+      token: "tok",
+      code: "123456",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.deepEqual(codes, ["AAAA-BBBB-CCCC-DDDD"]);
+    const fresh = await regenerateRecoveryCodes({
+      token: "tok",
+      currentPassword: "pw",
+      code: "123456",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.deepEqual(fresh, ["AAAA-BBBB-CCCC-DDDD"]);
+    await disableMfa({
+      token: "tok",
+      currentPassword: "pw",
+      code: "123456",
+      baseUrl: BASE,
+      fetchImpl: fetch,
+    });
+    assert.deepEqual(
+      calls.map((call) => call.url.slice(BASE.length)),
+      [
+        "/api/auth/mfa/setup",
+        "/api/auth/mfa/enable",
+        "/api/auth/mfa/recovery-codes",
+        "/api/auth/mfa/disable",
+      ],
+    );
+    for (const call of calls) assert.equal(call.headers.get("Authorization"), "Bearer tok");
+  });
+
+  it("refuses an enable reply without codes rather than showing an empty list", async () => {
+    const { fetch } = stubFetch(() => ({ status: 200, body: { recoveryCodes: [] } }));
+    await assert.rejects(
+      () => enableMfa({ token: "tok", code: "123456", baseUrl: BASE, fetchImpl: fetch }),
+      /recovery codes/,
+    );
+  });
+
+  it("refuses a create-account fallback that asks for a second factor", async () => {
+    const { fetch } = stubFetch((url) =>
+      url.endsWith("/api/accounts")
+        ? { status: 201, body: { account: {} } }
+        : { status: 200, body: { mfaRequired: true, mfaTicket: "t" } },
+    );
+    await assert.rejects(
+      () =>
+        createAccount({
+          username: "ky-thuat-1",
+          password: NEW_PASSWORD,
+          invite: "invite-token",
+          baseUrl: BASE,
+          fetchImpl: fetch,
+        }),
+      /did not return a token/,
+    );
   });
 });
