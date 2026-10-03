@@ -2133,7 +2133,7 @@
       "mfaInvalid": "That code is not right. Enter the current six-digit code or an unused recovery code.",
       "mfaRequired": "Enter your two-factor code as well.",
       "mfaExpired": "That sign-in took too long. Enter your password again.",
-      "mfaLocked": "Too many wrong codes. Ask an admin to reset two-factor authentication for this account.",
+      "mfaLocked": "Too many wrong codes. Wait 15 minutes, or sign in with a recovery code.",
       "mfaUnavailable": "Two-factor authentication is not set up on this server yet. Ask the admin.",
       "adminMfaRequired": "Admin tools need two-factor authentication. Turn it on in Account & security first."
     }

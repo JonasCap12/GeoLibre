@@ -423,15 +423,47 @@ export const MFA_TICKET_TTL_MS = 5 * 60 * 1000;
 /** Wrong codes one ticket absorbs before the password has to be typed again. */
 export const MFA_TICKET_MAX_ATTEMPTS = 5;
 /**
- * Consecutive wrong codes after which the account stops accepting them until
- * an admin resets its second factor.
+ * Consecutive wrong codes after which authenticator codes slow to one per
+ * MFA_LOCK_COOLDOWN_MS. Without it the per-ticket and per-minute limits still
+ * allow a fast, endless guess at a six-digit code (NIST SP 800-63B-4 §3.2.2).
  *
- * Only someone who already has the password reaches this check, so stopping
- * here cannot be used to lock a colleague out the way a password lockout can.
- * Without it the per-ticket and per-minute limits still allow a slow, endless
- * guess at a six-digit code (NIST SP 800-63B-4 §3.2.2 caps it at 100).
+ * A cooldown, not a lock until an admin resets the factor. Anyone holding a
+ * leaked password could otherwise lock its owner out for good with ten wrong
+ * codes, and this deployment has a single admin, whose own lock would need a
+ * hand edit of D1 to undo.
  */
 export const MFA_MAX_CONSECUTIVE_FAILURES = 10;
+/**
+ * Past the limit, the wait after each further wrong code. At one guess per 15
+ * minutes, a random six-digit guess has a 1-in-a-million chance per try: about
+ * 28 years of continuous trying for even odds.
+ */
+export const MFA_LOCK_COOLDOWN_MS = 15 * 60 * 1000;
+
+/**
+ * Whether an authenticator code may be checked now.
+ *
+ * Recovery codes are never subject to this: each carries 120 random bits, so
+ * there is nothing to throttle, and they are the way out for a person who
+ * mistyped their way into the cooldown.
+ *
+ * @param lastFailureIso - When the latest wrong code was recorded, or null.
+ */
+export function mfaLockRefusal(
+  failedAttempts: number,
+  lastFailureIso: string | null,
+  nowMs: number,
+): "locked" | null {
+  if (failedAttempts < MFA_MAX_CONSECUTIVE_FAILURES) return null;
+  if (lastFailureIso === null) return null;
+  const last = Date.parse(lastFailureIso);
+  if (!Number.isFinite(last)) return null;
+  return nowMs - last < MFA_LOCK_COOLDOWN_MS ? "locked" : null;
+}
+
+/** The `error` for an authenticator code refused during the cooldown. */
+export const MFA_LOCKED_MESSAGE =
+  "too many wrong two-factor codes; wait 15 minutes or use a recovery code";
 
 export interface MfaTicketRow {
   digest: string;
