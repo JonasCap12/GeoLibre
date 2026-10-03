@@ -48,16 +48,23 @@
     // projectUrl are built from, so a wrong value ships broken links in every
     // project response.
     "GEOLIBRE_PUBLIC_URL": "https://geolibre-projects-api.jonasnguyen886.workers.dev",
-    // Where GET /{username}/{slug} redirects, and the base of viewerUrl. Points
-    // at the workers/web deployment (same account subdomain, different Worker
-    // name) — update this if a custom domain is bound to either Worker later.
-    "GEOLIBRE_VIEWER_URL": "https://geolibre-web.jonasnguyen886.workers.dev",
+    // Where GET /{username}/{slug} redirects, and the base of viewerUrl and of
+    // every link in account mail (invite, reset, email confirmation). The
+    // workers/web deployment's custom domain, which is where the team signs
+    // in: the session lives in that origin's storage, so a link to the
+    // workers.dev hostname would leave someone signed in on the wrong origin.
+    "GEOLIBRE_VIEWER_URL": "https://gis.jonasnguyen.uk",
     // Comma-separated browser origins allowed to call this API. Unlike the
     // Python default of "*", this has no wildcard default: the app and the API
     // are on different hostnames here, so an operator has to name the app
     // origin anyway, and a deployment that forgets should fail visibly in the
     // browser rather than quietly accept every origin on the internet.
-    "GEOLIBRE_CORS_ORIGINS": "https://geolibre-web.jonasnguyen886.workers.dev",
+    //
+    // Both hostnames of workers/web: the custom domain the team uses, and the
+    // workers.dev one, which still serves the same app. This list also decides
+    // which hostnames a Turnstile token may come from (src/turnstile.ts), so
+    // the Turnstile widget must list the same two.
+    "GEOLIBRE_CORS_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev",
     // Comma-separated admin usernames. Empty or omitted means nobody can mint
     // invites — an unconfigured deployment must not be seedable by a stranger.
     "GEOLIBRE_ADMIN_USERNAMES": "nguyen-minh-nhut",
