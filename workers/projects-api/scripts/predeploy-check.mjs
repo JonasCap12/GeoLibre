@@ -15,8 +15,21 @@
 //    and admin routes require it, so no invite can be sent.
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 const DATABASE = "geolibre-projects";
+
+// Wrangler's own entry point, run with this Node. Going through `npx` would
+// need a shell on Windows (npx.cmd), and a shell splits `PRAGMA table_info(x);`
+// into separate arguments. The bin path is read from package.json because
+// wrangler's `exports` does not expose it to require.resolve.
+const wranglerManifest = createRequire(import.meta.url).resolve("wrangler/package.json");
+const WRANGLER = join(
+  dirname(wranglerManifest),
+  JSON.parse(readFileSync(wranglerManifest, "utf8")).bin.wrangler,
+);
 
 const REQUIRED_COLUMNS = {
   accounts: [
@@ -42,11 +55,9 @@ const REQUIRED_COLUMNS = {
 const REQUIRED_SECRETS = ["TURNSTILE_SECRET_KEY", "MFA_ENCRYPTION_KEY"];
 
 function wrangler(args) {
-  const result = spawnSync("npx", ["wrangler", ...args], {
+  const result = spawnSync(process.execPath, [WRANGLER, ...args], {
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
-    // npx is npx.cmd on Windows, which Node will not resolve without a shell.
-    shell: process.platform === "win32",
   });
   if (result.status !== 0) {
     console.error(`wrangler ${args.join(" ")} failed:`);
