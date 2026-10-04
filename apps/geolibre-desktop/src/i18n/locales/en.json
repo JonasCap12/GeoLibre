@@ -1947,7 +1947,6 @@
     "confirmPassword": "Confirm password",
     "showPassword": "Show password",
     "hidePassword": "Hide password",
-    "passwordHint": "At least {{count}} characters. A few unrelated words make a strong, memorable password.",
     "inviteOnly": "Accounts are by invitation. Ask an administrator for an invite.",
     "continue": "Continue",
     "loading": "Loading…",
@@ -2135,7 +2134,9 @@
       "mfaExpired": "That sign-in took too long. Enter your password again.",
       "mfaLocked": "Too many wrong codes. Wait 15 minutes, or sign in with a recovery code.",
       "mfaUnavailable": "Two-factor authentication is not set up on this server yet. Ask the admin.",
-      "adminMfaRequired": "Admin tools need two-factor authentication. Turn it on in Account & security first."
+      "adminMfaRequired": "Admin tools need two-factor authentication. Turn it on in Account & security first.",
+      "passwordCommon": "This password is too common or easy to guess. Choose a different one.",
+      "passwordWeak": "This password is too weak. Make it longer or mix in other kinds of characters."
     },
     "center": {
       "title": "Account",
@@ -2186,6 +2187,28 @@
         "unlock": "Turn on two-factor authentication"
       },
       "adminArea": "Admin area: changes here affect every member."
+    },
+    "strength": {
+      "empty": "Enter a password",
+      "level": {
+        "0": "Very weak",
+        "1": "Weak",
+        "2": "Fair",
+        "3": "Strong",
+        "4": "Very strong"
+      },
+      "rule": {
+        "length": "At least {{count}} characters",
+        "personal": "Doesn't contain your username or email name",
+        "predictable": "Not a common or predictable password",
+        "strength": "Strength “{{level}}” or better"
+      },
+      "met": "Met:",
+      "notMet": "Not met:",
+      "tip": "Tip: 3–4 unrelated words, or a mix of letters, numbers and symbols, make a strong password.",
+      "breachNote": "When saved, it is also checked against passwords exposed in data breaches.",
+      "match": "Passwords match",
+      "mismatch": "Passwords don't match yet"
     }
   },
   "basemapExtract": {
@@ -2620,7 +2643,6 @@
       "accountNewPassword": "New password",
       "accountChangePassword": "Change password",
       "accountPasswordChanged": "Password changed. Save Settings to keep the new token.",
-      "accountPasswordShort": "Password must be at least {{count}} characters.",
       "accountUsernameOrEmail": "Username or email",
       "accountCreateInBrowser": "To create an account, open the invite link from your email in a web browser, then sign in here."
     },

@@ -12,7 +12,6 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
-  MIN_PASSWORD_LENGTH,
   changePassword,
   disableMfa,
   enableMfa,
@@ -31,6 +30,7 @@ import { describeUserAgent } from "../../lib/user-agent";
 import { authCodeText, authErrorText } from "./auth-error-text";
 import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
+import { PasswordMatch, PasswordStrength } from "./PasswordStrength";
 
 // The panels of the account center (AccountCenter.tsx). Each is a self-contained
 // card with its own busy and error state, so one failing form never blanks
@@ -590,7 +590,10 @@ export function PasswordSection({
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const problem = newPasswordProblem(next);
+    const problem = newPasswordProblem(next, {
+      username: account?.username,
+      email: account?.email,
+    });
     if (problem) return setError(authCodeText(t, problem));
     if (next !== confirm) return setError(authCodeText(t, "password-mismatch"));
     setBusy(true);
@@ -636,7 +639,12 @@ export function PasswordSection({
           autoComplete="new-password"
           value={next}
           onChange={setNext}
-          hint={t("auth.passwordHint", { count: MIN_PASSWORD_LENGTH })}
+          describedBy="security-new-password-strength"
+        />
+        <PasswordStrength
+          id="security-new-password-strength"
+          password={next}
+          context={{ username: account?.username, email: account?.email }}
         />
         <PasswordField
           id="security-confirm-password"
@@ -645,6 +653,7 @@ export function PasswordSection({
           value={confirm}
           onChange={setConfirm}
         />
+        <PasswordMatch password={next} confirm={confirm} />
         {account?.mfaEnabled ? (
           <MfaCodeField id="security-password-code" value={code} onChange={setCode} />
         ) : null}

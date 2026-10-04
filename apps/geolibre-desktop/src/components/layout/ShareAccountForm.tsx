@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isTauri } from "../../lib/is-tauri";
 import {
-  MIN_PASSWORD_LENGTH,
   ShareAccountError,
   USERNAME_PATTERN,
   changePassword,
@@ -104,7 +103,7 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
       if (problem) return setError(authCodeText(t, problem));
     } else {
       if (!USERNAME_PATTERN.test(username)) return setError(authCodeText(t, "username-invalid"));
-      const problem = newPasswordProblem(password);
+      const problem = newPasswordProblem(password, { username });
       if (problem) return setError(authCodeText(t, problem));
       if (turnstileRequired() && !turnstile) return setError(t("auth.botCheckPending"));
     }
@@ -151,8 +150,9 @@ export function ShareAccountForm({ onToken, onSignedOut, token, hasToken }: Shar
   };
 
   const change = async () => {
-    if (newPasswordProblem(nextPassword) !== null) {
-      setError(t("settings.env.accountPasswordShort", { count: MIN_PASSWORD_LENGTH }));
+    const problem = newPasswordProblem(nextPassword, { username });
+    if (problem !== null) {
+      setError(authCodeText(t, problem));
       return;
     }
     setBusy(true);

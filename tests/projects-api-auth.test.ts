@@ -97,10 +97,10 @@ describe("password reset", () => {
 });
 
 describe("password policy", () => {
-  it("rejects 14 characters and accepts 15 (NIST 800-63B-4, single factor)", () => {
-    assert.equal(MIN_PASSWORD_LENGTH, 15);
-    assert.equal(passwordPolicyError("x".repeat(14)), "too-short");
-    assert.equal(passwordPolicyError("x".repeat(15)), null);
+  it("sets the floor at 8 characters (OWASP ASVS 5.0 V6.2.1)", () => {
+    assert.equal(MIN_PASSWORD_LENGTH, 8);
+    assert.equal(passwordPolicyError("dung2k3"), "too-short");
+    assert.equal(passwordPolicyError("dung2k3!"), null);
   });
 
   it("requires the current password to be checked by the caller", () => {

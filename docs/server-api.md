@@ -312,13 +312,17 @@ carries `Retry-After` in seconds.
 - `POST /api/accounts` additionally requires `invite` (the token from the
   invite link) and, when the deployment enables Cloudflare Turnstile,
   `turnstileToken`. The account takes the invite's email address, already
-  verified. A new password must be 15–1024 characters, must not contain the
-  username, the name part of the email or the product name, and must not appear
-  in a known breach corpus; `422` names the reason.
+  verified. A new password must be 8–1024 characters, must not contain the
+  username, the name part of the email or the product name, must not be a
+  common or predictable password (`password is too common or predictable`),
+  must reach a minimum estimated strength (`password is too weak; make it
+  longer or less predictable`), and must not appear in a known breach corpus;
+  `422` names the reason. The rules are in
+  `workers/projects-api/src/password-strength.ts`.
 - `POST /api/auth/token` accepts an email address in `username`; the key is
   unchanged. Unknown account and wrong password are the same `401`. A disabled
-  account is `403` once the password is right. Passwords set before the
-  15-character rule keep working.
+  account is `403` once the password is right. Passwords set under earlier
+  rules keep working; the rules apply when a password is set.
 - Tokens now expire: 30 days after issue and after 7 days unused (both
   configurable). An expired token is `401`, like a revoked one.
 - When the account has two-factor authentication on, a correct password to

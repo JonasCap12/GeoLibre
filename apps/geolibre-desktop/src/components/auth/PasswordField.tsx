@@ -10,6 +10,8 @@ interface PasswordFieldProps {
   onChange: (value: string) => void;
   autoComplete: "current-password" | "new-password";
   hint?: string;
+  /** Id of a further description, such as the strength panel below the field. */
+  describedBy?: string;
 }
 
 /**
@@ -26,10 +28,12 @@ export function PasswordField({
   onChange,
   autoComplete,
   hint,
+  describedBy,
 }: PasswordFieldProps) {
   const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
   const hintId = hint ? `${id}-hint` : undefined;
+  const described = [hintId, describedBy].filter(Boolean).join(" ") || undefined;
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id}>{label}</Label>
@@ -42,7 +46,7 @@ export function PasswordField({
           autoCorrect="off"
           spellCheck={false}
           className="pe-10"
-          aria-describedby={hintId}
+          aria-describedby={described}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
