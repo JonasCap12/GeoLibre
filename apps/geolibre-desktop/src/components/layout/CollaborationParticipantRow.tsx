@@ -1,5 +1,5 @@
 import type { CollaborationMode, CollaborationParticipant } from "@geolibre/core";
-import { Eye, Pencil, UserX, Ban } from "lucide-react";
+import { Eye, MonitorPlay, Pencil, Presentation, UserX, Ban } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { participantCanEdit } from "../../lib/collab-protocol";
 
@@ -16,6 +16,16 @@ interface CollaborationParticipantRowProps {
   onSetParticipantMode: (clientId: string, canEdit: boolean) => void;
   onKickParticipant?: (clientId: string) => void;
   onBlockParticipant?: (clientId: string) => void;
+  /** True when the local camera is following this participant. */
+  following?: boolean;
+  /** True when this participant has published a camera at least once. */
+  hasView?: boolean;
+  /** Follow this person, or pass null to stop. Omitted hides the control. */
+  onFollow?: (clientId: string | null) => void;
+  /** True when this participant is the session's presenter. */
+  presenting?: boolean;
+  /** Claim or release presenting. Shown only on the local user's row. */
+  onPresent?: (active: boolean) => void;
   /** Render the smaller variant used in the on-canvas badge roster. */
   compact?: boolean;
 }
@@ -34,6 +44,11 @@ export function CollaborationParticipantRow({
   onSetParticipantMode,
   onKickParticipant,
   onBlockParticipant,
+  following = false,
+  hasView = false,
+  onFollow,
+  presenting = false,
+  onPresent,
   compact = false,
 }: CollaborationParticipantRowProps) {
   const { t } = useTranslation();
@@ -47,9 +62,23 @@ export function CollaborationParticipantRow({
     <Eye className="h-3 w-3" aria-hidden="true" />
   );
   const permLabel = editable ? t("collaborate.canEdit") : t("collaborate.viewOnly");
+  const followLabel = hasView
+    ? t("collaborate.followScreen", { name: p.displayName })
+    : t("collaborate.followWhenMoves", { name: p.displayName });
+  const followButtonLabel = following ? t("collaborate.stopFollowing") : followLabel;
 
   return (
-    <li className={`flex items-center gap-2 ${compact ? "text-xs" : "text-sm"}`}>
+    <li
+      className={`flex items-center gap-2 rounded-sm ${following ? "border px-1 py-0.5" : ""} ${compact ? "text-xs" : "text-sm"}`}
+      style={
+        following
+          ? {
+              borderColor: p.color,
+              backgroundColor: `color-mix(in srgb, ${p.color} 14%, transparent)`,
+            }
+          : undefined
+      }
+    >
       <span
         className={`${compact ? "h-2.5 w-2.5" : "h-3 w-3"} shrink-0 rounded-full`}
         style={{ backgroundColor: p.color }}
@@ -66,6 +95,50 @@ export function CollaborationParticipantRow({
           className={`rounded bg-muted py-0.5 ${compact ? "px-1 text-[10px]" : "px-1.5 text-xs"}`}
         >
           {t("collaborate.host")}
+        </span>
+      )}
+      {!isSelf && onFollow && (
+        <button
+          type="button"
+          aria-pressed={following}
+          aria-label={followButtonLabel}
+          title={followButtonLabel}
+          onClick={() => onFollow(following ? null : p.clientId)}
+          className="shrink-0 rounded p-0.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+          style={following ? { color: p.color } : undefined}
+        >
+          <MonitorPlay className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} aria-hidden="true" />
+        </button>
+      )}
+      {following && !compact && (
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          {t("collaborate.following")}
+        </span>
+      )}
+      {isSelf && onPresent && (
+        <button
+          type="button"
+          aria-pressed={presenting}
+          aria-label={
+            presenting ? t("collaborate.stopPresenting") : t("collaborate.presentToEveryone")
+          }
+          title={presenting ? t("collaborate.stopPresenting") : t("collaborate.presentToEveryone")}
+          onClick={() => onPresent(!presenting)}
+          className={`shrink-0 rounded p-0.5 text-muted-foreground transition hover:bg-accent hover:text-foreground ${compact ? "" : "flex items-center gap-1 px-1 text-xs"}`}
+        >
+          <Presentation className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} aria-hidden="true" />
+          {!compact && (
+            <span>
+              {presenting ? t("collaborate.stopPresenting") : t("collaborate.presentToEveryone")}
+            </span>
+          )}
+        </button>
+      )}
+      {presenting && (
+        <span
+          className={`shrink-0 rounded bg-muted py-0.5 text-muted-foreground ${compact ? "px-1 text-[10px]" : "px-1.5 text-xs"}`}
+        >
+          {t("collaborate.presenting")}
         </span>
       )}
       {!isHostRow &&

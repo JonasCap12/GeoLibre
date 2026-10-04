@@ -223,7 +223,8 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
             onKickParticipant={api.kickParticipant}
             onBlockParticipant={api.blockParticipant}
             onSetSessionConfig={api.setSessionConfig}
-            onSetFollowHost={api.setFollowHost}
+            onFollow={api.setFollow}
+            onPresent={api.setPresenting}
           />
         ) : (
           <div className="space-y-4">
@@ -430,7 +431,8 @@ function ActiveSession({
   onKickParticipant,
   onBlockParticipant,
   onSetSessionConfig,
-  onSetFollowHost,
+  onFollow,
+  onPresent,
 }: {
   sessionName: string | null;
   shareLink: string;
@@ -443,7 +445,8 @@ function ActiveSession({
   onKickParticipant?: (clientId: string) => void;
   onBlockParticipant?: (clientId: string) => void;
   onSetSessionConfig?: (config: { requireIdentity?: boolean }) => void;
-  onSetFollowHost: (enabled: boolean) => void;
+  onFollow: (clientId: string | null) => void;
+  onPresent: (active: boolean) => void;
 }) {
   const { t } = useTranslation();
   const collaboration = useAppStore((s) => s.collaboration);
@@ -465,18 +468,6 @@ function ActiveSession({
           </>
         )}
       </div>
-
-      {!isHost && (
-        <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={collaboration.followHost}
-            onChange={(e) => onSetFollowHost(e.target.checked)}
-            className="h-4 w-4 accent-foreground"
-          />
-          {t("collaborate.followHost")}
-        </label>
-      )}
 
       {isHost && collaboration.identitySupported && (
         <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
@@ -562,6 +553,11 @@ function ActiveSession({
               onSetParticipantMode={onSetParticipantMode}
               onKickParticipant={onKickParticipant}
               onBlockParticipant={onBlockParticipant}
+              following={p.clientId === collaboration.followClientId}
+              hasView={Boolean(collaboration.presence[p.clientId]?.view)}
+              onFollow={onFollow}
+              presenting={p.clientId === collaboration.presenterClientId}
+              onPresent={onPresent}
             />
           ))}
         </ul>

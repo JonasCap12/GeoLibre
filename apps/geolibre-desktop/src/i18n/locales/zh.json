@@ -1346,7 +1346,6 @@
     "connecting": "正在连接…",
     "reconnecting": "正在重新连接…",
     "connected": "实时会话已激活",
-    "followHost": "跟随主持人视图",
     "goToMap": "前往地图并协作",
     "goToMapViewOnly": "前往地图并观看",
     "collapseRoster": "折叠参与者名单",

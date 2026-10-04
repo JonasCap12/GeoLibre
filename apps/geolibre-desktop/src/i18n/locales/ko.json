@@ -1346,7 +1346,6 @@
     "connecting": "연결 중…",
     "reconnecting": "재연결 중…",
     "connected": "실시간 세션 활성화됨",
-    "followHost": "호스트 화면 따라가기",
     "goToMap": "지도로 이동하여 공동작업",
     "goToMapViewOnly": "지도로 이동하여 보기",
     "collapseRoster": "참가자 목록 접기",
