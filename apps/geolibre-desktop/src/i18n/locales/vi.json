@@ -2027,6 +2027,54 @@
       "mfaLocked": "Nhập sai mã quá nhiều lần. Hãy chờ 15 phút, hoặc đăng nhập bằng mã khôi phục.",
       "mfaUnavailable": "Máy chủ này chưa cấu hình xác thực hai bước. Hãy liên hệ quản trị viên.",
       "adminMfaRequired": "Công cụ quản trị cần xác thực hai bước. Hãy bật trong Tài khoản & bảo mật trước."
+    },
+    "center": {
+      "title": "Tài khoản",
+      "noEmail": "Chưa có email",
+      "nav": {
+        "label": "Các mục tài khoản",
+        "personal": "Tài khoản của bạn",
+        "admin": "Quản trị",
+        "overview": "Tổng quan",
+        "security": "Bảo mật",
+        "email": "Email",
+        "sessions": "Thiết bị"
+      },
+      "role": {
+        "admin": "Quản trị viên",
+        "member": "Thành viên"
+      },
+      "description": {
+        "overview": "Thông tin tài khoản của bạn trong một trang.",
+        "security": "Xác thực hai bước và mật khẩu.",
+        "email": "Địa chỉ dùng để đặt lại mật khẩu và nhận thông báo bảo mật.",
+        "sessions": "Mọi trình duyệt và thiết bị đang đăng nhập tài khoản này.",
+        "invites": "Mời thành viên qua email. Mỗi link chỉ dùng một lần và hết hạn sau 72 giờ.",
+        "members": "Tất cả tài khoản trên hệ thống này.",
+        "activity": "Đăng nhập và thay đổi bảo mật của mọi tài khoản."
+      },
+      "hero": {
+        "admin": "Bạn có quyền mời thành viên, quản lý tài khoản và xem nhật ký đăng nhập.",
+        "member": "Quản lý cách bạn đăng nhập và giữ an toàn cho tài khoản."
+      },
+      "stat": {
+        "email": "Email",
+        "emailVerified": "Đã xác thực",
+        "emailMissing": "Chưa thêm",
+        "mfa": "Xác thực hai bước",
+        "mfaOn": "Đang bật",
+        "mfaOff": "Đang tắt",
+        "recovery": "Mã khôi phục",
+        "recoveryLeft_other": "Còn {{count}} mã",
+        "sessions": "Thiết bị đang đăng nhập",
+        "sessionsActive_other": "{{count}} thiết bị"
+      },
+      "adminTools": {
+        "title": "Công cụ quản trị",
+        "locked": "Hãy bật xác thực hai bước để dùng các công cụ quản trị.",
+        "unlock": "Bật xác thực hai bước"
+      },
+      "adminArea": "Khu vực quản trị: thay đổi ở đây ảnh hưởng tới mọi thành viên."
     }
   },
   "basemapExtract": {

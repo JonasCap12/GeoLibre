@@ -1,14 +1,12 @@
+import { Button, Input, Label } from "@geolibre/ui";
 import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  Input,
-  Label,
-} from "@geolibre/ui";
-import { Monitor } from "lucide-react";
+  KeyRound,
+  Mail,
+  Monitor,
+  MonitorSmartphone,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -34,16 +32,9 @@ import { authCodeText, authErrorText } from "./auth-error-text";
 import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
 
-interface AccountSecurityDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  token: string;
-  account: AccountInfo | null;
-  /** Stores a replacement bearer, or "" once this session has ended. */
-  onToken: (token: string) => void;
-  /** Reloads `account` after a change this dialog made (two-factor on or off). */
-  onAccountChange: () => Promise<void>;
-}
+// The panels of the account center (AccountCenter.tsx). Each is a self-contained
+// card with its own busy and error state, so one failing form never blanks
+// another.
 
 export function formatAuthDate(iso: string | null): string {
   if (!iso) return "—";
@@ -61,10 +52,31 @@ export function deviceName(t: TFunction, userAgent: string | null): string {
   return userAgent || t("auth.sessions.unknownDevice");
 }
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+/** A titled card. Every panel in the account center and the admin area uses it. */
+export function Section({
+  title,
+  description,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  description?: ReactNode;
+  icon?: LucideIcon;
+  children: ReactNode;
+}) {
   return (
-    <section className="space-y-2 border-t pt-3 first:border-t-0 first:pt-0">
-      <h3 className="text-sm font-semibold">{title}</h3>
+    <section className="space-y-3 rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+      <header className="flex items-start gap-3">
+        {Icon ? (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <Icon className="h-4 w-4" aria-hidden />
+          </span>
+        ) : null}
+        <div className="min-w-0 space-y-0.5 text-start">
+          <h3 className="text-sm font-semibold leading-tight">{title}</h3>
+          {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+        </div>
+      </header>
       {children}
     </section>
   );
@@ -83,40 +95,13 @@ export function StatusLines({ error, note }: { error: string | null; note?: stri
   );
 }
 
-export function AccountSecurityDialog({
-  open,
-  onOpenChange,
+export function SessionsSection({
   token,
-  account,
   onToken,
-  onAccountChange,
-}: AccountSecurityDialogProps) {
-  const { t } = useTranslation();
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{t("auth.security.title")}</DialogTitle>
-          <DialogDescription>
-            {account?.username
-              ? t("auth.security.description", { username: account.username })
-              : null}
-          </DialogDescription>
-        </DialogHeader>
-        {open ? (
-          <div className="space-y-4">
-            <SessionsSection token={token} onToken={onToken} />
-            <MfaSection token={token} account={account} onAccountChange={onAccountChange} />
-            <EmailSection token={token} account={account} />
-            <PasswordSection token={token} account={account} onToken={onToken} />
-          </div>
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function SessionsSection({ token, onToken }: { token: string; onToken: (token: string) => void }) {
+}: {
+  token: string;
+  onToken: (token: string) => void;
+}) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -148,8 +133,11 @@ function SessionsSection({ token, onToken }: { token: string; onToken: (token: s
   };
 
   return (
-    <Section title={t("auth.sessions.title")}>
-      <p className="text-xs text-muted-foreground">{t("auth.sessions.description")}</p>
+    <Section
+      title={t("auth.sessions.title")}
+      description={t("auth.sessions.description")}
+      icon={MonitorSmartphone}
+    >
       {sessions === null && error === null ? (
         <p className="text-xs text-muted-foreground">{t("auth.loading")}</p>
       ) : null}
@@ -237,7 +225,7 @@ type MfaStage =
   | { kind: "scan"; setup: MfaSetup }
   | { kind: "codes"; codes: string[] };
 
-function MfaSection({
+export function MfaSection({
   token,
   account,
   onAccountChange,
@@ -282,8 +270,11 @@ function MfaSection({
   if (stage.kind === "codes") {
     const text = stage.codes.join("\n");
     return (
-      <Section title={t("auth.mfa.title")}>
-        <p className="text-xs text-muted-foreground">{t("auth.mfa.codesDescription")}</p>
+      <Section
+        title={t("auth.mfa.title")}
+        description={t("auth.mfa.codesDescription")}
+        icon={ShieldCheck}
+      >
         <ul
           className="grid grid-cols-2 gap-1 rounded-md border bg-muted/40 p-2 font-mono text-xs"
           aria-label={t("auth.mfa.codesLabel")}
@@ -350,8 +341,11 @@ function MfaSection({
 
   if (stage.kind === "scan") {
     return (
-      <Section title={t("auth.mfa.title")}>
-        <p className="text-xs text-muted-foreground">{t("auth.mfa.scanDescription")}</p>
+      <Section
+        title={t("auth.mfa.title")}
+        description={t("auth.mfa.scanDescription")}
+        icon={ShieldCheck}
+      >
         <div className="flex flex-wrap items-start gap-3">
           {/* Drawn here from the URI: the secret never goes to a QR service. */}
           <div className="rounded-md bg-white p-2">
@@ -403,8 +397,11 @@ function MfaSection({
 
   if (!account.mfaEnabled) {
     return (
-      <Section title={t("auth.mfa.title")}>
-        <p className="text-xs text-muted-foreground">{t("auth.mfa.offDescription")}</p>
+      <Section
+        title={t("auth.mfa.title")}
+        description={t("auth.mfa.offDescription")}
+        icon={ShieldCheck}
+      >
         {account.isAdmin ? (
           <p className="text-xs font-medium text-destructive">{t("auth.mfa.adminRequired")}</p>
         ) : null}
@@ -439,10 +436,11 @@ function MfaSection({
 
   const reauth = { token, currentPassword: current, code };
   return (
-    <Section title={t("auth.mfa.title")}>
-      <p className="text-xs text-muted-foreground">
-        {t("auth.mfa.onDescription", { count: account.recoveryCodesLeft })}
-      </p>
+    <Section
+      title={t("auth.mfa.title")}
+      description={t("auth.mfa.onDescription", { count: account.recoveryCodesLeft })}
+      icon={ShieldCheck}
+    >
       <PasswordField
         id="security-mfa-password"
         label={t("auth.currentPassword")}
@@ -504,7 +502,7 @@ function downloadText(filename: string, text: string): void {
   URL.revokeObjectURL(url);
 }
 
-function EmailSection({ token, account }: { token: string; account: AccountInfo | null }) {
+export function EmailSection({ token, account }: { token: string; account: AccountInfo | null }) {
   const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [current, setCurrent] = useState("");
@@ -533,12 +531,15 @@ function EmailSection({ token, account }: { token: string; account: AccountInfo 
   };
 
   return (
-    <Section title={t("auth.emailChange.title")}>
-      <p className="text-xs text-muted-foreground">
-        {account?.email
+    <Section
+      title={t("auth.emailChange.title")}
+      description={
+        account?.email
           ? t("auth.emailChange.currentAddress", { email: account.email })
-          : t("auth.emailChange.noAddress")}
-      </p>
+          : t("auth.emailChange.noAddress")
+      }
+      icon={Mail}
+    >
       <form onSubmit={(event) => void onSubmit(event)} className="space-y-2" noValidate>
         <div className="space-y-1.5">
           <Label htmlFor="security-new-email">{t("auth.emailChange.newAddress")}</Label>
@@ -569,7 +570,7 @@ function EmailSection({ token, account }: { token: string; account: AccountInfo 
   );
 }
 
-function PasswordSection({
+export function PasswordSection({
   token,
   account,
   onToken,
@@ -616,8 +617,11 @@ function PasswordSection({
   };
 
   return (
-    <Section title={t("auth.passwordChange.title")}>
-      <p className="text-xs text-muted-foreground">{t("auth.passwordChange.description")}</p>
+    <Section
+      title={t("auth.passwordChange.title")}
+      description={t("auth.passwordChange.description")}
+      icon={KeyRound}
+    >
       <form onSubmit={(event) => void onSubmit(event)} className="space-y-2" noValidate>
         <PasswordField
           id="security-current-password"
