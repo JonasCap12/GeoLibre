@@ -133,7 +133,7 @@ describe("deployment config", () => {
   it("lets the custom domain use the tiles proxy routes", () => {
     assert.match(
       read("../workers/tiles/wrangler.selfhost.jsonc"),
-      /"ALLOWED_PROXY_ORIGINS": "https:\/\/gis\.jonasnguyen\.uk"/,
+      /"ALLOWED_PROXY_ORIGINS": "[^"]*https:\/\/gis\.jonasnguyen\.uk[,"]/,
     );
   });
 
@@ -177,6 +177,116 @@ describe("web header copies", () => {
     const headers = read("../apps/geolibre-desktop/public/_headers");
     for (const [name, value] of APP_SECURITY_HEADERS) {
       assert.ok(headers.includes(`\n  ${name}: ${value}\n`), `${name} differs from _headers`);
+    }
+  });
+});
+
+describe("two-factor for every account", async () => {
+  const {
+    isMfaEnrollmentRoute,
+    mfaDeadline,
+    mfaEnrollmentRequired,
+    mfaRequirement,
+    MFA_ENROLLMENT_REQUIRED_MESSAGE,
+  } = await import("../workers/projects-api/src/auth-policy");
+  const { authErrorCode } = await import("../apps/geolibre-desktop/src/lib/share-account");
+  const policy = mfaRequirement("2026-10-04", "7");
+  const day = 24 * 60 * 60 * 1000;
+  const from = Date.parse("2026-10-04");
+  const old = { created_at: "2026-09-01T00:00:00.000Z", mfa_enabled_at: null, mfa_secret: null };
+
+  it("gives an existing account seven days from the start", () => {
+    assert.equal(mfaDeadline(old, policy), new Date(from + 7 * day).toISOString());
+    assert.equal(mfaEnrollmentRequired(old, policy, from + 7 * day - 1), false);
+    assert.equal(mfaEnrollmentRequired(old, policy, from + 7 * day), true);
+  });
+
+  it("gives an account created later its own seven days", () => {
+    const fresh = { ...old, created_at: "2026-11-01T00:00:00.000Z" };
+    assert.equal(mfaDeadline(fresh, policy), "2026-11-08T00:00:00.000Z");
+  });
+
+  it("asks nothing of an account that has it on, or when the requirement is off", () => {
+    const enrolled = { ...old, mfa_enabled_at: "2026-10-05T00:00:00Z", mfa_secret: "v1.x.y" };
+    assert.equal(mfaDeadline(enrolled, policy), null);
+    assert.equal(mfaDeadline(old, mfaRequirement(undefined, "7")), null);
+    assert.equal(mfaDeadline(old, mfaRequirement("not a date", "7")), null);
+  });
+
+  it("leaves an overdue account only the routes that let it turn the factor on", () => {
+    assert.ok(isMfaEnrollmentRoute("GET", ["api", "account"]));
+    assert.ok(isMfaEnrollmentRoute("POST", ["api", "auth", "mfa", "setup"]));
+    assert.ok(isMfaEnrollmentRoute("POST", ["api", "auth", "mfa", "enable"]));
+    assert.ok(isMfaEnrollmentRoute("DELETE", ["api", "auth", "token"]));
+    assert.ok(!isMfaEnrollmentRoute("GET", ["api", "projects"]));
+    assert.ok(!isMfaEnrollmentRoute("GET", ["api", "datasets", "x", "content"]));
+    assert.ok(!isMfaEnrollmentRoute("POST", ["api", "collab", "identity"]));
+  });
+
+  it("is recognised by the app", () => {
+    assert.equal(authErrorCode(403, MFA_ENROLLMENT_REQUIRED_MESSAGE), "mfa-enrollment");
+  });
+
+  it("is switched on for this deployment", () => {
+    const config = read("../workers/projects-api/wrangler.jsonc");
+    assert.match(config, /"GEOLIBRE_MFA_REQUIRED_FROM": "\d{4}-\d{2}-\d{2}"/);
+  });
+});
+
+describe("R2 trash", async () => {
+  const { trashKey, trashKeyExpired } = await import("../workers/projects-api/src/storage");
+  const now = Date.parse("2026-10-04T12:00:00Z");
+  const day = 24 * 60 * 60 * 1000;
+
+  it("keeps the original key under a dated prefix", () => {
+    assert.equal(trashKey("datasets/abc", now), "trash/2026-10-04/datasets/abc");
+  });
+
+  it("purges only past the retention window, and never an unexpected key", () => {
+    assert.equal(trashKeyExpired("trash/2026-10-04/datasets/abc", now + 29 * day, 30), false);
+    assert.equal(trashKeyExpired("trash/2026-10-04/datasets/abc", now + 31 * day, 30), true);
+    assert.equal(trashKeyExpired("datasets/abc", now + 365 * day, 30), false);
+    assert.equal(trashKeyExpired("trash/garbage/datasets/abc", now + 365 * day, 30), false);
+  });
+
+  it("is what deleting through the API does, and a daily cron purges it", () => {
+    const source = read("../workers/projects-api/src/index.ts");
+    assert.match(source, /objects\.trashProject\(project\.id\)/);
+    assert.match(source, /objects\.trash\(row\.object_key\)/);
+    assert.match(source, /async scheduled\(/);
+    assert.match(read("../workers/projects-api/wrangler.jsonc"), /"crons": \["[^"]+"\]/);
+  });
+});
+
+describe("tiles origin list", async () => {
+  const { isAllowedProxyOriginFor } = await import("../workers/tiles/src/index");
+  const listed = new Set(["https://gis.jonasnguyen.uk"]);
+
+  it("is the whole policy once set", () => {
+    assert.ok(isAllowedProxyOriginFor("https://gis.jonasnguyen.uk", listed));
+    assert.ok(!isAllowedProxyOriginFor("https://stranger.workers.dev", listed));
+    assert.ok(!isAllowedProxyOriginFor("https://web.geolibre.app", listed));
+    assert.ok(isAllowedProxyOriginFor("tauri://localhost", listed));
+    assert.ok(isAllowedProxyOriginFor("http://localhost:5173", listed));
+  });
+
+  it("keeps the upstream hosts when nothing is set", () => {
+    assert.ok(isAllowedProxyOriginFor("https://anything.workers.dev", new Set()));
+  });
+});
+
+describe("deploy workflows", () => {
+  it("pin every action that handles the Cloudflare token to a commit", () => {
+    for (const file of [
+      "deploy-projects-api.yml",
+      "deploy-web-worker.yml",
+      "deploy-collab-selfhost.yml",
+      "deploy-tiles-selfhost.yml",
+    ]) {
+      const workflow = read(`../.github/workflows/${file}`);
+      for (const line of workflow.split("\n").filter((l) => /^\s*uses:/.test(l))) {
+        assert.match(line, /@[0-9a-f]{40}\b/, `${file}: ${line.trim()}`);
+      }
     }
   });
 });

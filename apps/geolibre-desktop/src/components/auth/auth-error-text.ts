@@ -39,6 +39,7 @@ const KEYS = {
   "mfa-locked": "auth.error.mfaLocked",
   "mfa-unavailable": "auth.error.mfaUnavailable",
   "admin-mfa-required": "auth.error.adminMfaRequired",
+  "mfa-enrollment": "auth.error.mfaEnrollment",
 } as const satisfies Record<Exclude<AuthErrorCode, "unknown">, string>;
 
 /** The translated message for a code produced on the client. */

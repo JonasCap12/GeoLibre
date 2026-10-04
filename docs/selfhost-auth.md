@@ -125,10 +125,18 @@ old hash rehashes it. The trade-off: the Python server cannot verify
 ## Two-factor authentication
 
 The second factor is a TOTP authenticator app (RFC 6238), with recovery codes
-for a lost phone. It is optional for members and **required for admins**: an
-admin without it gets `403` from every admin route until they turn it on in
-**Account & security**. The Administration dialog says so instead of showing
-empty tabs.
+for a lost phone. It is **required of every account**:
+
+- **Members** get `GEOLIBRE_MFA_GRACE_DAYS` (7) from `GEOLIBRE_MFA_REQUIRED_FROM`,
+  or from their own account's creation if later, to turn it on. Until then the
+  app shows a reminder with the date; after it, every route except those
+  needed to turn the factor on (`GET /api/account`, `/api/auth/*`) answers
+  `403 two-factor authentication is required for this account`, and the app is
+  replaced by the setup screen. Removing `GEOLIBRE_MFA_REQUIRED_FROM` from
+  `wrangler.jsonc` turns the requirement off. The policy is `mfaDeadline` and
+  `mfaEnrollmentRequired` in `auth-policy.ts`.
+- **Admins** get `403` from every admin route until they turn it on, deadline
+  or not. The Administration area says so instead of showing empty tabs.
 
 - **Algorithm.** HMAC-SHA-1, six digits, 30-second step, and one step either
   side for clock drift. SHA-1 is what every authenticator app supports by
@@ -295,11 +303,25 @@ in the memory of each isolate, so they are a local ceiling, not a global count.
   on that prefix does not isolate the notebook iframe, which is same-origin and
   not the top window.
 
+## Deleted data
+
+R2 has no object versioning, so a dataset or project deleted through the API
+used to be gone for good. Its objects now move to
+`trash/<YYYY-MM-DD>/<original key>` in the same bucket, and a daily cron
+(`triggers.crons` in `wrangler.jsonc`, the `scheduled` handler in `index.ts`)
+deletes trash older than `GEOLIBRE_TRASH_RETENTION_DAYS` (30). The D1 rows that
+pointed at the objects are recoverable with D1 Time Travel over the same 30
+days, so a deletion can be undone end to end:
+
+1. `npx wrangler d1 time-travel restore geolibre-projects --timestamp=<before the delete> -c workers/projects-api/wrangler.jsonc`
+   (this restores the whole database to that point; export first if anything
+   else has changed since).
+2. Copy the objects back from `trash/<date>/…` to their original keys.
+
 ## Known gaps against ASVS Level 2
 
-- **Two-factor is optional for members.** Only admins are required to use it.
-  There is no phishing-resistant factor yet; see
-  [Passkeys: proposal](#passkeys-proposal).
+- **No phishing-resistant factor yet.** Two-factor is required of everyone,
+  but TOTP codes can be phished; see [Passkeys: proposal](#passkeys-proposal).
 - **A locked-out sole admin needs D1 access** to recover; there is no
   break-glass route.
 - **Token readable by page script.** See

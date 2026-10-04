@@ -41,6 +41,12 @@ export interface Env {
   GEOLIBRE_MAX_THUMBNAIL_BYTES?: string;
   GEOLIBRE_MAX_DATASET_BYTES?: string;
   GEOLIBRE_ACTIVITY_RETENTION_DAYS?: string;
+  // Days a deleted dataset or project stays in the R2 trash. Default 30.
+  GEOLIBRE_TRASH_RETENTION_DAYS?: string;
+  // Two-factor for every account: the date it applies from, and the days of
+  // grace an account gets (see mfaRequirement in auth-policy.ts).
+  GEOLIBRE_MFA_REQUIRED_FROM?: string;
+  GEOLIBRE_MFA_GRACE_DAYS?: string;
   GEOLIBRE_SESSION_TTL_DAYS?: string;
   GEOLIBRE_SESSION_IDLE_DAYS?: string;
   AUTH_RATE_LIMITER?: RateLimiter;

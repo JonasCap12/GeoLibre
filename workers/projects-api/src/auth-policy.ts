@@ -514,3 +514,71 @@ export function auditDetail(detail: Record<string, unknown> = {}): string {
 export function auditCutoff(nowMs: number, retentionDays: number): string {
   return new Date(nowMs - retentionDays * DAY_MS).toISOString();
 }
+
+// ---------------------------------------------------------------------------
+// Two-factor for every account
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_MFA_GRACE_DAYS = 7;
+
+export interface MfaRequirement {
+  /** When the requirement started (GEOLIBRE_MFA_REQUIRED_FROM), or null when off. */
+  requiredFromMs: number | null;
+  graceMs: number;
+}
+
+/** Reads the two vars. An absent or unreadable date turns the requirement off. */
+export function mfaRequirement(requiredFrom?: string, graceDays?: string): MfaRequirement {
+  const from = requiredFrom ? Date.parse(requiredFrom) : Number.NaN;
+  const days = Number.parseInt(graceDays ?? "", 10);
+  return {
+    requiredFromMs: Number.isFinite(from) ? from : null,
+    graceMs: (Number.isFinite(days) && days >= 0 ? days : DEFAULT_MFA_GRACE_DAYS) * DAY_MS,
+  };
+}
+
+/**
+ * When this account must have two-factor on by, or null when it need not.
+ *
+ * The grace period runs from the later of the requirement's start and the
+ * account's creation, so an account invited next month gets its own week
+ * instead of being locked out on first sign-in.
+ */
+export function mfaDeadline(
+  account: { created_at: string; mfa_enabled_at?: string | null; mfa_secret?: string | null },
+  requirement: MfaRequirement,
+): string | null {
+  if (requirement.requiredFromMs === null) return null;
+  if (account.mfa_enabled_at && account.mfa_secret) return null;
+  const created = Date.parse(account.created_at);
+  const start = Math.max(requirement.requiredFromMs, Number.isFinite(created) ? created : 0);
+  return new Date(start + requirement.graceMs).toISOString();
+}
+
+/** True once an account without two-factor is past its deadline. */
+export function mfaEnrollmentRequired(
+  account: { created_at: string; mfa_enabled_at?: string | null; mfa_secret?: string | null },
+  requirement: MfaRequirement,
+  nowMs: number,
+): boolean {
+  const deadline = mfaDeadline(account, requirement);
+  return deadline !== null && Date.parse(deadline) <= nowMs;
+}
+
+/**
+ * Routes an account past its two-factor deadline may still call: enough to
+ * see its own account, turn two-factor on (which needs the password), manage
+ * its sessions and email, and sign out. Everything else answers 403 until the
+ * factor is on.
+ */
+export function isMfaEnrollmentRoute(method: string, segments: readonly string[]): boolean {
+  if (segments[0] !== "api") return false;
+  const path = segments.slice(1);
+  if (path.length === 1 && path[0] === "account" && method === "GET") return true;
+  if (path.length === 2 && path[0] === "users" && path[1] === "me" && method === "GET") return true;
+  return path[0] === "auth";
+}
+
+/** The `error` for a route refused because two-factor is overdue. */
+export const MFA_ENROLLMENT_REQUIRED_MESSAGE =
+  "two-factor authentication is required for this account; turn it on to continue";

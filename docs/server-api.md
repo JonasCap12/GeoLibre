@@ -384,11 +384,22 @@ draw its menus:
 ```json
 {"account": {"id": "uuid", "username": "ada", "createdAt": "…",
   "email": "ada@example.com", "emailVerifiedAt": "…", "isAdmin": false,
-  "mfaEnabled": true, "recoveryCodesLeft": 9}}
+  "mfaEnabled": true, "recoveryCodesLeft": 9,
+  "mfaRequiredBy": null, "mfaEnrollmentRequired": false}}
 ```
 
 `isAdmin` only decides what the app shows; every admin route checks again.
 `recoveryCodesLeft` is `0` when two-factor is off.
+
+Two-factor is required of every account on this deployment. `mfaRequiredBy`
+is the deadline for an account that has not turned it on (null once it has, or
+when the requirement is off), and `mfaEnrollmentRequired` is true once that
+deadline has passed. From then on every route other than `GET /api/account`,
+`GET /api/users/me` and `/api/auth/*` answers
+`403 {"error": "two-factor authentication is required for this account; turn it on to continue"}`.
+
+Deleting a project or dataset moves its stored objects to a trash prefix kept
+for 30 days rather than destroying them; the response is unchanged (`204`).
 
 `GET /api/auth/sessions` — the account's live sessions, newest first:
 

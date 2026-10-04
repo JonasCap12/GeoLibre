@@ -24,6 +24,11 @@ import {
 import {
   AUTH_BODY_LIMIT,
   MAX_PASSWORD_LENGTH,
+  MFA_ENROLLMENT_REQUIRED_MESSAGE,
+  isMfaEnrollmentRoute,
+  mfaDeadline,
+  mfaEnrollmentRequired,
+  mfaRequirement,
   RESET_REQUEST_BODY,
   RESET_TTL_MS,
   accountLimitKey,
@@ -121,7 +126,13 @@ import {
   safeFilename,
   visibleDataset,
 } from "./datasets";
-import { objectStorage, thumbnailKey, versionKey, type Objects } from "./storage";
+import {
+  DEFAULT_TRASH_RETENTION_DAYS,
+  objectStorage,
+  thumbnailKey,
+  versionKey,
+  type Objects,
+} from "./storage";
 
 const VISIBILITIES = new Set(["public", "unlisted", "private"]);
 
@@ -363,7 +374,19 @@ async function route(
   // authenticated even when it forgets requireAccount; the exceptions are the
   // ones a person with no token must still be able to call.
   if (!isPublicRoute(method, segments)) {
-    requireAccount(await optionalAccount(scope));
+    const account = requireAccount(await optionalAccount(scope));
+    // Two-factor is required of every account. Past its deadline an account
+    // keeps only the routes that let it turn the factor on.
+    if (
+      !isMfaEnrollmentRoute(method, segments) &&
+      mfaEnrollmentRequired(
+        account,
+        mfaRequirement(env.GEOLIBRE_MFA_REQUIRED_FROM, env.GEOLIBRE_MFA_GRACE_DAYS),
+        Date.now(),
+      )
+    ) {
+      throw new ApiError(403, MFA_ENROLLMENT_REQUIRED_MESSAGE);
+    }
   }
 
   if (segments.length === 1 && segments[0] === "health" && method === "GET") {
@@ -742,6 +765,17 @@ async function apiRoute(
           emailVerifiedAt: account.email_verified_at ?? null,
           isAdmin: isAdminUsername(account.username, env.GEOLIBRE_ADMIN_USERNAMES),
           mfaEnabled: mfaEnabled(account),
+          // When two-factor must be on by, and whether that has passed. The
+          // app warns before the deadline and blocks after it.
+          mfaRequiredBy: mfaDeadline(
+            account,
+            mfaRequirement(env.GEOLIBRE_MFA_REQUIRED_FROM, env.GEOLIBRE_MFA_GRACE_DAYS),
+          ),
+          mfaEnrollmentRequired: mfaEnrollmentRequired(
+            account,
+            mfaRequirement(env.GEOLIBRE_MFA_REQUIRED_FROM, env.GEOLIBRE_MFA_GRACE_DAYS),
+            Date.now(),
+          ),
           recoveryCodesLeft: mfaEnabled(account) ? await recoveryCodesLeft(scope, account.id) : 0,
         },
       },
@@ -929,9 +963,10 @@ async function apiRoute(
       const project = owned(await projectById(db, projectId), account.id);
       // Rows first (versions, activity and tokens cascade), then objects: an
       // orphaned object is invisible, whereas a row pointing at a deleted object
-      // is a 404 on a project that still lists.
+      // is a 404 on a project that still lists. The objects go to the trash for
+      // the retention window rather than away for good (see storage.ts).
       await db.prepare(`DELETE FROM projects WHERE id = ?`).bind(project.id).run();
-      await objects.deleteProject(project.id);
+      await objects.trashProject(project.id);
       return empty(204);
     }
 
@@ -1108,7 +1143,7 @@ async function apiRoute(
       if (method === "DELETE") {
         const account = requireAccount(await optionalAccount(scope));
         const project = owned(await projectById(db, projectId), account.id);
-        await objects.delete(thumbnailKey(project.id));
+        await objects.trash(thumbnailKey(project.id));
         await db
           .prepare(`UPDATE projects SET thumbnail_type = NULL, updated_at = ? WHERE id = ?`)
           .bind(now(), project.id)
@@ -1237,9 +1272,10 @@ async function apiRoute(
         const account = requireAccount(await optionalAccount(scope));
         const row = ownedDataset(await load(), account.id);
         await db.prepare(`DELETE FROM datasets WHERE id = ?`).bind(row.id).run();
-        // After the row, so a failed object delete cannot leave a listing entry
-        // pointing at bytes that are already gone.
-        await objects.delete(row.object_key);
+        // After the row, so a failed object move cannot leave a listing entry
+        // pointing at bytes that are already gone. Trashed, not destroyed: see
+        // storage.ts for the retention window.
+        await objects.trash(row.object_key);
         return empty(204);
       }
     }
@@ -1328,6 +1364,26 @@ async function rateLimitDownload(env: Env, request: Request): Promise<void> {
 }
 
 export default {
+  /**
+   * Daily cron (wrangler.jsonc `triggers`): purges trashed objects older than
+   * GEOLIBRE_TRASH_RETENTION_DAYS. Nothing else runs on a schedule.
+   */
+  async scheduled(
+    _controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    const days = Number.parseInt(env.GEOLIBRE_TRASH_RETENTION_DAYS ?? "", 10);
+    const retention = Number.isFinite(days) && days > 0 ? days : DEFAULT_TRASH_RETENTION_DAYS;
+    ctx.waitUntil(
+      objectStorage(env.OBJECTS)
+        .purgeTrash(Date.now(), retention)
+        .then((purged) =>
+          console.log(`trash purge: ${purged} object(s) older than ${retention} days`),
+        ),
+    );
+  },
+
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const config = readConfig(env);
     const cors = corsHeaders(request, config);

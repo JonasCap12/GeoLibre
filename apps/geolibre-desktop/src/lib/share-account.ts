@@ -74,6 +74,7 @@ export type AuthErrorCode =
   | "mfa-locked"
   | "mfa-unavailable"
   | "admin-mfa-required"
+  | "mfa-enrollment"
   | "unknown";
 
 export class ShareAccountError extends Error {
@@ -136,6 +137,9 @@ export function authErrorCode(status: number, message: string): AuthErrorCode {
   if (text.includes("too many wrong two-factor codes")) return "mfa-locked";
   if (text.includes("two-factor authentication is not configured")) return "mfa-unavailable";
   if (text.includes("must turn on two-factor")) return "admin-mfa-required";
+  if (text.includes("two-factor authentication is required for this account")) {
+    return "mfa-enrollment";
+  }
   if (text.includes("admin only")) return "forbidden";
   return "unknown";
 }
@@ -568,6 +572,10 @@ export interface AccountInfo {
   isAdmin: boolean;
   mfaEnabled: boolean;
   recoveryCodesLeft: number;
+  /** When two-factor must be on by, or null when it is on or not required. */
+  mfaRequiredBy: string | null;
+  /** True once that deadline has passed: the API refuses all but setup until it is on. */
+  mfaEnrollmentRequired: boolean;
 }
 
 export async function fetchAccount(options: TokenOptions): Promise<AccountInfo> {
@@ -587,6 +595,8 @@ export async function fetchAccount(options: TokenOptions): Promise<AccountInfo> 
     mfaEnabled: account.mfaEnabled === true,
     recoveryCodesLeft:
       typeof account.recoveryCodesLeft === "number" ? account.recoveryCodesLeft : 0,
+    mfaRequiredBy: typeof account.mfaRequiredBy === "string" ? account.mfaRequiredBy : null,
+    mfaEnrollmentRequired: account.mfaEnrollmentRequired === true,
   };
 }
 
