@@ -52,6 +52,7 @@ export interface CollaborationApi {
     color: string,
     mode: CollaborationMode,
     requireIdentity?: boolean,
+    options?: { persistent?: boolean },
   ) => Promise<string>;
   join: (
     sessionId: string,
@@ -500,8 +501,12 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       color: string,
       mode: CollaborationMode,
       requireIdentity?: boolean,
+      options?: { persistent?: boolean },
     ) => {
-      const session = await createSession({ mode, requireIdentity }, baseUrl);
+      const session = await createSession(
+        { mode, requireIdentity, persistent: options?.persistent },
+        baseUrl,
+      );
       // Stored before connecting, not after: if the socket fails the session
       // still exists on the relay, and this is the only copy of the token that
       // can claim it back.

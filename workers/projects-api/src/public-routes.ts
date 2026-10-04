@@ -32,7 +32,15 @@ export function isPublicRoute(method: string, segments: readonly string[]): bool
   return false;
 }
 
-const AUTH_PREFIXES = new Set(["accounts", "account", "auth", "invites", "admin"]);
+// collab-sessions returns a collaboration host token, a credential like the rest.
+const AUTH_PREFIXES = new Set([
+  "accounts",
+  "account",
+  "auth",
+  "invites",
+  "admin",
+  "collab-sessions",
+]);
 
 /**
  * Routes whose responses carry credentials, account details, or the audit log.

@@ -1476,7 +1476,31 @@
     "lockLayer": "Lock layer for guests",
     "unlockLayer": "Unlock layer for guests",
     "layerLocked": "Locked",
-    "layerLockedHint": "This layer is locked by the host and cannot be edited"
+    "layerLockedHint": "This layer is locked by the host and cannot be edited",
+    "saved": {
+      "joinAs": "You join as",
+      "title": "Your sessions",
+      "loading": "Loading your sessions…",
+      "empty": "No saved sessions yet. Create one for each team or group, then reopen it here any time.",
+      "newHeading": "New session",
+      "nameLabel": "Session name",
+      "namePlaceholder": "e.g. Survey team A",
+      "nameRequired": "Give the session a name.",
+      "create": "Create and start",
+      "retention": "Saved to your account. A session stays available for 30 days after it was last used.",
+      "open": "Open",
+      "rename": "Rename",
+      "save": "Save",
+      "delete": "Delete",
+      "confirmDelete": "Delete for everyone",
+      "deleteHint": "This ends the session for everyone in it and removes it from your list.",
+      "lastOpened": "Last opened {{date}}",
+      "loadFailed": "Could not load your sessions.",
+      "saveFailed": "The session started, but could not be added to your list. {{message}}",
+      "openFailed": "Could not open the session. It may have expired: delete it and create a new one. {{message}}",
+      "updateFailed": "Could not rename the session.",
+      "deleteFailed": "Could not delete the session."
+    }
   },
   "share": {
     "title": "Share project",

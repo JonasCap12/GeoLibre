@@ -211,19 +211,25 @@ export async function importSealKey(raw: string | undefined): Promise<CryptoKey 
   return crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
-// The account id is authenticated data, so a sealed secret copied onto another
-// account's row fails to open instead of becoming that account's factor.
-const sealContext = (accountId: string): Uint8Array =>
-  new TextEncoder().encode(`geolibre-mfa:${accountId}`);
+// The account id and the purpose are authenticated data, so a sealed value
+// copied onto another account's row, or from one column into another (a
+// collaboration host token into the TOTP secret), fails to open instead of
+// being accepted. "mfa" stays the default: it is what every stored TOTP secret
+// was sealed with.
+export type SealPurpose = "mfa" | "collab-host";
+
+const sealContext = (accountId: string, purpose: SealPurpose): Uint8Array =>
+  new TextEncoder().encode(`geolibre-${purpose}:${accountId}`);
 
 export async function sealSecret(
   key: CryptoKey,
   secret: Uint8Array,
   accountId: string,
+  purpose: SealPurpose = "mfa",
 ): Promise<string> {
   const iv = randomBytes(12);
   const sealed = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: sealContext(accountId) },
+    { name: "AES-GCM", iv, additionalData: sealContext(accountId, purpose) },
     key,
     secret,
   );
@@ -235,11 +241,16 @@ export async function openSecret(
   key: CryptoKey,
   sealed: string,
   accountId: string,
+  purpose: SealPurpose = "mfa",
 ): Promise<Uint8Array> {
   const [version, iv, body] = sealed.split(".");
   if (version !== SEAL_VERSION || !iv || !body) throw new Error("unrecognised sealed secret");
   const opened = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64Decode(iv), additionalData: sealContext(accountId) },
+    {
+      name: "AES-GCM",
+      iv: base64Decode(iv),
+      additionalData: sealContext(accountId, purpose),
+    },
     key,
     base64Decode(body),
   );
