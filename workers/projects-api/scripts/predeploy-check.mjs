@@ -54,7 +54,9 @@ const REQUIRED_COLUMNS = {
   collab_sessions: ["id", "account_id", "code", "name", "mode", "host_token"],
 };
 
-const REQUIRED_SECRETS = ["TURNSTILE_SECRET_KEY", "MFA_ENCRYPTION_KEY"];
+// COLLAB_IDENTITY_SECRET signs the identity tokens the members-only
+// collaboration relay requires; without it nobody can start or join a session.
+const REQUIRED_SECRETS = ["TURNSTILE_SECRET_KEY", "MFA_ENCRYPTION_KEY", "COLLAB_IDENTITY_SECRET"];
 
 function wrangler(args) {
   const result = spawnSync(process.execPath, [WRANGLER, ...args], {

@@ -12,7 +12,7 @@
 // The session code namespaces the Durable Object (idFromName), so every
 // participant of a session lands on the same actor and gets fanned out to.
 
-import { isIdentityConfigured } from "@geolibre/collab-core";
+import { isIdentityConfigured, verifyIdentityToken } from "@geolibre/collab-core";
 import { CollabSession, type Env } from "./session";
 
 export { CollabSession };
@@ -157,7 +157,17 @@ export default {
         mode?: string;
         requireIdentity?: boolean;
         persistent?: boolean;
+        identityToken?: string;
       };
+      // Members-only relay: only someone the projects API vouches for may
+      // create a session. Otherwise anyone who can reach this Worker could
+      // fill it with sessions.
+      if (env.COLLAB_REQUIRE_IDENTITY === "1") {
+        const identity = await verifyIdentityToken(body.identityToken, env.COLLAB_IDENTITY_SECRET);
+        if (identity === null) {
+          return json({ error: "Sign in to this deployment to start a session." }, 401);
+        }
+      }
       const mode = body.mode === "view-only" ? "view-only" : "co-edit";
       const requireIdentity = body.requireIdentity === true;
       // Persistent sessions wait 30 days empty instead of 2 hours; see
@@ -228,6 +238,7 @@ export default {
         ok: true,
         service: "geolibre-collab",
         identitySupported: isIdentityConfigured(env.COLLAB_IDENTITY_SECRET),
+        identityRequired: env.COLLAB_REQUIRE_IDENTITY === "1",
       });
     }
 

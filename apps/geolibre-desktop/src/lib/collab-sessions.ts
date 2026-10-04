@@ -67,6 +67,18 @@ export async function updateSavedSession(
   return ((await response.json()) as { session: SavedCollabSession }).session;
 }
 
+/**
+ * A short-lived proof that the signed-in person belongs to this deployment.
+ * The collaboration relay is members-only and asks for it on create and join.
+ */
+export async function fetchCollabIdentity(options: Options): Promise<string> {
+  const response = await authRequest("/api/collab/identity", {
+    ...options,
+    fallback: "Could not sign in to collaboration",
+  });
+  return ((await response.json()) as { identityToken: string }).identityToken;
+}
+
 /** The owner's host token, so rejoining from this device makes them host again. */
 export async function fetchSessionHostToken(options: Options & { id: string }): Promise<string> {
   const response = await authRequest(
