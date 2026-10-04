@@ -30,6 +30,8 @@ import {
   participantCanEditLayer,
 } from "../lib/collab-protocol";
 import { recallHostToken, rememberHostToken } from "../lib/collab-host-tokens";
+import { fetchCollabIdentity } from "../lib/collab-sessions";
+import { resolveShareBaseUrl } from "../lib/share-geolibre";
 import { mergeInboundCollaborationProject } from "../lib/collaboration-project";
 import {
   learnedSnapshotLimit,
@@ -39,6 +41,22 @@ import {
 } from "../lib/collaboration-sync";
 import { rehydrateSharedLayersInStore } from "../lib/collaboration-shared-load";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
+
+/**
+ * The identity token for the signed-in account, or undefined when nobody is
+ * signed in here (desktop and ungated builds). A members-only relay then
+ * refuses with its own message, which is what the person should see.
+ */
+async function signedInIdentity(): Promise<string | undefined> {
+  const token = useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
+  if (token === "" || resolveShareBaseUrl() === null) return undefined;
+  try {
+    return await fetchCollabIdentity({ token });
+  } catch (error) {
+    console.warn("[GeoLibre] Could not get a collaboration identity", error);
+    return undefined;
+  }
+}
 
 const SNAPSHOT_DEBOUNCE_MS = 250;
 const CURSOR_THROTTLE_MS = 40;
@@ -503,15 +521,18 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       requireIdentity?: boolean,
       options?: { persistent?: boolean },
     ) => {
+      const identityToken = await signedInIdentity();
       const session = await createSession(
-        { mode, requireIdentity, persistent: options?.persistent },
+        { mode, requireIdentity, persistent: options?.persistent, identityToken },
         baseUrl,
       );
       // Stored before connecting, not after: if the socket fails the session
       // still exists on the relay, and this is the only copy of the token that
       // can claim it back.
       rememberHostToken(session.sessionId, session.hostToken);
-      await connect(session.sessionId, displayName, color, session.hostToken);
+      await connect(session.sessionId, displayName, color, session.hostToken, {
+        identityToken,
+      });
       return session.sessionId;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -529,7 +550,11 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       // A host who left and came back arrives through this path, typing their
       // own code. Replaying the stored token is what makes the relay hand host
       // back; without it the session's own creator rejoins as a guest.
-      await connect(code, displayName, color, recallHostToken(code), options);
+      const identityToken = options?.identityToken ?? (await signedInIdentity());
+      await connect(code, displayName, color, recallHostToken(code), {
+        ...options,
+        identityToken,
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseUrl],

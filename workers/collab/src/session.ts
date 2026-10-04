@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { sameSecret } from "./secret-equal";
 import type {
   CollabChatMessage,
   CollabInvite,
@@ -72,6 +73,13 @@ export interface Env {
    * Set it with `wrangler secret put COLLAB_IDENTITY_SECRET`.
    */
   COLLAB_IDENTITY_SECRET?: string;
+  /**
+   * "1" makes this relay members-only: creating a session and joining one both
+   * need an identity token from this deployment's issuer (the projects API),
+   * whatever the session's own requireIdentity setting, and for the host too.
+   * Fails closed: without COLLAB_IDENTITY_SECRET nobody can get in.
+   */
+  COLLAB_REQUIRE_IDENTITY?: string;
 }
 
 // The snapshot cap, empty-session TTL, and chat limits now live in
@@ -381,7 +389,7 @@ export class CollabSession extends DurableObject<Env> {
       const clientToken = authorization.startsWith("Bearer ")
         ? authorization.slice("Bearer ".length).trim()
         : "";
-      if (!hostToken || !clientToken || hostToken !== clientToken) {
+      if (!hostToken || !clientToken || !sameSecret(hostToken, clientToken)) {
         return new Response("Forbidden", { status: 403 });
       }
       if (request.method === "DELETE") {
@@ -406,7 +414,7 @@ export class CollabSession extends DurableObject<Env> {
       const clientToken = authorization.startsWith("Bearer ")
         ? authorization.slice("Bearer ".length).trim()
         : "";
-      if (!hostToken || !clientToken || hostToken !== clientToken) {
+      if (!hostToken || !clientToken || !sameSecret(hostToken, clientToken)) {
         return new Response("Forbidden", { status: 403 });
       }
       for (const socket of this.ctx.getWebSockets()) {
@@ -572,7 +580,9 @@ export class CollabSession extends DurableObject<Env> {
       ]);
 
     let role: CollaborationRole =
-      message.hostToken && storedToken && message.hostToken === storedToken ? "host" : "guest";
+      message.hostToken && storedToken && sameSecret(message.hostToken, storedToken)
+        ? "host"
+        : "guest";
 
     let inviteToken: string | undefined = undefined;
     let matchedInvite: CollabInvite | undefined = undefined;
@@ -594,7 +604,10 @@ export class CollabSession extends DurableObject<Env> {
       this.env.COLLAB_IDENTITY_SECRET,
     );
 
-    if (requireIdentity && !identity && role !== "host") {
+    // Deployment-wide enforcement covers the host as well: a host token proves
+    // who created the session, not that its holder is still a team member.
+    const membersOnly = this.env.COLLAB_REQUIRE_IDENTITY === "1";
+    if (!identity && (membersOnly || (requireIdentity && role !== "host"))) {
       this.send(ws, {
         type: "error",
         code: "identity-required",

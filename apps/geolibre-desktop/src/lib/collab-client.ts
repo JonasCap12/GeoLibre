@@ -128,6 +128,12 @@ export interface CreateSessionOptions {
    * it and keep the 2-hour rule.
    */
   persistent?: boolean;
+  /**
+   * Proof that the person is signed in to this deployment, from
+   * {@link fetchCollabIdentity}. A members-only relay refuses to create a
+   * session without one.
+   */
+  identityToken?: string;
 }
 
 export async function createSession(
@@ -141,13 +147,14 @@ export async function createSession(
   const mode = typeof options === "string" ? options : (options.mode ?? "co-edit");
   const requireIdentity = typeof options === "object" ? options.requireIdentity === true : false;
   const persistent = typeof options === "object" ? options.persistent === true : false;
+  const identityToken = typeof options === "object" ? options.identityToken : undefined;
   const httpBase = httpBaseFromWs(baseUrl);
   let response: Response;
   try {
     response = await fetchImpl(`${httpBase}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, requireIdentity, persistent }),
+      body: JSON.stringify({ mode, requireIdentity, persistent, identityToken }),
       signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
     });
   } catch (error) {
@@ -159,6 +166,10 @@ export async function createSession(
     );
   }
   if (!response.ok) {
+    // The relay explains a refusal (not signed in, origin not allowed); show
+    // that rather than a bare status code.
+    const reason = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    if (typeof reason?.error === "string" && reason.error) throw new Error(reason.error);
     throw new Error(`Could not create the session (HTTP ${response.status}).`);
   }
   const payload = (await response.json().catch(() => ({}))) as

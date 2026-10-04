@@ -52,13 +52,18 @@
   // be able to start a session, comma-separated, including a custom domain
   // when one is bound.
   "vars": {
-    "ALLOWED_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev"
+    "ALLOWED_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev",
+    // Members only: creating or joining a session needs an identity token
+    // from the projects API (POST /api/collab/identity), signed with
+    // COLLAB_IDENTITY_SECRET. Set that secret on BOTH Workers, same value:
+    //   wrangler secret put COLLAB_IDENTITY_SECRET -c workers/collab/wrangler.selfhost.jsonc
+    //   wrangler secret put COLLAB_IDENTITY_SECRET -c workers/projects-api/wrangler.jsonc
+    // Without it this relay refuses everyone, which is the safe failure.
+    "COLLAB_REQUIRE_IDENTITY": "1"
   }
 
-  // COLLAB_IDENTITY_SECRET is deliberately not set here. Without it the Worker
-  // runs open sessions (anyone with the 8-character code can join), which is
-  // what a small internal deployment wants. To require signed identities, set
-  // it as a secret rather than a var, so it never lands in this file:
-  //
-  //   npx wrangler secret put COLLAB_IDENTITY_SECRET -c workers/collab/wrangler.selfhost.jsonc
+  // COLLAB_IDENTITY_SECRET is a secret, never a var, so it does not land in
+  // this file. It used to be left unset, which made every session open to
+  // anyone holding its 8-character code; now that the team has accounts the
+  // relay is members-only (COLLAB_REQUIRE_IDENTITY above) and needs it.
 }

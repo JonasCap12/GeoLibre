@@ -40,6 +40,7 @@ const AUTH_PREFIXES = new Set([
   "invites",
   "admin",
   "collab-sessions",
+  "collab",
 ]);
 
 /**
