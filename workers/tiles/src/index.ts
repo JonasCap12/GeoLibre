@@ -359,11 +359,13 @@ function isAllowedProxyOrigin(origin: string | null): boolean {
   if (!origin) return false;
   let hostname: string;
   let protocol: string;
+  let normalized: string;
   try {
-    ({ hostname, protocol } = new URL(origin));
+    ({ hostname, protocol, origin: normalized } = new URL(origin));
   } catch {
     return false;
   }
+  if (extraProxyOrigins.has(normalized)) return true;
   if (protocol === "tauri:" && hostname === "localhost") return true;
   if (protocol === "https:") {
     if (hostname === "geolibre.app" || hostname.endsWith(".geolibre.app")) {
@@ -599,7 +601,34 @@ async function handleOverpass(request: Request): Promise<Response> {
   return new Response(responseBody, { status: originResponse.status, headers });
 }
 
-interface Env {}
+interface Env {
+  /**
+   * Comma-separated exact origins also allowed through the origin-gated
+   * routes, for a deployment served from its own domain (a custom domain is
+   * none of the hosts hard-coded above). Exact match only, no wildcards.
+   */
+  ALLOWED_PROXY_ORIGINS?: string;
+}
+
+/** Parsed ALLOWED_PROXY_ORIGINS, as URL origins. Invalid entries are dropped. */
+export function parseProxyOrigins(raw: string | undefined): ReadonlySet<string> {
+  const origins = new Set<string>();
+  for (const entry of (raw ?? "").split(",")) {
+    const value = entry.trim();
+    if (value === "" || value === "*") continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === "https:") origins.add(url.origin);
+    } catch {
+      // Not a URL; ignored rather than widening anything.
+    }
+  }
+  return origins;
+}
+
+// Set from the environment at the start of every request. The value is fixed
+// per deployment, so a module-level copy is safe across requests.
+let extraProxyOrigins: ReadonlySet<string> = new Set();
 
 /**
  * Range-proxies one Protomaps planet build. Forwards the client's `Range`
@@ -690,7 +719,8 @@ async function handlePmtilesRange(request: Request, name: string): Promise<Respo
 }
 
 export const tilesWorker = {
-  async fetch(request: Request, _env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    extraProxyOrigins = parseProxyOrigins(env.ALLOWED_PROXY_ORIGINS);
     const url = new URL(request.url);
     if (request.method === "OPTIONS") {
       const headers = url.pathname === OVERPASS_PATH ? OVERPASS_CORS_HEADERS : CORS_HEADERS;

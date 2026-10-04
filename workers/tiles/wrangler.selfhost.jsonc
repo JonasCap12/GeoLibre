@@ -38,6 +38,13 @@
   // Every other route forwards bytes and stays well inside 10 ms.
   "limits": {
     "cpu_ms": 200
+  },
+
+  // The app is served from a custom domain, which none of the hosts hard-coded
+  // in isAllowedProxyOrigin match, so the OpenAerialMap, Source Cooperative
+  // and Overpass routes answered it with 403. Exact origins, comma-separated.
+  "vars": {
+    "ALLOWED_PROXY_ORIGINS": "https://gis.jonasnguyen.uk"
   }
 
   // No "routes": this deploys to geolibre-tiles.<subdomain>.workers.dev.
