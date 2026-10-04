@@ -9,7 +9,7 @@ import {
   Input,
   Label,
 } from "@geolibre/ui";
-import { LogOut, Shield, User, Users } from "lucide-react";
+import { LogOut, ShieldCheck, User, UserRound } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
@@ -42,8 +42,8 @@ import {
   type SelfHostRoute,
 } from "../../lib/selfhost-routes";
 import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
-import { AccountSecurityDialog } from "./AccountSecurityDialog";
-import { AdminDialog } from "./AdminDialog";
+import { AccountCenter, type AccountView } from "./AccountCenter";
+import { AccountAvatar, RoleBadge } from "./account-badges";
 import { authCodeText, authErrorText } from "./auth-error-text";
 import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
@@ -704,7 +704,12 @@ function UserMenu({ token }: { token: string }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [account, setAccount] = useState<AccountInfo | null>(null);
-  const [dialog, setDialog] = useState<"security" | "admin" | null>(null);
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState<AccountView>("overview");
+  const show = (next: AccountView) => {
+    setView(next);
+    setOpen(true);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -745,27 +750,40 @@ function UserMenu({ token }: { token: string }) {
             variant="ghost"
             size="icon"
             aria-label={t("auth.account")}
-            className="h-8 w-8 overflow-hidden rounded-full border border-border bg-background p-0 shadow-sm"
+            className="h-9 w-9 rounded-full bg-background p-0 shadow-sm"
           >
-            <User className="h-4 w-4" />
+            {account ? (
+              <AccountAvatar name={account.username} admin={account.isAdmin} size="sm" />
+            ) : (
+              <User className="h-4 w-4" />
+            )}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          {account?.username ? (
+        <DropdownMenuContent align="end" className="w-64">
+          {account ? (
             <>
-              <DropdownMenuLabel className="truncate text-start">
-                {account.username}
+              <DropdownMenuLabel className="flex items-center gap-3 py-2 text-start font-normal">
+                <AccountAvatar name={account.username} admin={account.isAdmin} />
+                <span className="min-w-0 flex-1 space-y-1">
+                  <span className="block truncate text-sm font-semibold">
+                    {account.username ?? "—"}
+                  </span>
+                  <RoleBadge admin={account.isAdmin} />
+                </span>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
             </>
           ) : null}
-          <DropdownMenuItem onSelect={() => setDialog("security")}>
-            <Shield className="me-2 h-4 w-4" />
+          <DropdownMenuItem onSelect={() => show("overview")}>
+            <UserRound className="me-2 h-4 w-4" />
             {t("auth.security.menu")}
           </DropdownMenuItem>
           {account?.isAdmin ? (
-            <DropdownMenuItem onSelect={() => setDialog("admin")}>
-              <Users className="me-2 h-4 w-4" />
+            <DropdownMenuItem
+              onSelect={() => show("invites")}
+              className="text-amber-800 focus:bg-amber-500/10 focus:text-amber-900 dark:text-amber-200 dark:focus:text-amber-100"
+            >
+              <ShieldCheck className="me-2 h-4 w-4" />
               {t("auth.admin.menu")}
             </DropdownMenuItem>
           ) : null}
@@ -782,22 +800,16 @@ function UserMenu({ token }: { token: string }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <AccountSecurityDialog
-        open={dialog === "security"}
-        onOpenChange={(open) => setDialog(open ? "security" : null)}
+      <AccountCenter
+        open={open}
+        onOpenChange={setOpen}
+        view={view}
+        onViewChange={setView}
         token={token}
         account={account}
         onToken={writeShareToken}
         onAccountChange={reloadAccount}
       />
-      {account?.isAdmin ? (
-        <AdminDialog
-          open={dialog === "admin"}
-          onOpenChange={(open) => setDialog(open ? "admin" : null)}
-          token={token}
-          self={account}
-        />
-      ) : null}
     </div>
   );
 }
