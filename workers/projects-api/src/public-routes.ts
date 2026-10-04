@@ -53,3 +53,19 @@ export function isAuthRoute(segments: readonly string[]): boolean {
   if (AUTH_PREFIXES.has(segments[1] ?? "")) return true;
   return segments[1] === "users" && segments[2] === "me";
 }
+
+/**
+ * Sent with every response this API makes. Nothing it serves is meant to be
+ * rendered as a page: JSON, project files, thumbnails and dataset downloads.
+ * So the strictest policy costs nothing, and if a stored file ever slipped
+ * past the content-type checks it still could not run script, load anything,
+ * or be framed on the API origin.
+ */
+export const API_SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; sandbox",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Cross-Origin-Resource-Policy": "cross-origin",
+};
