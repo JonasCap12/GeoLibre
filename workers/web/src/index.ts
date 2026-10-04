@@ -70,6 +70,31 @@ function notFound(): Response {
 // the app policy (which deliberately forbids inline script) went on blocking
 // JupyterLab's bootstrap. Setting the header here replaces the value outright,
 // so exactly one policy reaches the browser.
+/**
+ * Headers `_headers` sets on `/*`. The asset server applies them to a real
+ * file, but two responses are built here and would otherwise miss them: the
+ * SPA fallback (a copy of `/index.html` served for another path) and
+ * `/jupyterlite/*` (this Worker replaces that response outright).
+ *
+ * COOP is `same-origin-allow-popups`, the same value as the app, not
+ * `same-origin`. The Notebook panel loads JupyterLite in a same-origin iframe,
+ * and a browser ignores COOP on a document that is not the top window, so the
+ * iframe stays in the app's browsing group. `same-origin` would also drop the
+ * popups the Google Earth Engine sign-in opens from the app itself.
+ */
+const APP_SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
+  ["Strict-Transport-Security", "max-age=31536000; includeSubDomains"],
+  [
+    "Permissions-Policy",
+    "camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), hid=(), midi=(), geolocation=(self)",
+  ],
+  ["Cross-Origin-Opener-Policy", "same-origin-allow-popups"],
+];
+
+function applyAppSecurityHeaders(headers: Headers): void {
+  for (const [name, value] of APP_SECURITY_HEADERS) headers.set(name, value);
+}
+
 const JUPYTERLITE_CSP =
   "default-src 'self'; " +
   "connect-src 'self' https: data: blob:; " +
@@ -103,6 +128,7 @@ async function serveJupyterLite(request: Request, env: Env): Promise<Response> {
   // still serves the bodies), and it can never strand a stale JupyterLite
   // service worker, which is the failure worth avoiding.
   headers.set("Cache-Control", "no-cache, must-revalidate");
+  applyAppSecurityHeaders(headers);
 
   return new Response(response.body, {
     status: response.status,
@@ -138,6 +164,10 @@ export default {
       // narrows the app policy and cannot loosen it.
       headers.append("Content-Security-Policy", "frame-ancestors 'self'");
     }
+    // The internal fetch is for `/index.html`. Copying its headers is not
+    // enough on its own: a fallback path is not that URL, and this response is
+    // what the browser actually receives.
+    applyAppSecurityHeaders(headers);
     return new Response(index.body, {
       status: index.status === 404 ? 404 : 200,
       headers,
