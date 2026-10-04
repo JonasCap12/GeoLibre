@@ -69,6 +69,9 @@ export interface Env {
   TURNSTILE_SECRET_KEY?: string;
   // `wrangler secret put`, base64 of 32 random bytes. Required to enable MFA.
   MFA_ENCRYPTION_KEY?: string;
+  // `wrangler secret put`, shared with the collaboration relay (same value on
+  // both Workers). Signs the identity tokens of POST /api/collab/identity.
+  COLLAB_IDENTITY_SECRET?: string;
 }
 
 /** Everything a handler needs about the request it is answering. */
