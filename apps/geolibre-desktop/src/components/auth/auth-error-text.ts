@@ -15,6 +15,8 @@ const KEYS = {
   "password-short": "auth.error.passwordShort",
   "password-long": "auth.error.passwordLong",
   "password-context": "auth.error.passwordContext",
+  "password-common": "auth.error.passwordCommon",
+  "password-weak": "auth.error.passwordWeak",
   "password-breached": "auth.error.passwordBreached",
   "password-mismatch": "auth.error.passwordMismatch",
   "login-invalid": "auth.error.loginInvalid",

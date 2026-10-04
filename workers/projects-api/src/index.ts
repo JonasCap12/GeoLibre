@@ -436,12 +436,10 @@ async function apiRoute(
     if (!USERNAME_RE.test(username)) {
       throw new ApiError(422, "username must be 3-39 lowercase letters, digits, or hyphens");
     }
-    // Length first: it is free, and refusing it before the bot check saves a
-    // siteverify round trip on a form the user only has to retype.
-    const lengthError = passwordPolicyError(password);
-    if (lengthError === "too-long" || lengthError === "too-short") {
-      throw new ApiError(422, passwordPolicyMessage(lengthError));
-    }
+    // The rules first: they are free, and refusing a weak password before the
+    // bot check saves a siteverify round trip on a form the user only retypes.
+    const policyError = passwordPolicyError(password);
+    if (policyError !== null) throw new ApiError(422, passwordPolicyMessage(policyError));
     await requireTurnstile(scope, body, TURNSTILE_ACTIONS.register);
     // Open registration is the hole. The invite is what proves control of the
     // mailbox, so the account is created already verified.
@@ -688,10 +686,8 @@ async function apiRoute(
     const body = await readJsonBody(request, AUTH_BODY_LIMIT);
     const token = stringField(body, "token");
     const password = stringField(body, "password");
-    const lengthError = passwordPolicyError(password);
-    if (lengthError === "too-long" || lengthError === "too-short") {
-      throw new ApiError(422, passwordPolicyMessage(lengthError));
-    }
+    const policyError = passwordPolicyError(password);
+    if (policyError !== null) throw new ApiError(422, passwordPolicyMessage(policyError));
     await requireTurnstile(scope, body, TURNSTILE_ACTIONS.resetConfirm);
     const action = await loadAuthAction(db, token);
     const refusal = actionRefusal(action, "reset", now());

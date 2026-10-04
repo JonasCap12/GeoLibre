@@ -16,7 +16,6 @@ import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
 import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
 import { installSessionWatch } from "../../lib/session-watch";
 import {
-  MIN_PASSWORD_LENGTH,
   ShareAccountError,
   USERNAME_PATTERN,
   completeMfaSignIn,
@@ -47,6 +46,7 @@ import { AccountAvatar, RoleBadge } from "./account-badges";
 import { authCodeText, authErrorText } from "./auth-error-text";
 import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
+import { PasswordMatch, PasswordStrength } from "./PasswordStrength";
 import { TurnstileWidget, turnstileRequired } from "./TurnstileWidget";
 
 /**
@@ -431,7 +431,7 @@ function RegisterScreen({
     event.preventDefault();
     if (invite === null) return;
     if (!USERNAME_PATTERN.test(username)) return form.fail(authCodeText(t, "username-invalid"));
-    const problem = newPasswordProblem(password);
+    const problem = newPasswordProblem(password, { username });
     if (problem) return form.fail(authCodeText(t, problem));
     if (password !== confirm) return form.fail(authCodeText(t, "password-mismatch"));
     if (turnstileRequired() && !form.turnstile) return form.fail(t("auth.botCheckPending"));
@@ -513,7 +513,12 @@ function RegisterScreen({
           autoComplete="new-password"
           value={password}
           onChange={setPassword}
-          hint={t("auth.passwordHint", { count: MIN_PASSWORD_LENGTH })}
+          describedBy="register-password-strength"
+        />
+        <PasswordStrength
+          id="register-password-strength"
+          password={password}
+          context={{ username }}
         />
         <PasswordField
           id="register-confirm"
@@ -522,6 +527,7 @@ function RegisterScreen({
           value={confirm}
           onChange={setConfirm}
         />
+        <PasswordMatch password={password} confirm={confirm} />
         <TurnstileWidget
           action={TURNSTILE_ACTIONS.register}
           onToken={form.setTurnstile}
@@ -600,8 +606,9 @@ function ResetScreen({
           autoComplete="new-password"
           value={password}
           onChange={setPassword}
-          hint={t("auth.passwordHint", { count: MIN_PASSWORD_LENGTH })}
+          describedBy="reset-password-strength"
         />
+        <PasswordStrength id="reset-password-strength" password={password} />
         <PasswordField
           id="reset-confirm"
           label={t("auth.confirmPassword")}
@@ -609,6 +616,7 @@ function ResetScreen({
           value={confirm}
           onChange={setConfirm}
         />
+        <PasswordMatch password={password} confirm={confirm} />
         <TurnstileWidget
           action={TURNSTILE_ACTIONS.resetConfirm}
           onToken={form.setTurnstile}

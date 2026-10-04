@@ -76,12 +76,15 @@ describe("validateCredentials", () => {
     assert.match(validateCredentials("ab", NEW_PASSWORD)!, /3-39/);
     assert.match(validateCredentials("Has-Upper", NEW_PASSWORD)!, /lowercase/);
     assert.match(validateCredentials("has space", NEW_PASSWORD)!, /lowercase/);
-    assert.match(validateCredentials("ok-name", "longenough12")!, /15 characters/);
+    assert.match(validateCredentials("ok-name", "dung2k3")!, /8 characters/);
+    assert.match(validateCredentials("ok-name", "Password123!")!, /common or predictable/);
+    assert.match(validateCredentials("ok-name", "kpqzmrtv")!, /too weak/);
+    assert.match(validateCredentials("ok-name", "ok-name-garden")!, /username/);
   });
 
-  it("sets the new-password floor at 15 (NIST SP 800-63B-4, single factor)", () => {
-    assert.equal(MIN_PASSWORD_LENGTH, 15);
-    assert.notEqual(validateCredentials("abc", "x".repeat(14)), null);
+  it("sets the new-password floor at 8 (OWASP ASVS 5.0 V6.2.1)", () => {
+    assert.equal(MIN_PASSWORD_LENGTH, 8);
+    assert.notEqual(validateCredentials("abc", "dung2k3"), null);
   });
 });
 
@@ -115,8 +118,9 @@ describe("validateSignIn", () => {
     assert.equal(calls.length, 0, "a malformed username must not reach the server");
   });
 
-  it("accepts the shortest allowed password", () => {
-    assert.equal(validateCredentials("abc", "x".repeat(MIN_PASSWORD_LENGTH)), null);
+  it("accepts a password of the minimum length that is strong enough", () => {
+    assert.equal("dung2k3!".length, MIN_PASSWORD_LENGTH);
+    assert.equal(validateCredentials("abc", "dung2k3!"), null);
   });
 });
 
@@ -349,10 +353,7 @@ describe("authErrorCode", () => {
     assert.equal(authErrorCode(403, "two-factor code required"), "mfa-required");
     assert.equal(authErrorCode(401, "sign-in step expired; sign in again"), "mfa-expired");
     assert.equal(
-      authErrorCode(
-        403,
-        "too many wrong two-factor codes; wait 15 minutes or use a recovery code",
-      ),
+      authErrorCode(403, "too many wrong two-factor codes; wait 15 minutes or use a recovery code"),
       "mfa-locked",
     );
     assert.equal(

@@ -61,15 +61,32 @@ account is reported only after the correct password.
 
 ## Passwords
 
-Following NIST SP 800-63B-4 §3.1.1.2:
+Following OWASP ASVS 5.0 V6.2 and NIST SP 800-63B-4. The rules live in one
+file, `password-strength.ts`, kept as two byte-identical copies (the Worker
+enforces it, the app shows it live) and pinned by
+`tests/password-strength.test.ts`:
 
-- At least 15 characters, at most 1024. No composition rules and no forced
-  periodic change.
-- The 15-character minimum applies when a password is *set* (registration,
-  change, reset). Passwords of 12–14 characters set under the old rule keep
-  working, so nobody is locked out by the upgrade.
-- A new password is refused if it contains the username, the part of the email
-  before `@`, or "geolibre", or if it appears in the Have I Been Pwned corpus.
+- **At least 8 characters**, at most 1024 (ASVS 6.2.1). NIST's 15-character
+  floor applies to a password that is the *only* factor; this deployment
+  offers two-factor to everyone and requires it for admins, and the strength
+  rule below stops short passwords from also being simple ones.
+- **No composition rules** ("must contain a symbol") and no forced periodic
+  change. They push people to `Matkhau@123`.
+- **Refused outright:** the username, the part of the email before `@` or
+  "geolibre" anywhere in the password; a common password or a common base word
+  with only digits and symbols around it (`Password123!`, `matkhau@2026`);
+  sequences, keyboard runs and repetition (`12345678`, `qwertyui`,
+  `abababab`).
+- **Minimum strength "Fair".** The estimate is length times the bits per
+  character of the character classes used, with repeated and sequential
+  characters counting a quarter. Eight random lowercase letters sit at the
+  threshold, so a short password needs some variety, while a passphrase of
+  plain words (`correct horse battery staple`) passes without symbols.
+- **Breach corpus:** finally, the password must not appear in Have I Been
+  Pwned.
+- Every form that sets a password shows a strength bar and the rules as a
+  live checklist, plus a match indicator on the confirmation field. The rules
+  apply when a password is *set*; existing passwords keep signing in.
 - The breach check uses the k-anonymity range API: only the first five hex
   characters of the SHA-1 leave the Worker, with `Add-Padding: true` so the
   response size does not reveal the match count. It has a 2-second timeout and

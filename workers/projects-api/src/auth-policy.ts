@@ -4,11 +4,17 @@
 // index.ts cannot: it pulls in the Workers runtime. The entry calls these
 // functions; it does not re-decide the same questions.
 
-// NIST SP 800-63B-4 §3.1.1.2: 15 when the password is the only factor. Checked
-// when a password is set or changed, never at sign-in, so the accounts created
-// under the old 12-character rule keep working until their owners change it.
-export const MIN_PASSWORD_LENGTH = 15;
-export const MAX_PASSWORD_LENGTH = 1024;
+// The password rules themselves live in password-strength.ts, shared byte for
+// byte with the app so its live checklist and this server agree.
+import {
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  passwordProblem,
+  type PasswordContext,
+  type PasswordProblem,
+} from "./password-strength";
+
+export { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, type PasswordContext };
 
 export const INVITE_TTL_MS = 72 * 60 * 60 * 1000;
 export const RESET_TTL_MS = 30 * 60 * 1000;
@@ -37,30 +43,16 @@ export interface AuthActionRow {
   created_by: string | null;
 }
 
-export type PasswordPolicyError = "too-short" | "too-long" | "context";
-
-/** Words a password must not contain, beyond the breach corpus. */
-export interface PasswordContext {
-  username?: string | null;
-  email?: string | null;
-}
-
-// Context words shorter than this are skipped: a three-letter username would
-// otherwise reject every passphrase that happens to contain it.
-const MIN_CONTEXT_WORD = 4;
+export type PasswordPolicyError = PasswordProblem;
 
 /**
- * Rejects a short password, or one built from the account's own name.
- * Does not demand uppercase, digits, or symbols.
+ * Refuses a password that breaks a rule in password-strength.ts: length, the
+ * account's own name, a common or predictable shape, or too low a strength
+ * estimate. The breach corpus is checked separately (hibp.ts) because it needs
+ * the network.
  *
- * NIST SP 800-63B recommends against composition rules: they push people to
- * `Matkhau@123`, which is weaker than a long passphrase. Do not add a
- * character-class check here. The context list is the "context-specific words"
- * check the same section asks for; the breach corpus is checked separately
- * (see hibp.ts) because it needs the network.
- *
- * Length counts UTF-16 units, as the API always has. NIST counts code points;
- * the difference only matters for astral characters and errs on the strict side.
+ * Checked when a password is set or changed, never at sign-in, so accounts
+ * made under earlier rules keep working until their owners change it.
  *
  * @returns A stable code, or null when the password may be hashed.
  */
@@ -68,28 +60,18 @@ export function passwordPolicyError(
   password: string,
   context: PasswordContext = {},
 ): PasswordPolicyError | null {
-  if (password.length > MAX_PASSWORD_LENGTH) return "too-long";
-  if (password.length < MIN_PASSWORD_LENGTH) return "too-short";
-  const lowered = password.toLowerCase();
-  for (const word of contextWords(context)) {
-    if (lowered.includes(word)) return "context";
-  }
-  return null;
+  return passwordProblem(password, context);
 }
 
-function contextWords(context: PasswordContext): string[] {
-  const words = ["geolibre"];
-  if (context.username) words.push(context.username.toLowerCase());
-  const local = context.email?.split("@")[0]?.toLowerCase();
-  if (local) words.push(local);
-  return words.filter((word) => word.length >= MIN_CONTEXT_WORD);
-}
-
-/** The `error` string for each code. One place, so no route hard-codes the number. */
+/** The `error` string for each code. One place, so no route hard-codes the wording. */
 export function passwordPolicyMessage(code: PasswordPolicyError): string {
   if (code === "too-long") return "username or password is too long";
   if (code === "too-short") return `password must be at least ${MIN_PASSWORD_LENGTH} characters`;
-  return "password must not contain your username, email name, or the product name";
+  if (code === "context") {
+    return "password must not contain your username, email name, or the product name";
+  }
+  if (code === "common") return "password is too common or predictable";
+  return "password is too weak; make it longer or less predictable";
 }
 
 /** The `error` string for a password found in a breach corpus. */
