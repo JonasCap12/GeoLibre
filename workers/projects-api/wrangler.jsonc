@@ -86,7 +86,18 @@
     // or after this many days without a request (idle), whichever is first.
     // A leaked token used to be valid until someone revoked it by hand.
     "GEOLIBRE_SESSION_TTL_DAYS": "30",
-    "GEOLIBRE_SESSION_IDLE_DAYS": "7"
+    "GEOLIBRE_SESSION_IDLE_DAYS": "7",
+    // Days a deleted dataset or project stays in the R2 trash before the daily
+    // cron below purges it (src/storage.ts). Matches D1 Time Travel's window,
+    // so a deletion can be undone end to end.
+    "GEOLIBRE_TRASH_RETENTION_DAYS": "30",
+    // Two-factor authentication is required of every account. An account
+    // without it has GEOLIBRE_MFA_GRACE_DAYS from this date, or from its own
+    // creation if later, to turn it on; after that it can only reach the
+    // routes needed to do so (see mfaEnrollmentRequired in auth-policy.ts).
+    // Remove the date to stop requiring it.
+    "GEOLIBRE_MFA_REQUIRED_FROM": "2026-10-04",
+    "GEOLIBRE_MFA_GRACE_DAYS": "7"
     // Secrets, set with `wrangler secret put … -c workers/projects-api/wrangler.jsonc`
     // and never written here:
     //   TURNSTILE_SECRET_KEY  bot check on register / reset. Unset skips it
@@ -158,6 +169,11 @@
   // the laptop the numbers above came from, and exceeding the limit fails the
   // request outright (error 1102) instead of slowing it. The limit is a
   // ceiling, not a cost: billing is by CPU actually used.
+  // Daily at 03:23 UTC: purge the R2 trash (the `scheduled` handler).
+  "triggers": {
+    "crons": ["23 3 * * *"]
+  },
+
   "limits": {
     "cpu_ms": 2000
   },

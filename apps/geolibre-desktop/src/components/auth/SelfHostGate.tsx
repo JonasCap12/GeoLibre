@@ -9,7 +9,7 @@ import {
   Input,
   Label,
 } from "@geolibre/ui";
-import { LogOut, ShieldCheck, User, UserRound } from "lucide-react";
+import { LogOut, ShieldAlert, ShieldCheck, User, UserRound, X } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
@@ -42,6 +42,7 @@ import {
 } from "../../lib/selfhost-routes";
 import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
 import { AccountCenter, type AccountView } from "./AccountCenter";
+import { MfaSection } from "./AccountSecurityDialog";
 import { AccountAvatar, RoleBadge } from "./account-badges";
 import { authCodeText, authErrorText } from "./auth-error-text";
 import { MfaCodeField } from "./MfaCodeField";
@@ -122,11 +123,181 @@ export function SelfHostGate({ children }: { children: ReactNode }) {
     return <VerifyEmailScreen token={route.token} onDone={() => leave()} />;
   }
   if (!token) return <SignInScreen notice={notice} />;
+  return <SignedIn token={token}>{children}</SignedIn>;
+}
+
+/**
+ * The app for a signed-in account, gated on two-factor.
+ *
+ * Every account must turn two-factor on by a deadline the API reports. Before
+ * it, a banner says so; after it, the API refuses everything but setup, so the
+ * app is replaced by the setup screen rather than left to fail call by call.
+ */
+function SignedIn({ token, children }: { token: string; children: ReactNode }) {
+  const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [enrolling, setEnrolling] = useState(false);
+  const [bannerHidden, setBannerHidden] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    // A 401 here is handled by the session watch, which signs the tab out.
+    fetchAccount({ token })
+      .then((info) => {
+        if (!cancelled) setAccount(info);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const reload = async () => {
+    const info = await fetchAccount({ token });
+    setAccount(info);
+    if (info.mfaEnabled) setEnrolling(false);
+  };
+
+  if (account !== null && (account.mfaEnrollmentRequired || enrolling)) {
+    return (
+      <MfaEnrollmentScreen
+        token={token}
+        account={account}
+        required={account.mfaEnrollmentRequired}
+        onAccountChange={reload}
+        onLater={() => setEnrolling(false)}
+      />
+    );
+  }
+
+  const deadline =
+    account !== null && !account.mfaEnabled && account.mfaRequiredBy !== null && !bannerHidden
+      ? account.mfaRequiredBy
+      : null;
+
   return (
     <>
       {children}
+      {deadline ? (
+        <MfaDeadlineBanner
+          deadline={deadline}
+          onSetUp={() => setEnrolling(true)}
+          onDismiss={() => setBannerHidden(true)}
+        />
+      ) : null}
       <UserMenu token={token} />
     </>
+  );
+}
+
+/** In the app's language, not the browser's: the sentence around it is translated. */
+function formatDeadline(iso: string, locale: string | undefined): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  try {
+    return new Intl.DateTimeFormat(locale, { dateStyle: "long", timeStyle: "short" }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "long", timeStyle: "short" }).format(
+      date,
+    );
+  }
+}
+
+/** The reminder before the two-factor deadline. Hidden for the tab once dismissed. */
+function MfaDeadlineBanner({
+  deadline,
+  onSetUp,
+  onDismiss,
+}: {
+  deadline: string;
+  onSetUp: () => void;
+  onDismiss: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  return (
+    <div
+      role="status"
+      className="fixed bottom-4 left-1/2 z-[95] flex w-[min(36rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-500/40 bg-background/95 p-3 text-sm shadow-lg backdrop-blur"
+    >
+      <ShieldAlert className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+      <p className="min-w-0 flex-1 text-start">
+        {t("auth.enforce.banner", { date: formatDeadline(deadline, i18n.resolvedLanguage) })}
+      </p>
+      <Button type="button" size="sm" onClick={onSetUp}>
+        {t("auth.enforce.setUp")}
+      </Button>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="h-7 w-7 shrink-0"
+        aria-label={t("auth.enforce.dismiss")}
+        onClick={onDismiss}
+      >
+        <X className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Turning two-factor on, full screen. `required` means the deadline has passed
+ * and there is no way back to the app until it is on; otherwise "Later" closes.
+ */
+function MfaEnrollmentScreen({
+  token,
+  account,
+  required,
+  onAccountChange,
+  onLater,
+}: {
+  token: string;
+  account: AccountInfo;
+  required: boolean;
+  onAccountChange: () => Promise<void>;
+  onLater: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const leave = async () => {
+    setBusy(true);
+    try {
+      await signOut({ token });
+    } catch (err) {
+      console.warn("sign-out could not reach the server; clearing the local session", err);
+    } finally {
+      writeShareToken("");
+      setBusy(false);
+    }
+  };
+  return (
+    <AuthScreen>
+      <AuthHeading
+        title={t("auth.enforce.title")}
+        description={
+          required
+            ? t("auth.enforce.overdue")
+            : t("auth.enforce.description", {
+                date: account.mfaRequiredBy
+                  ? formatDeadline(account.mfaRequiredBy, i18n.resolvedLanguage)
+                  : "",
+              })
+        }
+      />
+      <div className="w-full max-w-md text-start">
+        <MfaSection token={token} account={account} onAccountChange={onAccountChange} />
+      </div>
+      <div className="flex gap-2">
+        {required ? null : (
+          <Button type="button" variant="ghost" onClick={onLater}>
+            {t("auth.enforce.later")}
+          </Button>
+        )}
+        <Button type="button" variant="ghost" disabled={busy} onClick={() => void leave()}>
+          <LogOut className="me-2 h-4 w-4" />
+          {t("auth.signOut")}
+        </Button>
+      </div>
+    </AuthScreen>
   );
 }
 

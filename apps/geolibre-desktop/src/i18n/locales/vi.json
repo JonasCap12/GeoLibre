@@ -2069,7 +2069,8 @@
       "mfaUnavailable": "Máy chủ này chưa cấu hình xác thực hai bước. Hãy liên hệ quản trị viên.",
       "adminMfaRequired": "Công cụ quản trị cần xác thực hai bước. Hãy bật trong Tài khoản & bảo mật trước.",
       "passwordCommon": "Mật khẩu này quá phổ biến hoặc dễ đoán. Hãy chọn mật khẩu khác.",
-      "passwordWeak": "Mật khẩu còn yếu. Hãy đặt dài hơn hoặc kết hợp thêm chữ hoa, số hay ký hiệu."
+      "passwordWeak": "Mật khẩu còn yếu. Hãy đặt dài hơn hoặc kết hợp thêm chữ hoa, số hay ký hiệu.",
+      "mfaEnrollment": "Tài khoản này bắt buộc bật xác thực hai bước. Hãy bật để tiếp tục."
     },
     "center": {
       "title": "Tài khoản",
@@ -2140,6 +2141,15 @@
       "breachNote": "Khi lưu, mật khẩu còn được đối chiếu với danh sách mật khẩu đã từng bị lộ.",
       "match": "Hai mật khẩu khớp nhau",
       "mismatch": "Hai mật khẩu chưa khớp"
+    },
+    "enforce": {
+      "title": "Bật xác thực hai bước",
+      "description": "Từ nay mọi tài khoản trên hệ thống phải bật xác thực hai bước. Hãy bật trước {{date}} để tiếp tục dùng GeoLibre.",
+      "overdue": "Tài khoản của bạn đã quá hạn bật xác thực hai bước. Hãy bật để tiếp tục dùng GeoLibre.",
+      "banner": "Bắt buộc bật xác thực hai bước. Hãy bật trước {{date}}.",
+      "setUp": "Bật ngay",
+      "later": "Để sau",
+      "dismiss": "Ẩn nhắc nhở"
     }
   },
   "basemapExtract": {

@@ -2173,7 +2173,8 @@
       "mfaUnavailable": "Two-factor authentication is not set up on this server yet. Ask the admin.",
       "adminMfaRequired": "Admin tools need two-factor authentication. Turn it on in Account & security first.",
       "passwordCommon": "This password is too common or easy to guess. Choose a different one.",
-      "passwordWeak": "This password is too weak. Make it longer or mix in other kinds of characters."
+      "passwordWeak": "This password is too weak. Make it longer or mix in other kinds of characters.",
+      "mfaEnrollment": "Two-factor authentication is required for this account. Turn it on to continue."
     },
     "center": {
       "title": "Account",
@@ -2246,6 +2247,15 @@
       "breachNote": "When saved, it is also checked against passwords exposed in data breaches.",
       "match": "Passwords match",
       "mismatch": "Passwords don't match yet"
+    },
+    "enforce": {
+      "title": "Turn on two-factor authentication",
+      "description": "Every account on this deployment now needs two-factor authentication. Turn it on before {{date}} to keep using GeoLibre.",
+      "overdue": "Your account is past the deadline for two-factor authentication. Turn it on to continue using GeoLibre.",
+      "banner": "Two-factor authentication is required. Turn it on before {{date}}.",
+      "setUp": "Turn on now",
+      "later": "Later",
+      "dismiss": "Hide this reminder"
     }
   },
   "basemapExtract": {
