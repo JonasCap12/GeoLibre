@@ -82,7 +82,7 @@ import {
   redeemMfaTicket,
   requireSecondFactor,
 } from "./mfa-routes";
-import { isAuthRoute, isPublicRoute } from "./public-routes";
+import { API_SECURITY_HEADERS, isAuthRoute, isPublicRoute } from "./public-routes";
 import { TURNSTILE_ACTIONS } from "./turnstile";
 import {
   ApiError,
@@ -1332,7 +1332,7 @@ export default {
     const cors = corsHeaders(request, config);
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: cors });
+      return new Response(null, { status: 204, headers: { ...cors, ...API_SECURITY_HEADERS } });
     }
 
     let response: Response;
@@ -1354,6 +1354,7 @@ export default {
     // helper, and the CORS headers have to join whatever the route already set.
     const headers = new Headers(response.headers);
     for (const [name, value] of Object.entries(cors)) headers.set(name, value);
+    for (const [name, value] of Object.entries(API_SECURITY_HEADERS)) headers.set(name, value);
     const segments = new URL(request.url).pathname.split("/").filter((part) => part !== "");
     if (isAuthRoute(segments)) headers.set("Cache-Control", "no-store");
     return new Response(response.body, {
