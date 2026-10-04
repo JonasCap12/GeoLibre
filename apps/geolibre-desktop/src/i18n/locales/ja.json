@@ -1346,7 +1346,6 @@
     "connecting": "接続中…",
     "reconnecting": "再接続中…",
     "connected": "ライブセッション接続中",
-    "followHost": "ホストの表示に追従",
     "goToMap": "地図に移動して共同編集",
     "goToMapViewOnly": "地図に移動して閲覧",
     "collapseRoster": "参加者一覧を折りたたむ",

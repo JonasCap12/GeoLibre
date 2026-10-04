@@ -7,6 +7,7 @@ import {
   type CollaborationParticipant,
   type CollaborationPresence,
   type GeoLibreProject,
+  type MapViewState,
 } from "@geolibre/core";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { RefObject } from "react";
@@ -29,6 +30,12 @@ import {
   type ServerMessage,
   participantCanEditLayer,
 } from "../lib/collab-protocol";
+import {
+  followAfterParticipants,
+  followOnWelcome,
+  followTarget,
+  viewToApply,
+} from "../lib/collab-follow";
 import { recallHostToken, rememberHostToken } from "../lib/collab-host-tokens";
 import { fetchCollabIdentity } from "../lib/collab-sessions";
 import { resolveShareBaseUrl } from "../lib/share-geolibre";
@@ -61,6 +68,16 @@ async function signedInIdentity(): Promise<string | undefined> {
 const SNAPSHOT_DEBOUNCE_MS = 250;
 const CURSOR_THROTTLE_MS = 40;
 
+/** Slide the camera to a followed view. Every engine implements `easeToView`. */
+function applyFollowedView(engine: MapEngine | null, view: MapViewState): void {
+  if (!engine) return;
+  if (typeof engine.easeToView === "function") {
+    engine.easeToView(view);
+    return;
+  }
+  engine.applyView(view);
+}
+
 export interface CollaborationApi {
   enabled: boolean;
   canEdit: () => boolean;
@@ -87,7 +104,8 @@ export interface CollaborationApi {
   setLayerLocks: (lockedLayerIds: string[]) => void;
   kickParticipant: (clientId: string, reason?: string) => void;
   blockParticipant: (clientId: string, reason?: string) => void;
-  setFollowHost: (enabled: boolean) => void;
+  setFollow: (clientId: string | null) => void;
+  setPresenting: (active: boolean) => void;
   sendChat: (text: string, coordinate?: { lng: number; lat: number } | null) => boolean;
   sendCommentMutation: (action: CommentMutationAction) => boolean;
 }
@@ -102,6 +120,10 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   const revRef = useRef(0);
   const snapshotRequestRef = useRef(0);
   const selfIdRef = useRef<string | null>(null);
+  // Guests follow the host on the first welcome only. Cleared once that choice
+  // is applied, or as soon as the person picks someone (including nobody), so a
+  // reconnect does not override them.
+  const autoFollowHostRef = useRef(false);
   const syncPausedRef = useRef(false);
   // Null until a too-large rejection names the relay's ceiling. The compile-time
   // constant is only the fallback; a deployment may set a lower one.
@@ -219,6 +241,14 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     switch (message.type) {
       case "welcome": {
         selfIdRef.current = message.clientId;
+        const decided = followOnWelcome({
+          role: message.role,
+          selfId: message.clientId,
+          participants: message.participants,
+          currentFollow: useAppStore.getState().collaboration.followClientId,
+          autoFollowHost: autoFollowHostRef.current,
+        });
+        autoFollowHostRef.current = decided.autoFollowHost;
         store.setCollaboration({
           isActive: true,
           connecting: false,
@@ -226,6 +256,8 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
           role: message.role,
           mode: message.mode,
           participants: message.participants,
+          followClientId: decided.followClientId,
+          presenterClientId: message.presenter ?? null,
           chat: message.chat ?? [],
           requireIdentity: message.requireIdentity ?? false,
           identitySupported: message.identitySupported ?? false,
@@ -248,11 +280,11 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
         } else if (message.role === "host") {
           void sendSnapshot();
         }
-        if (message.role === "guest" && useAppStore.getState().collaboration.followHost) {
-          const host = message.participants.find((participant) => participant.role === "host");
-          const hostView = host ? message.presence[host.clientId]?.view : null;
-          if (hostView) mapControllerRef.current?.applyView(hostView);
-        }
+        const followedView = viewToApply(decided.followClientId, {
+          clientId: decided.followClientId ?? "",
+          view: decided.followClientId ? message.presence[decided.followClientId]?.view : null,
+        });
+        if (followedView) applyFollowedView(mapControllerRef.current, followedView);
         const pending = pendingConnectRef.current;
         pendingConnectRef.current = null;
         pending?.resolve();
@@ -274,13 +306,19 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
           view: message.view,
         };
         store.updateCollaborationPresence(message.clientId, presence);
-        if (collab.followHost && participant?.role === "host" && message.view) {
-          mapControllerRef.current?.applyView(message.view);
-        }
+        const followedView = viewToApply(collab.followClientId, message);
+        if (followedView) applyFollowedView(mapControllerRef.current, followedView);
         break;
       }
+      case "presenter":
+        store.setCollaboration({ presenterClientId: message.clientId });
+        break;
       case "participants": {
-        store.setCollaboration({ participants: message.participants });
+        const currentFollow = useAppStore.getState().collaboration.followClientId;
+        store.setCollaboration({
+          participants: message.participants,
+          followClientId: followAfterParticipants(currentFollow, message.participants),
+        });
         const present = new Set(message.participants.map((p) => p.clientId));
         const presence = useAppStore.getState().collaboration.presence;
         for (const id of Object.keys(presence)) {
@@ -390,11 +428,16 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
 
     const map = mapControllerRef.current?.getMap() ?? null;
     const detachMap = map ? bindPresence(map, conn) : () => {};
+    // Cesium and ArcGIS do not expose a MapLibre map, so they cannot emit
+    // drag/zoom/rotate/pitch starts. Follow stays on until the person stops it
+    // or the target leaves; only MapLibre (and Mapbox) auto-stop on a gesture.
+    const detachGestures = map ? bindFollowGestures(map) : () => {};
 
     teardownRef.current = () => {
       if (debounce) clearTimeout(debounce);
       unsubscribe();
       detachMap();
+      detachGestures();
     };
   };
 
@@ -425,6 +468,22 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     };
   };
 
+  // User camera gestures carry `originalEvent` (mouse, touch, keyboard).
+  // `applyView` / `easeToView` do not, so following someone does not unfollow.
+  const bindFollowGestures = (map: MapLibreMap): (() => void) => {
+    const onGesture = (event: MapLibreEvent) => {
+      if (!event.originalEvent) return;
+      if (!useAppStore.getState().collaboration.followClientId) return;
+      autoFollowHostRef.current = false;
+      useAppStore.getState().setCollaboration({ followClientId: null });
+    };
+    const events = ["dragstart", "zoomstart", "rotatestart", "pitchstart"] as const;
+    for (const name of events) map.on(name, onGesture);
+    return () => {
+      for (const name of events) map.off(name, onGesture);
+    };
+  };
+
   const connect = (
     sessionId: string,
     displayName: string,
@@ -436,6 +495,7 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     syncPausedRef.current = false;
     learnedLimitRef.current = null;
     selfIdRef.current = crypto.randomUUID();
+    autoFollowHostRef.current = !hostToken;
     lastContentRef.current = null;
     revRef.current = 0;
 
@@ -459,7 +519,8 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       mode: "co-edit",
       clientId: selfIdRef.current,
       participants: [selfParticipant],
-      followHost: !hostToken,
+      followClientId: null,
+      presenterClientId: null,
       error: null,
     });
 
@@ -607,13 +668,24 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     return connRef.current?.send({ type: "comment-mutation", action }) ?? false;
   }, []);
 
-  const setFollowHost = useCallback((enabled: boolean) => {
+  const setPresenting = useCallback((active: boolean) => {
+    connRef.current?.send({ type: "present", active });
+  }, []);
+
+  const setFollow = useCallback((clientId: string | null) => {
     const store = useAppStore.getState();
-    store.setCollaboration({ followHost: enabled });
-    if (!enabled) return;
-    const host = store.collaboration.participants.find((p) => p.role === "host");
-    const view = host ? store.collaboration.presence[host.clientId]?.view : null;
-    if (view) mapControllerRef.current?.applyView(view);
+    const selfId = store.collaboration.clientId;
+    // A request to follow yourself is a no-op, not an unfollow.
+    if (clientId !== null && clientId === selfId) return;
+    autoFollowHostRef.current = false;
+    const followClientId = followTarget(clientId, selfId);
+    store.setCollaboration({ followClientId });
+    if (!followClientId) return;
+    const followedView = viewToApply(followClientId, {
+      clientId: followClientId,
+      view: store.collaboration.presence[followClientId]?.view,
+    });
+    if (followedView) applyFollowedView(mapControllerRef.current, followedView);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -632,7 +704,8 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     setLayerLocks,
     kickParticipant,
     blockParticipant,
-    setFollowHost,
+    setFollow,
+    setPresenting,
     sendChat,
     sendCommentMutation,
   };

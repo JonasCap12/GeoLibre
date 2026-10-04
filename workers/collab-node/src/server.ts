@@ -120,6 +120,8 @@ interface Peer {
 interface LiveSession {
   peers: Set<Peer>;
   presence: Map<string, PresenceEntry>;
+  /** clientId of the person presenting, or null. Cleared when they leave. */
+  presenterClientId: string | null;
   cleanup?: NodeJS.Timeout;
 }
 
@@ -235,7 +237,7 @@ export function createRelay(options: RelayOptions = {}): {
   function live(id: string): LiveSession {
     let session = sessions.get(id);
     if (!session) {
-      session = { peers: new Set(), presence: new Map() };
+      session = { peers: new Set(), presence: new Map(), presenterClientId: null };
       sessions.set(id, session);
     }
     if (session.cleanup) {
@@ -266,7 +268,12 @@ export function createRelay(options: RelayOptions = {}): {
 
   function closePeer(id: string, session: LiveSession, peer: Peer): void {
     if (!session.peers.delete(peer)) return;
-    if (peer.participant) session.presence.delete(peer.participant.clientId);
+    const leftId = peer.participant?.clientId;
+    if (leftId) session.presence.delete(leftId);
+    if (leftId && session.presenterClientId === leftId) {
+      session.presenterClientId = null;
+      broadcast(session, { type: "presenter", clientId: null });
+    }
     broadcastParticipants(session);
     if (session.peers.size === 0) {
       session.cleanup = setTimeout(() => {
@@ -412,6 +419,7 @@ export function createRelay(options: RelayOptions = {}): {
         requireIdentity: persisted.requireIdentity,
         identitySupported,
         lockedLayerIds: persisted.lockedLayerIds,
+        presenter: session.presenterClientId,
         ...(welcomeInvites ? { invites: welcomeInvites } : {}),
       });
       broadcastParticipants(session, peer);
@@ -425,6 +433,20 @@ export function createRelay(options: RelayOptions = {}): {
         code: "bad-message",
         message: "Send a join message first.",
       });
+      return;
+    }
+
+    if (message.type === "present") {
+      if (typeof message.active !== "boolean") return;
+      if (message.active) {
+        if (session.presenterClientId === participant.clientId) return;
+        session.presenterClientId = participant.clientId;
+        broadcast(session, { type: "presenter", clientId: participant.clientId });
+        return;
+      }
+      if (session.presenterClientId !== participant.clientId) return;
+      session.presenterClientId = null;
+      broadcast(session, { type: "presenter", clientId: null });
       return;
     }
 

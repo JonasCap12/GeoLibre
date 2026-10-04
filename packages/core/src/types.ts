@@ -1554,8 +1554,16 @@ export interface CollaborationState {
   participants: CollaborationParticipant[];
   /** Remote presence keyed by participant clientId (never includes self). */
   presence: Record<string, CollaborationPresence>;
-  /** When true, this participant's camera follows the host's viewport. */
-  followHost: boolean;
+  /**
+   * clientId of the participant whose camera this one follows, or null when
+   * the local user is navigating on their own. At most one person.
+   */
+  followClientId: string | null;
+  /**
+   * clientId of the participant currently presenting to the session, or null.
+   * Presenting does not force anyone else's camera to follow.
+   */
+  presenterClientId: string | null;
   /** Recent session chat, oldest first, capped to a bounded window (#754). */
   chat: CollaborationChatMessage[];
   /** Session flag requiring participants to be signed in. */

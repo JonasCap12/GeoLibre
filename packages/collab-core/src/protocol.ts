@@ -164,6 +164,12 @@ export interface SetLayerLocksMessage {
   lockedLayerIds: string[];
 }
 
+/** Claim or release the single "presenting" slot. A later claim replaces the previous presenter. */
+export interface PresentMessage {
+  type: "present";
+  active: boolean;
+}
+
 export type ClientMessage =
   | JoinMessage
   | ClientSnapshotMessage
@@ -177,7 +183,8 @@ export type ClientMessage =
   | SetSessionConfigMessage
   | KickParticipantMessage
   | BlockParticipantMessage
-  | SetLayerLocksMessage;
+  | SetLayerLocksMessage
+  | PresentMessage;
 
 // Server -> client -----------------------------------------------------------
 
@@ -203,6 +210,11 @@ export interface WelcomeMessage {
   identitySupported?: boolean;
   lockedLayerIds?: string[];
   invites?: CollabInvite[];
+  /**
+   * Who is presenting, or null. Optional so a relay that predates presenting
+   * still parses; clients treat a missing field as nobody.
+   */
+  presenter?: string | null;
 }
 
 export interface PresenceEntry {
@@ -261,6 +273,12 @@ export interface LayerLocksMessage {
   lockedLayerIds: string[];
 }
 
+/** The session's current presenter. `clientId` is null when nobody is presenting. */
+export interface PresenterMessage {
+  type: "presenter";
+  clientId: string | null;
+}
+
 export interface KickedMessage {
   type: "kicked";
   reason?: string;
@@ -291,6 +309,7 @@ export type ServerMessage =
   | InviteRevokedMessage
   | SessionConfigMessage
   | LayerLocksMessage
+  | PresenterMessage
   | KickedMessage
   | ErrorMessage;
 

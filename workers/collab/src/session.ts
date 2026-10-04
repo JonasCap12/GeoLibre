@@ -511,6 +511,9 @@ export class CollabSession extends DurableObject<Env> {
       case "set-layer-locks":
         await this.handleSetLayerLocks(ws, attachment, message);
         break;
+      case "present":
+        await this.handlePresent(attachment, message.active);
+        break;
     }
   }
 
@@ -518,6 +521,11 @@ export class CollabSession extends DurableObject<Env> {
     const attachment = ws.deserializeAttachment() as SocketAttachment | null;
     if (attachment) {
       this.presence.delete(attachment.clientId);
+      const presenter = await this.ctx.storage.get<string>("presenter");
+      if (presenter === attachment.clientId) {
+        await this.ctx.storage.delete("presenter");
+        this.broadcast({ type: "presenter", clientId: null }, ws);
+      }
       await this.appendLog({
         type: "leave",
         ts: Date.now(),
@@ -696,6 +704,7 @@ export class CollabSession extends DurableObject<Env> {
       requireIdentity: requireIdentity ?? false,
       identitySupported: isIdentityConfigured(this.env.COLLAB_IDENTITY_SECRET),
       lockedLayerIds: lockedLayerIds ?? [],
+      presenter: (await this.ctx.storage.get<string>("presenter")) ?? null,
       ...(welcomeInvites ? { invites: welcomeInvites } : {}),
     });
 
@@ -785,6 +794,20 @@ export class CollabSession extends DurableObject<Env> {
       cursor,
       view,
     });
+  }
+
+  private async handlePresent(attachment: SocketAttachment, active: unknown): Promise<void> {
+    if (typeof active !== "boolean") return;
+    const current = (await this.ctx.storage.get<string>("presenter")) ?? null;
+    if (active) {
+      if (current === attachment.clientId) return;
+      await this.ctx.storage.put("presenter", attachment.clientId);
+      this.broadcast({ type: "presenter", clientId: attachment.clientId });
+      return;
+    }
+    if (current !== attachment.clientId) return;
+    await this.ctx.storage.delete("presenter");
+    this.broadcast({ type: "presenter", clientId: null });
   }
 
   private async handleSetMode(

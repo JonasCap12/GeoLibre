@@ -572,4 +572,38 @@ describe("Node collaboration relay", () => {
     assert.equal(self?.identity, null);
     guest.close();
   });
+
+  it("keeps a single presenter and clears it when they leave", async () => {
+    const { http } = await start();
+    const created = await createSession(http);
+    const host = await connect(http, created.sessionId);
+    const guest = await connect(http, created.sessionId);
+    const hostWelcome = await joinSession(host, created.hostToken, "Host");
+    const guestWelcome = await joinSession(guest, undefined, "Guest");
+    assert.equal(hostWelcome.presenter, null);
+    assert.equal(guestWelcome.presenter, null);
+
+    const hostId = hostWelcome.clientId as string;
+    const guestId = guestWelcome.clientId as string;
+
+    // Listen before sending: a frame that arrives with no listener is dropped.
+    const guestSawHost = next(guest, "presenter");
+    host.send(JSON.stringify({ type: "present", active: true }));
+    assert.equal((await guestSawHost).clientId, hostId);
+
+    // A later claim replaces the previous presenter.
+    const hostSawGuest = next(host, "presenter");
+    guest.send(JSON.stringify({ type: "present", active: true }));
+    assert.equal((await hostSawGuest).clientId, guestId);
+
+    const late = await connect(http, created.sessionId);
+    const lateWelcome = await joinSession(late, undefined, "Late");
+    assert.equal(lateWelcome.presenter, guestId);
+
+    const cleared = next(host, "presenter");
+    guest.close();
+    assert.equal((await cleared).clientId, null);
+    host.close();
+    late.close();
+  });
 });
