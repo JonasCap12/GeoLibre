@@ -107,6 +107,7 @@ import {
 } from "./model";
 import {
   DATASET_LIST_WHERE_VISIBILITY,
+  attachmentDisposition,
   DATASET_SELECT,
   datasetJson,
   datasetKey,
@@ -1262,7 +1263,7 @@ async function apiRoute(
           "Content-Type": row.content_type,
           // `attachment` is deliberate: the API origin must never render an
           // uploaded file as a document, whatever safeContentType let through.
-          "Content-Disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`,
+          "Content-Disposition": attachmentDisposition(row.filename),
           "X-Content-Type-Options": "nosniff",
           // Content is immutable -- a replaced file is a new id -- but the row
           // can be deleted, so revalidate rather than cache for a year.
