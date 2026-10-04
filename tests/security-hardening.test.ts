@@ -167,3 +167,16 @@ describe("host token comparison", () => {
     assert.equal(sameSecret("", ""), true);
   });
 });
+
+describe("web header copies", () => {
+  it("keeps the web Worker's headers identical to the /* block in _headers", async () => {
+    // The Worker repeats these for the responses it builds itself (SPA
+    // fallback, /jupyterlite/*). A value changed in one place only would
+    // send a different policy depending on which path served the page.
+    const { APP_SECURITY_HEADERS } = await import("../workers/web/src/index");
+    const headers = read("../apps/geolibre-desktop/public/_headers");
+    for (const [name, value] of APP_SECURITY_HEADERS) {
+      assert.ok(headers.includes(`\n  ${name}: ${value}\n`), `${name} differs from _headers`);
+    }
+  });
+});
