@@ -73,6 +73,30 @@ export const datasetKey = (id: string): string => `datasets/${id}/content`;
  * still stripped so the stored value cannot *look* like a path to a client that
  * joins it onto a directory.
  */
+/**
+ * The Content-Disposition for a download (RFC 6266): an ASCII `filename` for
+ * old clients, and the real name, UTF-8 percent-encoded, in `filename*`.
+ *
+ * Header values must be ByteStrings in Workers, so putting a Vietnamese name
+ * such as `bản đồ.dxf` straight into `filename="…"` threw, and the download
+ * failed with a 500. Quotes, backslashes and control characters are dropped
+ * from the ASCII form so nothing in a name can end the parameter early.
+ */
+export function attachmentDisposition(filename: string): string {
+  const ascii =
+    filename
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .replace(/[^\x20-\x7e]/g, "_")
+      .replace(/["\\]/g, "")
+      .trim() || "dataset";
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
 export function safeFilename(raw: string): string {
   const base = raw.split(/[\\/]/).pop() ?? "";
   const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, "").trim();
