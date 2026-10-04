@@ -19,9 +19,8 @@
   //
   // This Worker needs no bindings and no secrets: every route proxies a public
   // upstream (OpenPlanetaryMap, USGS Astrogeology, Protomaps, OpenAerialMap,
-  // Overpass, Source.coop, CKAN, raw.githubusercontent.com). `interface Env {}`
-  // in src/index.ts is empty and must stay that way for this config to be
-  // complete.
+  // Overpass, Source.coop, CKAN, raw.githubusercontent.com). Its only setting
+  // is the ALLOWED_PROXY_ORIGINS var below.
   //
   // No package.json beside this file, on purpose — see workers/web/wrangler.jsonc
   // for why adding one would mutate the upstream-tracked package-lock.json.
@@ -40,19 +39,19 @@
     "cpu_ms": 200
   },
 
-  // The app is served from a custom domain, which none of the hosts hard-coded
-  // in isAllowedProxyOrigin match, so the OpenAerialMap, Source Cooperative
-  // and Overpass routes answered it with 403. Exact origins, comma-separated.
+  // Exact origins, comma-separated, allowed through the origin-gated routes
+  // (OpenAerialMap, Source Cooperative, Overpass). Setting it replaces the
+  // built-in host list, which admits every *.workers.dev: on this account that
+  // would let any stranger's Worker use these routes. Both of this app's
+  // hostnames are listed; the desktop app and localhost stay allowed.
   "vars": {
-    "ALLOWED_PROXY_ORIGINS": "https://gis.jonasnguyen.uk"
+    "ALLOWED_PROXY_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev"
   }
 
   // No "routes": this deploys to geolibre-tiles.<subdomain>.workers.dev.
   //
-  // Before binding a custom domain, read isAllowedProxyOrigin in src/index.ts.
-  // Five routes (/oam, /overpass, /source-coop, /ckan, /github-raw) refuse any
-  // Origin that is not *.geolibre.app, *.workers.dev or localhost. Serving the
-  // app from a custom domain therefore 403s all five until that allowlist also
-  // names the new origin -- which, once this Worker is yours, is a change you
-  // can make, unlike on the upstream deployment.
+  // Before serving the app from another hostname, add it to
+  // ALLOWED_PROXY_ORIGINS above: the origin-gated routes (/oam, /overpass,
+  // /source-coop, /ckan, /github-raw) answer any origin not listed there with
+  // 403. See isAllowedProxyOriginFor in src/index.ts.
 }
