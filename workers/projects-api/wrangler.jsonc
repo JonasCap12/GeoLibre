@@ -67,7 +67,9 @@
     "GEOLIBRE_CORS_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev",
     // Comma-separated admin usernames. Empty or omitted means nobody can mint
     // invites — an unconfigured deployment must not be seedable by a stranger.
-    "GEOLIBRE_ADMIN_USERNAMES": "nguyen-minh-nhut",
+    // Keep it naming only accounts that exist: an unregistered name here could
+    // be claimed by whoever is invited next and picks it.
+    "GEOLIBRE_ADMIN_USERNAMES": "nhut",
     // Must match an entry in send_email.allowed_sender_addresses above, and the
     // domain must be onboarded to Cloudflare Email Sending on this account —
     // sending from a domain you do not control is refused, not merely spam-
