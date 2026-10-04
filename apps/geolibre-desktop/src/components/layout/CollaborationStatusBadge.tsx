@@ -11,6 +11,8 @@ import { CollaborationParticipantRow } from "./CollaborationParticipantRow";
 interface Announcement {
   id: number;
   text: string;
+  /** Optional action, used by "follow again" after a gesture stops the follow. */
+  action?: { label: string; onClick: () => void };
 }
 
 interface CollaborationStatusBadgeProps {
@@ -49,6 +51,17 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
   const isActive = useAppStore((s) => s.collaboration.isActive);
   const connecting = useAppStore((s) => s.collaboration.connecting);
   const participants = useAppStore((s) => s.collaboration.participants);
+  const followClientId = useAppStore((s) => s.collaboration.followClientId);
+  const presenterClientId = useAppStore((s) => s.collaboration.presenterClientId);
+  // Ids that have published a camera. A string (not the presence object) so
+  // cursor moves, which replace presence without changing this set, do not
+  // re-render the roster.
+  const viewedIds = useAppStore((s) =>
+    s.collaboration.participants
+      .filter((p) => s.collaboration.presence[p.clientId]?.view)
+      .map((p) => p.clientId)
+      .join("\0"),
+  );
   // `clientId` is typed `string | null`; fall back to an empty-string sentinel
   // so the `id !== selfId` self-filtering below never treats a null id as "not
   // me" and announces the local user joining. Server client ids are UUIDs, so
@@ -102,6 +115,23 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
   // while isActive stays true; without remembering the old id, the diff below
   // would see the old self-id drop out of the roster and announce "you left".
   const prevSelfIdRef = useRef(selfId);
+  const prevFollowRef = useRef<string | null>(followClientId);
+  // `undefined` seeds the first presenter observation so joining a session that
+  // already has a presenter does not toast it; later changes do.
+  const prevPresenterRef = useRef<string | null | undefined>(undefined);
+  const rosterRef = useRef(participants);
+
+  const queueAnnouncements = (fresh: Announcement[]) => {
+    if (fresh.length === 0) return;
+    setAnnouncements((prev) => [...prev, ...fresh]);
+    for (const a of fresh) {
+      const timer = window.setTimeout(() => {
+        setAnnouncements((prev) => prev.filter((x) => x.id !== a.id));
+        timersRef.current = timersRef.current.filter((id) => id !== timer);
+      }, ANNOUNCEMENT_TTL_MS);
+      timersRef.current.push(timer);
+    }
+  };
 
   // Clear any pending auto-dismiss timers on unmount.
   useEffect(
@@ -120,6 +150,8 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
       for (const id of timersRef.current) window.clearTimeout(id);
       timersRef.current = [];
       knownRef.current = null;
+      prevFollowRef.current = null;
+      prevPresenterRef.current = undefined;
       setExpanded(false);
       setAnnouncements([]);
       // Reset the chat composer so a fresh session starts clean.
@@ -162,17 +194,67 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
         });
       }
     }
-    if (fresh.length === 0) return;
-    setAnnouncements((prev) => [...prev, ...fresh]);
-    for (const a of fresh) {
-      const timer = window.setTimeout(() => {
-        setAnnouncements((prev) => prev.filter((x) => x.id !== a.id));
-        // Drop the fired timer so the array stays bounded over a long session.
-        timersRef.current = timersRef.current.filter((id) => id !== timer);
-      }, ANNOUNCEMENT_TTL_MS);
-      timersRef.current.push(timer);
-    }
+    queueAnnouncements(fresh);
+    // queueAnnouncements closes over setters and refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, participants, selfId, t]);
+
+  // Follow stopped: the person left, or the local user grabbed the map.
+  // Switching from one person to another is not a stop. The name comes from
+  // the previous roster so a departure still has a display name.
+  useEffect(() => {
+    const prevFollow = prevFollowRef.current;
+    const prevRoster = rosterRef.current;
+    prevFollowRef.current = followClientId;
+    rosterRef.current = participants;
+    if (!isActive || !prevFollow || prevFollow === followClientId) return;
+    const person = prevRoster.find((p) => p.clientId === prevFollow);
+    const name = person?.displayName ?? "";
+    const stillHere = participants.some((p) => p.clientId === prevFollow);
+    if (!stillHere) {
+      queueAnnouncements([
+        {
+          id: announceIdRef.current++,
+          text: t("collaborate.stoppedFollowingLeft", { name }),
+        },
+      ]);
+      return;
+    }
+    if (followClientId !== null) return;
+    const clientId = prevFollow;
+    queueAnnouncements([
+      {
+        id: announceIdRef.current++,
+        text: t("collaborate.stoppedFollowing", { name }),
+        action: {
+          label: t("collaborate.followAgain"),
+          onClick: () => api.setFollow(clientId),
+        },
+      },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, followClientId, participants, t, api]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const prev = prevPresenterRef.current;
+    prevPresenterRef.current = presenterClientId;
+    if (prev === undefined || !presenterClientId || presenterClientId === prev) return;
+    if (presenterClientId === selfId) return;
+    const person = participants.find((p) => p.clientId === presenterClientId);
+    const clientId = presenterClientId;
+    queueAnnouncements([
+      {
+        id: announceIdRef.current++,
+        text: t("collaborate.presenterStarted", { name: person?.displayName ?? "" }),
+        action: {
+          label: t("collaborate.followThem"),
+          onClick: () => api.setFollow(clientId),
+        },
+      },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, presenterClientId, participants, selfId, t, api]);
 
   // Let Escape close the expanded roster, matching the dismissal convention of
   // dialogs and popovers elsewhere. Click-outside is intentionally not wired up:
@@ -281,6 +363,15 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
           >
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
             <span className="truncate">{a.text}</span>
+            {a.action && (
+              <button
+                type="button"
+                onClick={a.action.onClick}
+                className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline"
+              >
+                {a.action.label}
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -315,6 +406,11 @@ export function CollaborationStatusBadge({ api, mapControllerRef }: Collaboratio
                 isSelf={p.clientId === selfId}
                 canManage={isHost}
                 onSetParticipantMode={api.setParticipantMode}
+                following={p.clientId === followClientId}
+                hasView={viewedIds.split("\0").includes(p.clientId)}
+                onFollow={api.setFollow}
+                presenting={p.clientId === presenterClientId}
+                onPresent={api.setPresenting}
                 compact
               />
             ))}

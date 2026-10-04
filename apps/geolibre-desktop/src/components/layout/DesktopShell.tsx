@@ -145,6 +145,7 @@ import {
   useRightPanelState,
 } from "../../hooks/useRightPanels";
 import { BoundsRestrictionIndicator } from "./BoundsRestrictionIndicator";
+import { CollaborationFollowChrome } from "./CollaborationFollowChrome";
 import { CollaborationStatusBadge } from "./CollaborationStatusBadge";
 import { CloudWorkspaceStatus } from "./CloudWorkspaceStatus";
 import { CollaborateDialog } from "./CollaborateDialog";
@@ -2729,6 +2730,7 @@ export function DesktopShell({
                   over the map, so a fault here must never take down the map
                   itself (it shares this subtree's error boundary otherwise). */}
                   <SilentErrorBoundary label="Collaboration status">
+                    <CollaborationFollowChrome api={collaboration} />
                     <CollaborationStatusBadge
                       api={collaboration}
                       mapControllerRef={mapControllerRef}

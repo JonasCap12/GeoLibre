@@ -873,7 +873,8 @@ export const DEFAULT_COLLABORATION_STATE: CollaborationState = Object.freeze({
     string,
     CollaborationPresence
   >,
-  followHost: false,
+  followClientId: null,
+  presenterClientId: null,
   chat: Object.freeze([] as CollaborationChatMessage[]) as CollaborationChatMessage[],
   requireIdentity: false,
   identitySupported: false,
