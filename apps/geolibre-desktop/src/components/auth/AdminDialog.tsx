@@ -1,14 +1,6 @@
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  Input,
-  Label,
-} from "@geolibre/ui";
+import { Button, Input, Label } from "@geolibre/ui";
 import type { TFunction } from "i18next";
+import { MailPlus, Send } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -29,15 +21,8 @@ import type { AccountInfo } from "../../lib/share-account";
 import { deviceName, formatAuthDate, Section, StatusLines } from "./AccountSecurityDialog";
 import { authCodeText, authErrorText } from "./auth-error-text";
 
-interface AdminDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  token: string;
-  /** The signed-in admin, so the list does not offer to disable them. */
-  self: AccountInfo;
-}
-
-type Tab = "invites" | "accounts" | "activity";
+// The admin panels of the account center (AccountCenter.tsx). Only drawn for
+// an admin, and every route behind them checks again on the server.
 
 const EVENT_LABELS = {
   login_success: "auth.admin.event.login_success",
@@ -94,63 +79,7 @@ function useAction() {
   return { busy, error, note, run, setError };
 }
 
-export function AdminDialog({ open, onOpenChange, token, self }: AdminDialogProps) {
-  const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>("invites");
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "invites", label: t("auth.admin.invites") },
-    { id: "accounts", label: t("auth.admin.accounts") },
-    { id: "activity", label: t("auth.admin.activity") },
-  ];
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{t("auth.admin.title")}</DialogTitle>
-          <DialogDescription>{t("auth.admin.description")}</DialogDescription>
-        </DialogHeader>
-        {/* Every tab would answer the same 403; say why once instead. The
-            server enforces this either way. */}
-        {self.mfaEnabled ? null : (
-          <p role="alert" className="text-sm text-destructive">
-            {t("auth.error.adminMfaRequired")}
-          </p>
-        )}
-        {self.mfaEnabled ? (
-          <div role="tablist" aria-label={t("auth.admin.title")} className="flex gap-1 border-b">
-            {tabs.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                id={`admin-tab-${item.id}`}
-                aria-selected={tab === item.id}
-                aria-controls={`admin-panel-${item.id}`}
-                className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${
-                  tab === item.id
-                    ? "border-primary font-medium text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setTab(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {open && self.mfaEnabled ? (
-          <div role="tabpanel" id={`admin-panel-${tab}`} aria-labelledby={`admin-tab-${tab}`}>
-            {tab === "invites" ? <InvitesTab token={token} /> : null}
-            {tab === "accounts" ? <AccountsTab token={token} self={self} /> : null}
-            {tab === "activity" ? <ActivityTab token={token} /> : null}
-          </div>
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function InvitesTab({ token }: { token: string }) {
+export function InvitesTab({ token }: { token: string }) {
   const { t } = useTranslation();
   const action = useAction();
   const [invites, setInvites] = useState<AdminInvite[] | null>(null);
@@ -185,7 +114,11 @@ function InvitesTab({ token }: { token: string }) {
 
   return (
     <div className="space-y-4">
-      <Section title={t("auth.admin.sendInvite")}>
+      <Section
+        title={t("auth.admin.sendInvite")}
+        description={t("auth.admin.inviteHelp")}
+        icon={MailPlus}
+      >
         <form onSubmit={(event) => void onSend(event)} className="flex items-end gap-2" noValidate>
           <div className="flex-1 space-y-1.5">
             <Label htmlFor="admin-invite-email">{t("auth.email")}</Label>
@@ -201,10 +134,9 @@ function InvitesTab({ token }: { token: string }) {
             {t("auth.admin.send")}
           </Button>
         </form>
-        <p className="text-xs text-muted-foreground">{t("auth.admin.inviteHelp")}</p>
       </Section>
       <StatusLines error={action.error} note={action.note} />
-      <Section title={t("auth.admin.invites")}>
+      <Section title={t("auth.admin.invites")} icon={Send}>
         {invites === null ? (
           <p className="text-xs text-muted-foreground">{t("auth.loading")}</p>
         ) : null}
@@ -273,7 +205,7 @@ function InvitesTab({ token }: { token: string }) {
   );
 }
 
-function AccountsTab({ token, self }: { token: string; self: AccountInfo }) {
+export function AccountsTab({ token, self }: { token: string; self: AccountInfo }) {
   const { t } = useTranslation();
   const action = useAction();
   const [accounts, setAccounts] = useState<AdminAccount[] | null>(null);
@@ -435,7 +367,7 @@ function eventNote(t: TFunction, event: AuthEvent): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function ActivityTab({ token }: { token: string }) {
+export function ActivityTab({ token }: { token: string }) {
   const { t } = useTranslation();
   const [events, setEvents] = useState<AuthEvent[]>([]);
   const [done, setDone] = useState(false);
