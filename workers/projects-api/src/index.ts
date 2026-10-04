@@ -10,6 +10,7 @@
 
 import { accountRoute } from "./account-routes";
 import { adminRoute, createInvite } from "./admin-routes";
+import { collabSessionRoute } from "./collab-sessions";
 import {
   burnPasswordHash,
   burnRemainingCost,
@@ -750,7 +751,8 @@ async function apiRoute(
   const handled =
     (await accountRoute(scope, path, method)) ??
     (await mfaRoute(scope, path, method)) ??
-    (await adminRoute(scope, path, method));
+    (await adminRoute(scope, path, method)) ??
+    (await collabSessionRoute(scope, path, method));
   if (handled !== null) return handled;
 
   if (path.length === 2 && path[0] === "users" && path[1] === "me" && method === "GET") {

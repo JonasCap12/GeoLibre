@@ -122,6 +122,12 @@ export async function fetchCollabCapabilities(
 export interface CreateSessionOptions {
   mode?: CollaborationMode;
   requireIdentity?: boolean;
+  /**
+   * A standing session for a team: the relay keeps it for 30 days after the
+   * last person leaves instead of 2 hours. Relays that predate the flag ignore
+   * it and keep the 2-hour rule.
+   */
+  persistent?: boolean;
 }
 
 export async function createSession(
@@ -134,13 +140,14 @@ export async function createSession(
   }
   const mode = typeof options === "string" ? options : (options.mode ?? "co-edit");
   const requireIdentity = typeof options === "object" ? options.requireIdentity === true : false;
+  const persistent = typeof options === "object" ? options.persistent === true : false;
   const httpBase = httpBaseFromWs(baseUrl);
   let response: Response;
   try {
     response = await fetchImpl(`${httpBase}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, requireIdentity }),
+      body: JSON.stringify({ mode, requireIdentity, persistent }),
       signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
     });
   } catch (error) {
@@ -175,6 +182,34 @@ export async function createSession(
     hostToken: payload.hostToken,
     mode: resolvedMode,
   };
+}
+
+/**
+ * End a session for good, as its host: everyone in it is disconnected and its
+ * code stops working. A session the relay no longer knows counts as ended.
+ *
+ * @throws When the relay refuses the token or cannot be reached.
+ */
+export async function endSession(
+  sessionId: string,
+  hostToken: string,
+  baseUrl: string | null = resolveCollabBaseUrl(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  if (!baseUrl) throw new Error("Collaboration is not configured.");
+  const code = encodeURIComponent(sessionId.trim().toUpperCase());
+  let response: Response;
+  try {
+    response = await fetchImpl(`${httpBaseFromWs(baseUrl)}/sessions/${code}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${hostToken}` },
+      signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error("Could not reach the collaboration server.");
+  }
+  if (response.status === 204 || response.status === 404) return;
+  throw new Error(`Could not end the session (HTTP ${response.status}).`);
 }
 
 export interface CollabConnectionHandlers {

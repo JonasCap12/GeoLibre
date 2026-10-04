@@ -56,8 +56,11 @@ const MFA_ISSUER = "GeoLibre";
 
 let cachedKey: { raw: string; key: Promise<CryptoKey | null> } | null = null;
 
-/** The sealing key, imported once per isolate. 503 when the deployment has none. */
-async function sealKey(scope: Scope): Promise<CryptoKey> {
+/**
+ * The sealing key, imported once per isolate. 503 when the deployment has none.
+ * Also seals collaboration host tokens (collab-sessions.ts).
+ */
+export async function sealKey(scope: Scope): Promise<CryptoKey> {
   const raw = scope.env.MFA_ENCRYPTION_KEY ?? "";
   if (cachedKey === null || cachedKey.raw !== raw) {
     cachedKey = { raw, key: importSealKey(raw) };

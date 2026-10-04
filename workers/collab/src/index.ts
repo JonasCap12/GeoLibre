@@ -7,6 +7,7 @@
 //   GET  /sessions/:id/ws   -> WebSocket upgrade into that session's actor
 //   GET  /sessions/:id/log  -> host-only session log (Authorization: Bearer)
 //   DELETE /sessions/:id/log -> host-only: clear the session log
+//   DELETE /sessions/:id    -> host-only: end the session for everyone
 //
 // The session code namespaces the Durable Object (idFromName), so every
 // participant of a session lands on the same actor and gets fanned out to.
@@ -155,9 +156,13 @@ export default {
       const body = (await request.json().catch(() => ({}))) as {
         mode?: string;
         requireIdentity?: boolean;
+        persistent?: boolean;
       };
       const mode = body.mode === "view-only" ? "view-only" : "co-edit";
       const requireIdentity = body.requireIdentity === true;
+      // Persistent sessions wait 30 days empty instead of 2 hours; see
+      // PERSISTENT_SESSION_TTL_MS in session.ts.
+      const persistent = body.persistent === true;
       // Fail the create rather than silently downgrading: a host who asked for
       // a sign-in gate should hear that this relay has no issuer, not discover
       // it by watching anonymous guests walk in.
@@ -174,13 +179,13 @@ export default {
         const stub = env.COLLAB_SESSION.get(env.COLLAB_SESSION.idFromName(sessionId));
         const initRes = await stub.fetch("https://collab/init", {
           method: "POST",
-          body: JSON.stringify({ mode, hostToken, requireIdentity }),
+          body: JSON.stringify({ mode, hostToken, requireIdentity, persistent }),
         });
         const initBody = (await initRes.json().catch(() => ({}))) as {
           alreadyInitialized?: boolean;
         };
         if (!initBody.alreadyInitialized) {
-          return json({ sessionId, hostToken, mode, requireIdentity });
+          return json({ sessionId, hostToken, mode, requireIdentity, persistent });
         }
       }
       return json({ error: "Could not allocate a session code. Please try again." }, 503);
@@ -205,6 +210,15 @@ export default {
       const headers = new Headers(res.headers);
       for (const [key, value] of Object.entries(CORS_HEADERS)) headers.set(key, value);
       return new Response(res.body, { status: res.status, headers });
+    }
+
+    // End a session for good: DELETE /sessions/:id with the host token as a
+    // bearer. The actor checks the token; anyone else gets 403.
+    const sessionMatch = url.pathname.match(/^\/sessions\/([^/]+)$/);
+    if (sessionMatch && request.method === "DELETE") {
+      const stub = env.COLLAB_SESSION.get(env.COLLAB_SESSION.idFromName(sessionMatch[1]));
+      const res = await stub.fetch(new Request("https://collab/end", request));
+      return new Response(null, { status: res.status, headers: CORS_HEADERS });
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {
