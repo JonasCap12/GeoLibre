@@ -15,7 +15,10 @@ import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CollaborationApi } from "../../hooks/useCollaboration";
+import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
+import { useSignedInAccount } from "../../hooks/useSignedInAccount";
 import { fetchCollabCapabilities } from "../../lib/collab-client";
+import { CollabSessionManager } from "./CollabSessionManager";
 import { CollaborationParticipantRow } from "./CollaborationParticipantRow";
 
 // A small fixed palette so participant colors stay distinct and legible. Each
@@ -47,8 +50,19 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
   const { t } = useTranslation();
   const collaboration = useAppStore((s) => s.collaboration);
   const isActive = collaboration.isActive;
+  // Signed in to this deployment: the account name is who you are in a
+  // session, so there is nothing to type, and sessions can be saved per team.
+  const shareToken = useDesktopSettingsStore((s) => s.desktopSettings.shareToken.trim());
+  const { account } = useSignedInAccount();
+  const accountName = account?.username ?? null;
+  // The saved session that is open, for the heading of the active view.
+  const [activeName, setActiveName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isActive) setActiveName(null);
+  }, [isActive]);
 
   const [name, setName] = useState("");
+  const effectiveName = accountName ?? name.trim();
   const [color, setColor] = useState<string>(DEFAULT_COLOR);
   const [mode, setMode] = useState<CollaborationMode>("co-edit");
   const [code, setCode] = useState("");
@@ -136,14 +150,14 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
   const [requireIdentity, setRequireIdentity] = useState(false);
 
   const handleStart = async () => {
-    if (!name.trim()) {
+    if (!effectiveName) {
       setError(t("collaborate.nameRequired"));
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await api.start(name.trim(), color, mode, requireIdentity);
+      await api.start(effectiveName, color, mode, requireIdentity);
     } catch (err) {
       // Show a localized message; keep the raw error in the console for
       // diagnostics. When the relay sends a specific rejection reason
@@ -158,7 +172,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
   };
 
   const handleJoin = async () => {
-    if (!name.trim()) {
+    if (!effectiveName) {
       setError(t("collaborate.nameRequired"));
       return;
     }
@@ -169,7 +183,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
     setBusy(true);
     setError(null);
     try {
-      await api.join(code.trim(), name.trim(), color);
+      await api.join(code.trim(), effectiveName, color);
     } catch (err) {
       console.error("[GeoLibre] Collaboration error", err);
       const message = err instanceof Error && err.message ? err.message : undefined;
@@ -187,7 +201,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Users className="h-4 w-4" />
@@ -198,6 +212,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
 
         {isActive ? (
           <ActiveSession
+            sessionName={activeName}
             shareLink={shareLink}
             copied={copied}
             onCopy={handleCopy}
@@ -213,18 +228,25 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
         ) : (
           <div className="space-y-4">
             <div className="space-y-3 rounded-md border bg-muted/40 p-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="collab-name">{t("collaborate.displayName")}</Label>
-                <Input
-                  id="collab-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={t("collaborate.displayNamePlaceholder")}
-                  maxLength={40}
-                  disabled={busy}
-                  autoFocus
-                />
-              </div>
+              {accountName ? (
+                <p className="text-sm">
+                  {t("collaborate.saved.joinAs")}{" "}
+                  <span className="font-semibold">{accountName}</span>
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label htmlFor="collab-name">{t("collaborate.displayName")}</Label>
+                  <Input
+                    id="collab-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t("collaborate.displayNamePlaceholder")}
+                    maxLength={40}
+                    disabled={busy}
+                    autoFocus
+                  />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label>{t("collaborate.color")}</Label>
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -269,7 +291,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
                 <Button
                   type="button"
                   onClick={() => void handleJoin()}
-                  disabled={busy || !name.trim() || !code.trim()}
+                  disabled={busy || !effectiveName || !code.trim()}
                   className="w-full"
                 >
                   {busy ? (
@@ -288,6 +310,36 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
                   {t("collaborate.startInstead")}
                 </button>
               </div>
+            ) : accountName ? (
+              <>
+                <CollabSessionManager
+                  api={api}
+                  token={shareToken}
+                  selfName={accountName}
+                  color={color}
+                  onOpened={setActiveName}
+                />
+                <div className="space-y-2 rounded-md border p-3">
+                  <p className="text-sm font-medium">{t("collaborate.joinHeading")}</p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={code}
+                      onChange={(e) => setCode(e.target.value)}
+                      placeholder={t("collaborate.sessionCodePlaceholder")}
+                      disabled={busy}
+                      className="font-mono uppercase"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleJoin()}
+                      disabled={busy || !code.trim()}
+                    >
+                      {t("collaborate.join")}
+                    </Button>
+                  </div>
+                </div>
+              </>
             ) : (
               <>
                 <div className="space-y-2 rounded-md border p-3">
@@ -319,7 +371,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
                   <Button
                     type="button"
                     onClick={() => void handleStart()}
-                    disabled={busy || !name.trim()}
+                    disabled={busy || !effectiveName}
                     className="w-full"
                   >
                     {busy ? (
@@ -345,7 +397,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
                       type="button"
                       variant="secondary"
                       onClick={() => void handleJoin()}
-                      disabled={busy || !name.trim() || !code.trim()}
+                      disabled={busy || !effectiveName || !code.trim()}
                     >
                       {t("collaborate.join")}
                     </Button>
@@ -367,6 +419,7 @@ export function CollaborateDialog({ open, onOpenChange, api }: CollaborateDialog
 }
 
 function ActiveSession({
+  sessionName,
   shareLink,
   copied,
   onCopy,
@@ -379,6 +432,7 @@ function ActiveSession({
   onSetSessionConfig,
   onSetFollowHost,
 }: {
+  sessionName: string | null;
   shareLink: string;
   copied: "code" | "link" | null;
   onCopy: (kind: "code" | "link", value: string) => void;
@@ -397,6 +451,7 @@ function ActiveSession({
 
   return (
     <div className="space-y-4">
+      {sessionName ? <p className="text-base font-semibold">{sessionName}</p> : null}
       <div className="flex items-center gap-2 text-sm">
         {collaboration.connecting ? (
           <>

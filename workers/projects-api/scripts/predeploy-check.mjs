@@ -50,6 +50,8 @@ const REQUIRED_COLUMNS = {
   auth_events: ["id", "account_id", "kind", "created_at"],
   mfa_recovery_codes: ["digest", "account_id", "used_at"],
   mfa_tickets: ["digest", "account_id", "expires_at", "attempts"],
+  // schema-collab-sessions.sql
+  collab_sessions: ["id", "account_id", "code", "name", "mode", "host_token"],
 };
 
 const REQUIRED_SECRETS = ["TURNSTILE_SECRET_KEY", "MFA_ENCRYPTION_KEY"];

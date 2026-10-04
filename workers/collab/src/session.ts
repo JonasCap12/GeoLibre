@@ -78,6 +78,20 @@ export interface Env {
 // `@geolibre/collab-core` (imported above) so both relays enforce one set of
 // numbers; see that module for why each value is what it is.
 
+/**
+ * How long a persistent session survives with nobody in it.
+ *
+ * An ad-hoc session is reclaimed two hours after the last person leaves
+ * (EMPTY_SESSION_TTL_MS). A persistent one is a team's standing room, saved in
+ * its owner's session list and reopened days later with the same code and
+ * link, so it waits a month instead. Every visit restarts the wait, and the
+ * owner can end it at any time with DELETE /sessions/:id.
+ */
+export const PERSISTENT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** The reason guests see when the host ends a session for good. */
+const SESSION_ENDED_REASON = "The host ended this session.";
+
 // Stateless and reused across frames (snapshots can arrive several times a
 // second), so we don't allocate a new encoder per message.
 const ENCODER = new TextEncoder();
@@ -318,15 +332,21 @@ export class CollabSession extends DurableObject<Env> {
         mode?: CollaborationMode;
         hostToken?: string;
         requireIdentity?: boolean;
+        persistent?: boolean;
       };
       const mode: CollaborationMode = body.mode === "view-only" ? "view-only" : "co-edit";
+      const persistent = body.persistent === true;
       await this.ctx.storage.put({
         mode,
         hostToken: body.hostToken ?? "",
         requireIdentity: body.requireIdentity === true,
+        persistent,
         lockedLayerIds: [] as string[],
         rev: 0,
       });
+      // A persistent session nobody ever opens must still go away eventually.
+      // Joining cancels this; the last person leaving sets it again.
+      if (persistent) await this.ctx.storage.setAlarm(Date.now() + PERSISTENT_SESSION_TTL_MS);
       return Response.json({ ok: true });
     }
 
@@ -374,6 +394,32 @@ export class CollabSession extends DurableObject<Env> {
       return new Response(JSON.stringify(log), {
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
       });
+    }
+
+    // Host-only: end the session for good. Everyone connected is told and
+    // disconnected (the "kicked" message stops their reconnect loop), and the
+    // session's storage is wiped, so its code and link stop working at once.
+    if (url.pathname === "/end" && request.method === "DELETE") {
+      const hostToken = await this.ctx.storage.get<string>("hostToken");
+      if (hostToken === undefined) return new Response(null, { status: 204 });
+      const authorization = request.headers.get("Authorization") ?? "";
+      const clientToken = authorization.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length).trim()
+        : "";
+      if (!hostToken || !clientToken || hostToken !== clientToken) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      for (const socket of this.ctx.getWebSockets()) {
+        this.send(socket, { type: "kicked", reason: SESSION_ENDED_REASON });
+        try {
+          socket.close(4002, "Session ended by host");
+        } catch {
+          // Already closing.
+        }
+      }
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      return new Response(null, { status: 204 });
     }
 
     return new Response("Not found", { status: 404 });
@@ -482,7 +528,10 @@ export class CollabSession extends DurableObject<Env> {
     this.broadcast({ type: "participants", participants: this.participants(ws) }, ws);
     const remaining = this.ctx.getWebSockets().filter((s) => s !== ws);
     if (remaining.length === 0) {
-      await this.ctx.storage.setAlarm(Date.now() + EMPTY_SESSION_TTL_MS);
+      const persistent = (await this.ctx.storage.get<boolean>("persistent")) === true;
+      await this.ctx.storage.setAlarm(
+        Date.now() + (persistent ? PERSISTENT_SESSION_TTL_MS : EMPTY_SESSION_TTL_MS),
+      );
     }
   }
 
