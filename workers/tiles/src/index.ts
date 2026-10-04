@@ -356,6 +356,20 @@ const NEGATIVE_CACHE_CONTROL = "public, max-age=300";
  * `evilgeolibre.app` cannot pass as a subdomain.
  */
 function isAllowedProxyOrigin(origin: string | null): boolean {
+  return isAllowedProxyOriginFor(origin, extraProxyOrigins);
+}
+
+/**
+ * {@link isAllowedProxyOrigin} with the deployment's own list passed in, so a
+ * test can run it. When that list is non-empty it is the whole policy, plus
+ * the desktop app and local dev: the built-in hosts admit every
+ * `*.workers.dev` and `*.geolibre.app`, which on a self-hosted account means
+ * any stranger's Worker could drive these routes and run up its usage.
+ */
+export function isAllowedProxyOriginFor(
+  origin: string | null,
+  extraProxyOrigins: ReadonlySet<string>,
+): boolean {
   if (!origin) return false;
   let hostname: string;
   let protocol: string;
@@ -367,7 +381,7 @@ function isAllowedProxyOrigin(origin: string | null): boolean {
   }
   if (extraProxyOrigins.has(normalized)) return true;
   if (protocol === "tauri:" && hostname === "localhost") return true;
-  if (protocol === "https:") {
+  if (extraProxyOrigins.size === 0 && protocol === "https:") {
     if (hostname === "geolibre.app" || hostname.endsWith(".geolibre.app")) {
       return true;
     }
