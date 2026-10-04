@@ -15,6 +15,13 @@
  * The hosted service has a website to sign up on. A self-hosted one has this.
  */
 
+import {
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  passwordProblem,
+  type PasswordContext,
+  type PasswordProblem,
+} from "./password-strength";
 import { getShareFetch } from "./share-fetch";
 import { resolveShareBaseUrl } from "./share-geolibre";
 
@@ -22,17 +29,12 @@ import { resolveShareBaseUrl } from "./share-geolibre";
 export const USERNAME_PATTERN = /^[a-z0-9-]{3,39}$/;
 
 /**
- * Mirrors `MIN_PASSWORD_LENGTH` in the projects API: 15, the NIST SP 800-63B-4
- * floor for a password that is the only factor.
- *
- * Applies when a password is set. Sign-in checks only that one was typed:
- * accounts created under the old 12-character rule must keep signing in.
- * Composition rules stay off on both sides; see `passwordPolicyError`.
+ * The password rules, shared byte for byte with the projects API (see the
+ * header of password-strength.ts). They apply when a password is set; sign-in
+ * checks only that one was typed, so accounts made under earlier rules keep
+ * signing in.
  */
-export const MIN_PASSWORD_LENGTH = 15;
-
-/** Mirrors `MAX_PASSWORD_LENGTH` in the projects API. */
-export const MAX_PASSWORD_LENGTH = 1024;
+export { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "./password-strength";
 
 /**
  * Why an auth request failed, independent of the server's English wording, so
@@ -48,6 +50,8 @@ export type AuthErrorCode =
   | "password-short"
   | "password-long"
   | "password-context"
+  | "password-common"
+  | "password-weak"
   | "password-breached"
   | "password-mismatch"
   | "login-invalid"
@@ -108,6 +112,8 @@ export function authErrorCode(status: number, message: string): AuthErrorCode {
   if (text.includes("at least") && text.includes("characters")) return "password-short";
   if (text.includes("password") && text.includes("too long")) return "password-long";
   if (text.includes("must not contain your username")) return "password-context";
+  if (text.includes("too common or predictable")) return "password-common";
+  if (text.includes("password is too weak")) return "password-weak";
   if (text.includes("data breach")) return "password-breached";
   if (text.includes("invite is invalid")) return "invite-invalid";
   if (text.includes("reset token is invalid")) return "reset-invalid";
@@ -165,11 +171,45 @@ function requireBaseUrl(override?: string | null): string {
   return base.replace(/\/+$/, "");
 }
 
-/** Length only. Context words and breach checks need the server. */
-export function newPasswordProblem(password: string): "password-short" | "password-long" | null {
-  if (password.length < MIN_PASSWORD_LENGTH) return "password-short";
-  if (password.length > MAX_PASSWORD_LENGTH) return "password-long";
-  return null;
+export type NewPasswordProblem =
+  | "password-short"
+  | "password-long"
+  | "password-context"
+  | "password-common"
+  | "password-weak";
+
+const PROBLEM_CODES: Record<PasswordProblem, NewPasswordProblem> = {
+  "too-short": "password-short",
+  "too-long": "password-long",
+  context: "password-context",
+  common: "password-common",
+  weak: "password-weak",
+};
+
+/**
+ * Every rule the server applies except the breach corpus, which needs the
+ * network. Pass the username and email when they are known so the personal
+ * rule is checked here too; the server checks it regardless.
+ */
+export function newPasswordProblem(
+  password: string,
+  context: PasswordContext = {},
+): NewPasswordProblem | null {
+  const problem = passwordProblem(password, context);
+  return problem === null ? null : PROBLEM_CODES[problem];
+}
+
+/** English text for a client-side refusal, for callers without i18n. */
+function newPasswordMessage(problem: NewPasswordProblem): string {
+  if (problem === "password-short") {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+  }
+  if (problem === "password-long") return "Password is too long.";
+  if (problem === "password-context") {
+    return "Password must not contain your username or the name part of your email.";
+  }
+  if (problem === "password-common") return "Password is too common or predictable.";
+  return "Password is too weak. Make it longer or less predictable.";
 }
 
 /** Whether the sign-in field holds something the API could look up. */
@@ -196,16 +236,13 @@ export function validateCredentials(username: string, password: string): string 
   if (!USERNAME_PATTERN.test(username)) {
     return "Username must be 3-39 characters: lowercase letters, digits, or hyphens.";
   }
-  if (newPasswordProblem(password) === "password-short") {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-  }
-  if (newPasswordProblem(password) === "password-long") return "Password is too long.";
-  return null;
+  const problem = newPasswordProblem(password, { username });
+  return problem === null ? null : newPasswordMessage(problem);
 }
 
 /**
  * The sign-in counterpart of {@link validateCredentials}. No length floor:
- * an account whose password predates the 15-character rule must still get in.
+ * an account whose password predates the current rules must still get in.
  */
 export function validateSignIn(login: string, password: string): string | null {
   if (signInProblem(login, password) !== null) {
@@ -368,10 +405,9 @@ export async function requestPasswordReset(
 export async function confirmPasswordReset(
   options: BaseOptions & { token: string; password: string; turnstileToken?: string },
 ): Promise<void> {
-  if (newPasswordProblem(options.password) !== null) {
-    throw new ShareAccountError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, {
-      code: newPasswordProblem(options.password) ?? "password-short",
-    });
+  const passwordIssue = newPasswordProblem(options.password);
+  if (passwordIssue !== null) {
+    throw new ShareAccountError(newPasswordMessage(passwordIssue), { code: passwordIssue });
   }
   // Not `...options`: `token` here is the reset link's, and must not become a
   // bearer header.
@@ -441,10 +477,9 @@ export async function signOut(options: TokenOptions): Promise<void> {
 export async function changePassword(
   options: TokenOptions & { currentPassword: string; password: string; code?: string },
 ): Promise<string> {
-  if (newPasswordProblem(options.password) !== null) {
-    throw new ShareAccountError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`, {
-      code: newPasswordProblem(options.password) ?? "password-short",
-    });
+  const passwordIssue = newPasswordProblem(options.password);
+  if (passwordIssue !== null) {
+    throw new ShareAccountError(newPasswordMessage(passwordIssue), { code: passwordIssue });
   }
   const response = await authRequest("/api/auth/password", {
     ...options,
@@ -483,7 +518,7 @@ export async function createAccount(options: ShareAccountOptions): Promise<strin
   if (problem) {
     throw new ShareAccountError(problem, {
       code: USERNAME_PATTERN.test(options.username)
-        ? (newPasswordProblem(options.password) ?? "unknown")
+        ? (newPasswordProblem(options.password, { username: options.username }) ?? "unknown")
         : "username-invalid",
     });
   }
