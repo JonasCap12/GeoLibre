@@ -247,6 +247,28 @@ in `detail` are masked. Rows older than `GEOLIBRE_ACTIVITY_RETENTION_DAYS` (the
 same setting as the project activity log) are pruned whenever a new event is
 written. Admins read it in the **Activity** tab.
 
+## Members-only collaboration
+
+The relay (`workers/collab`, `wrangler.selfhost.jsonc`) sets
+`COLLAB_REQUIRE_IDENTITY=1`. Creating a session and joining one, including as
+the host, need an identity token from `POST /api/collab/identity`. The token
+lasts 12 hours and is checked with HMAC-SHA256. A request that omits `Origin`
+still passes the origin allowlist (`isAllowedOrigin` treats a missing origin as
+allowed, so a non-browser client is not stuck), and the identity check is what
+refuses it: without a valid token, `POST /sessions` is `401`.
+
+`COLLAB_IDENTITY_SECRET` is one value set on **both** the projects API and the
+relay, and it has to exist **before** the deploy that turns the requirement
+on. `wrangler secret put` publishes a new version of the Worker that is already
+running, so putting the secret first is safe: the relay currently running does
+not require the token yet. The other order breaks collaboration. If the relay
+deploys with the requirement and no secret, it refuses everyone. If the API
+deploys without the secret, `scripts/predeploy-check.mjs` blocks that deploy
+while the relay workflow can still succeed on its own.
+
+The host token is compared in constant time. Session-creation rate limits live
+in the memory of each isolate, so they are a local ceiling, not a global count.
+
 ## HTTP details
 
 - Every account, auth, invite and admin response is `Cache-Control: no-store`.
@@ -262,6 +284,16 @@ written. Admins read it in the **Activity** tab.
   on a mailed token (`/register`, `/reset`, `/verify-email`) also get
   `frame-ancestors 'self'` from the web Worker, so they stay unframeable even
   if the app policy is widened.
+- `/*` also sends `Strict-Transport-Security` (a year, including subdomains),
+  `Permissions-Policy` (camera, microphone and the other device APIs off;
+  `geolocation` for this origin only) and
+  `Cross-Origin-Opener-Policy: same-origin-allow-popups`. The last one keeps
+  another site from holding a handle to the window and still lets the Google
+  Earth Engine sign-in open a popup. The web Worker sets the same three on the
+  SPA fallback and on `/jupyterlite/*`, because those responses are built in
+  the Worker rather than taken from a file. JupyterLite replaces the CSP; COOP
+  on that prefix does not isolate the notebook iframe, which is same-origin and
+  not the top window.
 
 ## Known gaps against ASVS Level 2
 

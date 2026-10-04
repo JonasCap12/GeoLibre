@@ -68,6 +68,9 @@ wrangler d1 execute geolibre-projects --remote --file=schema.sql
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
   | wrangler secret put MFA_ENCRYPTION_KEY
 wrangler secret put TURNSTILE_SECRET_KEY   # optional; see docs/selfhost-auth.md
+# COLLAB_IDENTITY_SECRET must be the SAME value on this Worker and on
+# workers/collab (wrangler.selfhost.jsonc), and it must be set before the
+# deploy that sets COLLAB_REQUIRE_IDENTITY=1. See docs/selfhost-auth.md.
 
 # 4. Set the origins in wrangler.jsonc (GEOLIBRE_PUBLIC_URL, GEOLIBRE_VIEWER_URL,
 #    GEOLIBRE_CORS_ORIGINS), create a rate-limit namespace id, then deploy

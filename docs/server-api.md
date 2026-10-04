@@ -307,6 +307,13 @@ Every route under `/api/accounts`, `/api/account`, `/api/auth`, `/api/invites`,
 JSON bodies on these routes are capped at 16 KiB (`413` above that). A `429`
 carries `Retry-After` in seconds.
 
+Every response from this Worker, including errors and `OPTIONS`, also sends
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox`,
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, `Strict-Transport-Security`, and
+`Cross-Origin-Resource-Policy: cross-origin`. Nothing this API serves is a
+page. `cross-origin` is what lets the app, on another host, read a download.
+
 ### Changes to existing identity routes
 
 - `POST /api/accounts` additionally requires `invite` (the token from the
@@ -459,6 +466,30 @@ authentication first` for an admin who has not.
 
 The audit log never holds a password, token or one-time code. `detail` carries
 only masked addresses and the acting admin's username.
+
+### Collaboration identity
+
+`POST /api/collab/identity` (bearer) mints the token the members-only relay
+asks for before creating or joining a session. Response `200`:
+
+```json
+{"identityToken": "<payload>.<hmac>", "expiresAt": "2026-10-04T12:00:00.000Z"}
+```
+
+The token is HMAC-SHA256 over a JSON payload (`provider`, `userId`,
+`username`, `exp`), valid for 12 hours, and signed with
+`COLLAB_IDENTITY_SECRET` — the same secret as the relay. `401` without a
+session. `503` `collaboration sign-in is not configured on this deployment`
+when the secret is unset. The value is not stored.
+
+### Dataset downloads
+
+`GET /api/datasets/{id}/content` sends the bytes as an attachment. The
+`Content-Disposition` value follows RFC 6266: `filename` is an ASCII fallback
+(quotes, backslashes and control characters removed), and `filename*` carries
+the original name, including Vietnamese, as UTF-8 percent-encoding. A name is
+never written into the header raw, because a Worker rejects a non-ByteString
+header value.
 
 ## Compatibility
 
