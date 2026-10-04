@@ -56,6 +56,34 @@ function notFound(): Response {
   });
 }
 
+/**
+ * Headers `_headers` sets on `/*`. The asset server applies them to a real
+ * file, but two responses are built here and would otherwise miss them: the
+ * SPA fallback (a copy of `/index.html` served for another path) and
+ * `/jupyterlite/*` (this Worker replaces that response outright).
+ *
+ * The values are repeated from `_headers`, which a static rule file cannot
+ * import; tests/security-hardening.test.ts fails if the two drift apart.
+ *
+ * COOP is `same-origin-allow-popups`, the same value as the app, not
+ * `same-origin`. The Notebook panel loads JupyterLite in a same-origin iframe,
+ * and a browser ignores COOP on a document that is not the top window, so the
+ * iframe stays in the app's browsing group. `same-origin` would also drop the
+ * popups the Google Earth Engine sign-in opens from the app itself.
+ */
+export const APP_SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
+  ["Strict-Transport-Security", "max-age=31536000; includeSubDomains"],
+  [
+    "Permissions-Policy",
+    "camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), hid=(), midi=(), geolocation=(self)",
+  ],
+  ["Cross-Origin-Opener-Policy", "same-origin-allow-popups"],
+];
+
+function applyAppSecurityHeaders(headers: Headers): void {
+  for (const [name, value] of APP_SECURITY_HEADERS) headers.set(name, value);
+}
+
 // The app policy minus the Google/ArcGIS origins this site does not use, plus
 // the 'unsafe-inline' script-src JupyterLab's bootstrap requires. Kept in sync
 // with the /jupyterlite/ location in docker/nginx.conf, which serves the same
@@ -70,31 +98,6 @@ function notFound(): Response {
 // the app policy (which deliberately forbids inline script) went on blocking
 // JupyterLab's bootstrap. Setting the header here replaces the value outright,
 // so exactly one policy reaches the browser.
-/**
- * Headers `_headers` sets on `/*`. The asset server applies them to a real
- * file, but two responses are built here and would otherwise miss them: the
- * SPA fallback (a copy of `/index.html` served for another path) and
- * `/jupyterlite/*` (this Worker replaces that response outright).
- *
- * COOP is `same-origin-allow-popups`, the same value as the app, not
- * `same-origin`. The Notebook panel loads JupyterLite in a same-origin iframe,
- * and a browser ignores COOP on a document that is not the top window, so the
- * iframe stays in the app's browsing group. `same-origin` would also drop the
- * popups the Google Earth Engine sign-in opens from the app itself.
- */
-const APP_SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
-  ["Strict-Transport-Security", "max-age=31536000; includeSubDomains"],
-  [
-    "Permissions-Policy",
-    "camera=(), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), hid=(), midi=(), geolocation=(self)",
-  ],
-  ["Cross-Origin-Opener-Policy", "same-origin-allow-popups"],
-];
-
-function applyAppSecurityHeaders(headers: Headers): void {
-  for (const [name, value] of APP_SECURITY_HEADERS) headers.set(name, value);
-}
-
 const JUPYTERLITE_CSP =
   "default-src 'self'; " +
   "connect-src 'self' https: data: blob:; " +
