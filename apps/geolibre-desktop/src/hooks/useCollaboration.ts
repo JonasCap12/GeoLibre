@@ -1,7 +1,6 @@
 import {
   applyProjectToStore,
   clearHistory,
-  redactCredentials,
   serializeProject,
   useAppStore,
   type CollaborationMode,
@@ -21,16 +20,17 @@ import i18n from "../i18n";
 import {
   buildCollaborationSnapshot,
   buildProjectEgressSnapshot,
-  buildProjectSnapshot,
 } from "../lib/build-project-snapshot";
-import { prepareCollaborationLayers } from "../lib/collaboration-layers";
 import {
-  applySharedDatasetPromotion,
-  COLLABORATION_DATASET_VISIBILITY,
   createPromotionCache,
   shrinkCollaborationLayers,
 } from "../lib/collaboration-layer-promotion";
-import { uploadSharedDataset } from "../lib/shared-datasets";
+import { collaborationSnapshotMeasure } from "../lib/collaboration-snapshot-measure";
+import {
+  applyCollaborationPromotions,
+  heldSnapshotMessage,
+  uploadCollaborationCandidate,
+} from "../lib/collaboration-snapshot-shrink";
 import { projectChanged } from "../lib/project-broadcast-changed";
 import {
   CollabConnection,
@@ -55,7 +55,6 @@ import { resolveShareBaseUrl } from "../lib/share-geolibre";
 import { mergeInboundCollaborationProject } from "../lib/collaboration-project";
 import {
   learnedSnapshotLimit,
-  localTooLargeMessage,
   snapshotSyncAction,
   snapshotSyncLimit,
 } from "../lib/collaboration-sync";
@@ -254,42 +253,16 @@ export function useCollaboration(
     let bytes = new TextEncoder().encode(content).length;
     if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
       const limit = snapshotSyncLimit(learnedLimitRef.current);
-      const token = useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
-      // Team, not public: any signed-in account on this deployment can read it,
-      // and an anonymous caller cannot. Private would hide it from the session.
       const shrunk = await shrinkCollaborationLayers({
         layers: project.layers,
         limit,
-        token,
+        token: useDesktopSettingsStore.getState().desktopSettings.shareToken.trim(),
         cache: promotionCacheRef.current,
-        measure: (layers) => {
-          const prepared = prepareCollaborationLayers(layers, new Map());
-          const next = redactCredentials(
-            buildProjectSnapshot(mapControllerRef, { layers: prepared }),
-          );
-          return new TextEncoder().encode(serializeProject(next)).length;
-        },
-        upload: async (candidate, shareToken) =>
-          uploadSharedDataset({
-            token: shareToken,
-            data: new TextEncoder().encode(JSON.stringify(candidate.features)),
-            filename: candidate.filename,
-            name: candidate.name,
-            visibility: COLLABORATION_DATASET_VISIBILITY,
-            contentType: "application/geojson",
-          }),
+        measure: collaborationSnapshotMeasure(mapControllerRef),
+        upload: uploadCollaborationCandidate,
       });
       if (request !== snapshotRequestRef.current || !canEdit()) return;
-      for (const promotion of shrunk.promotions) {
-        const current = useAppStore
-          .getState()
-          .layers.find((layer) => layer.id === promotion.layerId);
-        if (!current) continue;
-        useAppStore.getState().updateLayer(promotion.layerId, {
-          metadata: applySharedDatasetPromotion(current, promotion.datasetId, promotion.filename)
-            .metadata,
-        });
-      }
+      applyCollaborationPromotions(shrunk.promotions);
       if (request !== snapshotRequestRef.current || !canEdit()) return;
       try {
         project = await buildCollaborationSnapshot(mapControllerRef);
@@ -304,16 +277,8 @@ export function useCollaboration(
       bytes = new TextEncoder().encode(content).length;
       if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
         syncPausedRef.current = true;
-        const held = shrunk.failure;
         useAppStore.getState().setCollaboration({
-          error: held
-            ? held.reason === "no-token"
-              ? i18n.t("collaborate.layerShareNeedsSignIn", { name: held.layerName })
-              : i18n.t("collaborate.layerShareFailed", {
-                  name: held.layerName,
-                  detail: held.detail ?? "",
-                })
-            : localTooLargeMessage(bytes, limit),
+          error: heldSnapshotMessage(shrunk.failure, bytes, limit, i18n.t),
         });
         return;
       }

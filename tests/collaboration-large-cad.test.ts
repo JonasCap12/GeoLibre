@@ -27,6 +27,12 @@ import {
   createSharedRehydrateSession,
   rehydrateSharedLayers,
 } from "../apps/geolibre-desktop/src/lib/collaboration-shared-rehydrate.ts";
+import type { TFunction } from "i18next";
+import { useAppStore } from "../packages/core/src/store.ts";
+import {
+  applyCollaborationPromotions,
+  heldSnapshotMessage,
+} from "../apps/geolibre-desktop/src/lib/collaboration-snapshot-shrink.ts";
 import { geojsonLayer } from "./helpers/layer-fixtures.ts";
 
 /**
@@ -650,5 +656,69 @@ describe("promoting an oversized layer into the shared library", () => {
     assert.equal(again, 0);
     assert.equal(repeat.promotions.length, 0);
     assert.equal(snapshotSyncAction(repeat.bytes, null), "send");
+  });
+});
+
+/**
+ * The adapters the hook drives. They used to live inside `useCollaboration`,
+ * where no test loads them: the store write and the choice of message are the
+ * parts that decide what the other participants see, so they are asserted here.
+ */
+describe("collaboration snapshot shrink adapters", () => {
+  // The real `t` is typed against the catalog. A recorder is enough here,
+  // because the assertion is which key was chosen, not how it reads.
+  const recordingT = ((key: string, vars?: Record<string, string>) =>
+    `${key}|${vars?.name ?? ""}|${vars?.detail ?? ""}`) as unknown as TFunction;
+
+  it("names the layer and the cause when an upload could not happen", () => {
+    assert.equal(
+      heldSnapshotMessage({ layerName: "Tim tuyen", reason: "no-token" }, 20, 10, recordingT),
+      "collaborate.layerShareNeedsSignIn|Tim tuyen|",
+    );
+    assert.equal(
+      heldSnapshotMessage(
+        { layerName: "Tim tuyen", reason: "upload", detail: "413" },
+        20,
+        10,
+        recordingT,
+      ),
+      "collaborate.layerShareFailed|Tim tuyen|413",
+    );
+  });
+
+  it("falls back to the ceiling wording when nothing could be promoted", () => {
+    // Same shape the relay sends, so `learnedSnapshotLimit` can still read the
+    // limit back out of it.
+    const message = heldSnapshotMessage(null, 22_500_000, 10_000_000, recordingT);
+    assert.match(message, /Project is 22\.5 MB; live sync holds 10\.0 MB\./);
+  });
+
+  it("points the stored layer at its dataset and drops the edit flag", () => {
+    const layer = geojsonLayer({
+      id: "layer-1",
+      geojson: FEATURES,
+      metadata: { geometryEdited: true, embeddedGeoJSON: FEATURES },
+    });
+    useAppStore.setState({ layers: [layer] });
+
+    applyCollaborationPromotions([
+      { layerId: "layer-1", datasetId: "dataset-9", filename: "tim-tuyen.geojson" },
+    ]);
+
+    const stored = useAppStore.getState().layers[0];
+    assert.equal(stored.metadata.sharedDatasetId, "dataset-9");
+    assert.equal(stored.metadata.sharedDatasetFilename, "tim-tuyen.geojson");
+    // The dataset is the edit now. Leaving the flag set would make the next
+    // snapshot drop the id and embed the bytes again.
+    assert.equal(stored.metadata.geometryEdited, undefined);
+    assert.equal(stored.metadata.embeddedGeoJSON, undefined);
+  });
+
+  it("ignores a promotion for a layer that has since been removed", () => {
+    useAppStore.setState({ layers: [] });
+    applyCollaborationPromotions([
+      { layerId: "gone", datasetId: "dataset-9", filename: "gone.geojson" },
+    ]);
+    assert.deepEqual(useAppStore.getState().layers, []);
   });
 });
