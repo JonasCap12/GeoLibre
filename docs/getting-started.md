@@ -97,6 +97,7 @@ See [iOS](ios.md) for what runs on mobile and for build details.
 - [Mapping the 2026 Nepal Floods with Free High-Resolution Satellite Imagery](https://youtu.be/UDO1BCwOAAc)
 - [Building Cloud-Native GIS Workflows with GeoLibre](https://youtu.be/RgNoKsvZ5Hk)
 - [Image Georeferencing Using GeoLibre in the Browser](https://youtu.be/lbioujkDSG0)
+- [100 Interactive Maps from Open Data: Explore, Fork, and Build Your Own with GeoLibre](https://youtu.be/2r5OhvEa3AA)
 
 All of them, with chapters and summaries, are on [Video Tutorials](tutorials/videos.md).
 
@@ -170,10 +171,13 @@ docker run --rm -p 8080:80 ghcr.io/opengeos/geolibre:latest
 
 #### Bundled conversion sidecar
 
-The image also bundles the Python sidecar (uvicorn) and reverse-proxies it at
-`/sidecar`, so the browser reaches it same-origin with no CORS or separate
-process to manage. `/conversion/status` is reachable at
-`http://localhost:8080/sidecar/conversion/status`.
+The image bundles the Python sidecar (uvicorn) and reverse-proxies it at
+`/sidecar` when the final deployment policy grants `processing:run` or
+`data:add` and `GEOLIBRE_DISABLE_SIDECAR` is not `1`. Otherwise uvicorn does
+not start and sidecar routes are denied. When available, the browser reaches it
+same-origin with no CORS:
+`http://localhost:8080/sidecar/conversion/status`. See the exact route grants
+in [Self-Hosting](self-hosting.md#container-policy-enforcement).
 
 The browser build does **not** need the sidecar for the **Conversion** tools or
 the **Whitebox** toolbox — both run client-side on DuckDB-WASM and
@@ -199,6 +203,26 @@ a caller reaching the image cannot aim them at hosts only the container can
 reach. Pass `-e GEOLIBRE_POSTGIS_HOSTS='db.internal:5432'` (or `*` to accept any
 connection string) to enable them. The desktop app is not affected: its sidecar
 is loopback-bound and started for a single user, so it defaults to unrestricted.
+
+The image does **not** ship with pyodbc or Microsoft ODBC Driver 18. To enable
+SQL Server / Azure SQL, build a derived image that installs the driver and the
+sidecar's `mssql` extra:
+
+```dockerfile
+FROM ghcr.io/opengeos/geolibre:latest
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends curl gpg \
+ && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+ && echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/microsoft-prod.list \
+ && apt-get update \
+ && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc \
+ && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "/opt/geolibre_server[mssql]"
+```
+
+Then allow only the database host at runtime, for example
+`-e GEOLIBRE_MSSQL_HOSTS='sql.internal:1433'`. Do not expose the SQL Server
+endpoints without an explicit allowlist.
 
 `freestiler` and `whitebox-workflows` publish no linux/arm64 wheels, so they are
 installed on **amd64 only**; on arm64 the sidecar reports those tools
@@ -439,21 +463,40 @@ Individual links can also opt out at runtime with `?welcome=0`. See
 
 #### Limiting what the deployment can do
 
-For a kiosk, an exhibit terminal, or a classroom instance, name the
-capabilities the interface may offer. Unset (the default) grants everything, so
-existing deployments are unchanged:
+For a kiosk, exhibit terminal, or classroom, configure the runtime policy
+capabilities rather than rebuilding the client:
 
 ```bash
-docker build \
-  --build-arg VITE_GEOLIBRE_CAPABILITIES="project:edit,data:add,processing:run,export:data" \
-  -t geolibre-classroom .
+docker run --rm -p 8080:80 \
+  -e GEOLIBRE_CAPABILITIES=project:edit,data:add,processing:run,export:data \
+  geolibre-policy:local
 ```
 
-That example drops plugin installs and Settings. `none` grants nothing at all.
-This removes the affordances — menus, command palette entries, shortcuts,
-drag-and-drop, embed commands — but does **not** restrict the server, so keep
-the protections above in place too. See
+Build the local image from merged `main` as described in
+[Deployment Policy](deployment-policy.md#docker). The legacy
+`VITE_GEOLIBRE_CAPABILITIES` build input is still honoured as a client fallback.
+`none` grants no capabilities. Client gates remove menus, command palette
+entries, shortcuts, drag-and-drop, and embed commands; Docker nginx enforces
+selected sidecar and AI routes only. It does not restrict desktop processing,
+browser WASM, separately exposed services, or plugin execution. Keep the
+server-side protections above in place. See
 [Deployment Capabilities](deployment-capabilities.md).
+
+#### Custom app name
+
+Replace "GeoLibre" at the start of the toolbar and in the browser tab title with
+your own name:
+
+```bash
+docker run --rm -p 8080:80 \
+  -e GEOLIBRE_APP_NAME="Acme Maps" \
+  ghcr.io/opengeos/geolibre:latest
+```
+
+The name is read at container startup, so a prebuilt image can be rebranded
+without a rebuild. Runs of whitespace collapse to one space and the name is
+capped at 60 characters. For a non-Docker web build, set
+`VITE_GEOLIBRE_APP_NAME` when running `npm run build` instead.
 
 #### Driving an embedded map from a host page
 
@@ -481,6 +524,7 @@ default. Point them at your own server instead, or turn the feature off:
 docker run --rm -p 8080:80 \
   -e GEOLIBRE_SHARE_URL=https://maps.example.org \
   -e GEOLIBRE_COLLAB_URL=wss://collab.example.org \
+  -e GEOLIBRE_GEOLENS_URL=https://catalog.example.org \
   ghcr.io/opengeos/geolibre:latest
 ```
 
@@ -488,19 +532,23 @@ docker run --rm -p 8080:80 \
 | --- | --- |
 | `GEOLIBRE_SHARE_URL` | Base URL of the project sharing server. Unset uses `share.geolibre.app`. Set it to `off` to remove Share and the Project Gallery from the UI entirely. |
 | `GEOLIBRE_COLLAB_URL` | Base URL of the [collaboration](collaboration.md) relay. Unset leaves live collaboration disabled. |
+| `GEOLIBRE_GEOLENS_URL` | Default GeoLens server root without a query or fragment. The plugin connects automatically and remembers the last successful server; unset uses the image's baked default. Set `same-origin` for a co-located deployment or `off` to leave the panel idle until the user chooses a server. |
 
-Both are read at container startup, so a prebuilt image can be repointed by
-restarting it with different values — no rebuild. (The equivalent build
-arguments, `VITE_GEOLIBRE_SHARE_URL` and `VITE_GEOLIBRE_COLLAB_URL`, exist for
-baking a default into your own image.)
+All three are read at container startup, so a prebuilt image can be repointed by
+restarting it with different values, with no rebuild. (The equivalent build
+arguments, `VITE_GEOLIBRE_SHARE_URL`, `VITE_GEOLIBRE_COLLAB_URL`, and
+`VITE_GEOLENS_DEFAULT_URL`, exist for baking defaults into your own image. The
+last one defaults to `same-origin` and can be overridden when building.)
 
 When `GEOLIBRE_COLLAB_URL` is set, the entrypoint also adds that relay's origin to
 the container's `Content-Security-Policy` `connect-src`, so the browser is allowed
 to open the WebSocket. (The directive has a bare `https:`, which covers any share
 server, but no bare `wss:`.) No manual edit of `docker/nginx.conf` is needed.
 
-Both must use TLS — `https://` for the share server, `wss://` for the relay —
-because the app sends your API token to the share server with every request.
+All remote services must use TLS because the app may send credentials to the
+configured service. Use `https://` for the share and GeoLens servers and
+`wss://` for the relay.
+For GeoLens only, a scheme-less host is interpreted as HTTPS.
 Plaintext is accepted only on `localhost` / `127.0.0.1` for local development, so
 put a self-hosted server behind a reverse proxy that terminates TLS. A value that
 does not satisfy this **fails the container boot** with an error naming the
@@ -534,18 +582,36 @@ URLs. For a real deployment, set `GEOLIBRE_SHARE_URL`,
 `GEOLIBRE_COLLAB_URL`, `GEOLIBRE_VIEWER_URL`, and
 `GEOLIBRE_CORS_ORIGINS` to the public TLS origins before starting Compose.
 
-Behind a reverse proxy, only the web container should be reachable from outside
-the host. The Compose file publishes the projects server on `8000` and the relay
-on `8787` for local use, and pointing the browser URLs at your proxy does not
-stop anyone connecting to those listeners directly. Bind them to loopback (or
-drop the mappings entirely and let the proxy reach them over the Compose
-network) with an override file:
+The server's OAuth endpoints are disabled until `GEOLIBRE_OAUTH_CLIENTS`
+contains exact public client registrations. To enable server-side OAuth for a
+local web deployment:
+
+```bash
+export GEOLIBRE_OAUTH_CLIENTS='[{"client_id":"geolibre-web","name":"GeoLibre Web","redirect_uris":["http://localhost:8080/oauth-callback.html"],"scopes":["read:projects","write:projects","share:public"]}]'
+POSTGRES_PASSWORD=choose-a-password docker compose up --build
+```
+
+Production web callbacks require HTTPS and must end in
+`/oauth-callback.html`. The desktop client uses the exact callback
+`org.geolibre.desktop:/oauth/callback`. Add its separate
+`geolibre-desktop` registration to the same JSON array when desktop sign-in is
+required. The web app signs in through a popup to the server's consent page
+using this registration, so the `geolibre-web` callback URL must match the web
+app's own origin (including any base path). Desktop sign-in (the system
+browser flow) is still pending; desktop users paste a personal API token. See
+the [server API OAuth contract](server-api.md#oauth-20-sign-in-authorization-code-s256-pkce)
+for the flow and lifetime settings.
+
+Behind a reverse proxy, keep the projects API behind the rate-limit boundary:
+Compose binds its host port to `127.0.0.1` by default. Do not override that
+binding to `0.0.0.0` or publish the container port directly; either have a
+same-host proxy connect to loopback or let a proxy container reach the API over
+the Compose network. The relay still publishes `8787` for local use; bind it to
+loopback when only the web container should be reachable from outside the host:
 
 ```yaml
 # docker-compose.override.yml
 services:
-  geolibre-server:
-    ports: ["127.0.0.1:8000:8000"]
   geolibre-collab:
     ports: ["127.0.0.1:8787:8787"]
 ```
@@ -871,7 +937,7 @@ Keys set via **Settings → Environment Variables**, or typed directly into the 
 
 ## Optional 3D globe credentials (Cesium Ion)
 
-The optional **Cesium 3D-globe view** — a split-pane globe rendered with [CesiumJS](https://cesium.com/platform/cesiumjs/) alongside the 2D MapLibre map — works with no credentials at all: it draws whatever basemap the project is using. A [Cesium Ion](https://ion.cesium.com/) access token is optional, and adds Cesium World Terrain (relief on tilted views) plus Ion World Imagery as the fallback for a basemap that has no raster form. To use one, create a free Ion account, copy your default access token, and set it at build time:
+The optional **Cesium 3D-globe renderer** can own the primary map or any pane in a mixed-engine split layout. It requires a [Cesium Ion](https://ion.cesium.com/) access token. The hosted web version bundles a demo token, so the globe works there out of the box, but the desktop and mobile apps need your own. The token enables Cesium World Terrain (relief on tilted views) plus Ion World Imagery as the fallback for a basemap that has no raster form. To get one, create a free Ion account, copy your default access token, and set it at build time:
 
 ```env
 CESIUM_TOKEN=your_cesium_ion_access_token

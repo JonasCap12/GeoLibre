@@ -13,6 +13,7 @@ import {
   visibleDataset,
 } from "../workers/projects-api/src/datasets.ts";
 import type { Config } from "../workers/projects-api/src/model.ts";
+import { sessionPolicy } from "../workers/projects-api/src/auth-policy.ts";
 
 const CONFIG = {
   baseUrl: "https://api.example.test",
@@ -22,6 +23,9 @@ const CONFIG = {
   maxDatasetBytes: 1,
   activityRetentionDays: 90,
   corsOrigins: [],
+  // The real defaults rather than two literals, so this fixture cannot drift
+  // from the policy it stands in for.
+  session: sessionPolicy(),
 } satisfies Config;
 
 const row = (over: Partial<DatasetRow> = {}): DatasetRow => ({

@@ -69,7 +69,7 @@ come from Environment variables or the basemap control's API keys panel.
   engines drive it through one host (`packages/map/src/layer-control-host.ts`);
   a `mapbox://` style cannot be fetched by the control, so the engine seeds it
   with the loaded style's own layers to tell basemap from project layers.
-  Toggle and reposition it from **Plugins → Layer Control**, as on MapLibre.
+  Toggle it from **Controls → Layer Control**, as on MapLibre.
   Split panes never mount a second control.
 
 ## Plugins
@@ -104,8 +104,11 @@ browser against an authenticated Mapbox map):
 - **Time Slider** for XYZ, WMS, GeoJSON and TiTiler-served COG sources. A COG
   bound to the `gpu` / `wasm` engines (MapLibre-only tile protocols) is
   re-added through TiTiler; a mosaic manifest is dropped with a console
-  warning. Pixel identify and time series read the COG bytes directly and are
-  unaffected.
+  warning. The pixel time series tool picks and marks its points on Mapbox too
+  (the engine's click events and projected DOM markers), and Identify reads a
+  pixel's band values, as on MapLibre.
+- **NetCDF** sample markers, the 3D cube's "current view" and "draw" extents,
+  and the COG spectral-profile click work on either 2D engine.
 - **Timelapse**, including recording the Mapbox canvas to video.
 - **Elevation Profile**, **USGS LiDAR** (the 3DEP index raster is adopted
   natively; point clouds already drew through deck.gl), and **Mapillary**
@@ -167,12 +170,11 @@ browser against an authenticated Mapbox map):
   rather than by the style layer id it drives, because the engine publishes the
   same style-layer-id-to-name bridge MapController does
   (`packages/map/src/layer-labels.ts`); without it a row read
-  `geolibre-mapbox-<id>-geojson-fill`. The deck.gl **raster provider stays MapLibre-only**: it mirrors
-  COG and `maplibre-gl-raster` layers onto the comparison pane, and both of
-  those controls register MapLibre tile protocols, so neither draws on Mapbox in
-  the first place. A project authored on MapLibre can still carry such layers,
-  and the swipe panel omits them rather than offering sides for layers that are
-  not on screen. One known defect: changing the basemap while the swipe is
+  `geolibre-mapbox-<id>-geojson-fill`. The deck.gl **raster provider stays
+  MapLibre-only**: COG and `maplibre-gl-raster` layers can draw on the primary
+  Mapbox map through its deck.gl adapter, but the swipe provider cannot mirror
+  them into the comparison pane. The swipe panel therefore omits those layers.
+  One known defect: changing the basemap while the swipe is
   active leaves the previous comparison pane — and the map inside it, a live
   WebGL context — orphaned on the Mapbox canvas. The swipe itself keeps working
   against the new basemap. The same sequence on MapLibre leaves one pane, so it
@@ -218,13 +220,34 @@ basemap is an offline archive falls back to the default basemap (with a console
 warning). Pick a Mapbox style from the shared Basemaps panel instead.
 MapLibre custom protocols, tiled/streamed vector imports beyond the bridge's
 materialization limits, custom COG terrain, and other plugin-owned layers
-require additional adapters. Layers drawn with deck.gl need none:
+require additional adapters. **Custom terrain sources** are one of those with
+UI of its own: mapbox-gl has no `raster-dem` source a COG can back, so the
+Terrain settings dialog's "Terrain source" section (a COG URL, a local file, or
+a raster layer already on the map) is hidden on this renderer and explains why.
+Mapbox's own global terrain and the vertical-exaggeration slider still work.
+
+Layers drawn with deck.gl need none:
 `@deck.gl/mapbox` targets Mapbox GL JS natively, so the engine reports
 `capabilities.deckOverlay` and the shared interleaved overlay binds to the
 Mapbox map through `app.getMapboxMap()`. Visible unsupported layers report an error
-on the map instead of being silently omitted. Advanced MapLibre-only symbology
-(such as custom marker assets and blend modes) is not reproduced by this native
-renderer. Mapbox Standard is loaded as a local style import with a shared opacity setting.
+on the map instead of being silently omitted. The heatmap and clustered point
+renderers compile to native Mapbox layers, with a clustered layer's authored
+filters applied to its data before clustering, as on MapLibre.
+The Style panel's symbology compiles to native Mapbox layers as on MapLibre:
+marker and KML icons, Geo Editor text markers, fill patterns and line
+decorations (generated sprites supplied through `styleimagemissing`), the
+inverted fill and the geometry generator (companion GeoJSON sources), the flat
+fill below a zoom-stepped extrusion, and attribute labels (de-duplicated labels
+read an aggregated companion source; the data-defined size, color, opacity,
+visibility and priority expressions apply). Layer blend modes are not
+reproduced, and the Style panel says so on a layer that sets one. Large
+GeoJSON (over 50,000 features) keeps mapbox-gl's own GeoJSON source: MapLibre
+serves such layers as vector tiles through a geojson-vt protocol, and mapbox-gl
+has no `addProtocol` hook, but its source already tiles the data in a worker
+with geojson-vt. With 200,000 points, adding the layer took about 2.1 s on
+Mapbox against 1.5 s on MapLibre, a restyle 0.9 s against 0.8 s, and a data
+edit 2.1 s against 1.2 s, with a shorter longest main-thread stall on Mapbox
+(0.8 s against 0.85 s). Mapbox Standard is loaded as a local style import with a shared opacity setting.
 The Background card fades its land and water colors, labels (including ocean labels),
 3D objects, and atmosphere while preserving project layers and Standard's configuration.
 

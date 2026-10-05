@@ -15,11 +15,13 @@ import {
   geocoderMinIntervalMs,
   resolveGeocoderConfig,
   useAppStore,
+  useLayersWhen,
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import { Input } from "@geolibre/ui";
 import { Hexagon, Loader2, LocateFixed, MapPin, Search, Table2, X } from "lucide-react";
 import { formatLatLon, parseLatLon } from "../../lib/coordinates";
+import { parseGridReference } from "../../lib/grid-reference";
 import { type H3CellMatch, parseH3Cell } from "../../lib/h3-search";
 import {
   type FeatureSearchGroup,
@@ -78,10 +80,11 @@ type SearchRow =
  *   and the matches are listed below the data groups; selecting one flies the
  *   map to the place and drops a marker.
  *
- * Two query forms bypass the geocoder entirely and resolve locally: a lat/lon
- * coordinate (see `coordinates.ts`) and an H3 cell index in either spelling
- * (see `h3-search.ts`), the latter fitting the view to the cell and outlining
- * it on the map.
+ * Three query forms bypass the geocoder entirely and resolve locally: a lat/lon
+ * coordinate (see `coordinates.ts`), an MGRS/USNG or UTM grid reference (see
+ * `grid-reference.ts`), and an H3 cell index in either spelling (see
+ * `h3-search.ts`), the latter fitting the view to the cell and outlining it on
+ * the map.
  */
 export function LayerPanelPlaceSearch({
   mapControllerRef,
@@ -90,9 +93,11 @@ export function LayerPanelPlaceSearch({
   // Per-instance id so multiple mounts never collide on the aria-controls link.
   const resultsId = `${useId()}-results`;
   const geocodingPrefs = useAppStore((s) => s.preferences.geocoding);
-  const layers = useAppStore((s) => s.layers);
   const layerGroups = useAppStore((s) => s.layerGroups);
   const [query, setQuery] = useState("");
+  // The layers are only scanned for a query long enough to search features, so
+  // subscribe to them only then; an empty box ignores layer edits entirely.
+  const layers = useLayersWhen(query.trim().length >= MIN_FEATURE_QUERY_LENGTH);
   const [placeRows, setPlaceRows] = useState<SearchRow[]>([]);
   const [featureGroups, setFeatureGroups] = useState<FeatureSearchGroup[]>([]);
   const [open, setOpen] = useState(false);
@@ -235,6 +240,28 @@ export function LayerPanelPlaceSearch({
       setOpen(true);
       return;
     }
+    // Grid-reference short-circuit: MGRS/USNG (`18SUJ2337106519`,
+    // `18S UJ 23371 06519`) or UTM (`18N 323394 4307395`) resolves locally to
+    // the referenced point, like a lat/lon below. Checked first because a UTM
+    // zone letter would otherwise read as a hemisphere to the lat/lon parser.
+    const grid = parseGridReference(trimmed);
+    if (grid) {
+      abortRef.current?.abort();
+      setPlaceRows([
+        {
+          kind: "coordinate",
+          match: {
+            lat: grid.lat,
+            lon: grid.lon,
+            displayName: `${grid.label} (${formatLatLon({ lat: grid.lat, lon: grid.lon })})`,
+            score: null,
+          },
+        },
+      ]);
+      setStatus("idle");
+      setOpen(true);
+      return;
+    }
     // Coordinate short-circuit: a query that parses as lat/lon (DD, DMS, or DDM)
     // becomes a direct "go to coordinate" jump, resolved instantly with no
     // geocoder round-trip so the exact point (not the nearest named place) is
@@ -371,10 +398,11 @@ export function LayerPanelPlaceSearch({
             type: "Point",
             coordinates: center,
           });
+          // Preserve the globe's existing instant placement. Its animated
+          // camera path differs in flat scene modes; search previously used
+          // the store's applyView path rather than a flight there.
+          // eslint-disable-next-line local/no-renderer-kind-checks -- the Cesium camera's flight path, not a capability, is why the globe jumps instead
           if (engine.kind === "cesium") {
-            // Preserve the globe's existing instant placement. Its animated
-            // camera path differs in flat scene modes; search previously used
-            // the store's applyView path rather than a flight there.
             const store = useAppStore.getState();
             store.setMapView({ center, zoom: Math.max(store.mapView.zoom, 12) });
           } else {

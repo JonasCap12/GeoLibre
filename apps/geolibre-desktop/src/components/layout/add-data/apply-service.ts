@@ -19,7 +19,7 @@
  *   importable under Node for tests.
  */
 
-import type { GeoLibreLayer } from "@geolibre/core";
+import { shouldZoomToNewLayers, type GeoLibreLayer } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 // Type-only: erased at compile time, so importing it does not pull maplibre-gl
 // (which `xyz-url` imports at runtime) into the pure builder surface.
@@ -34,8 +34,10 @@ import {
   attributionForTileUrl,
   createBaseLayer,
   createWmsTileUrl,
+  normalizeWmsCrs,
   normalizeWmsVersion,
   stripOgcOperationParams,
+  usableWmsCrs,
   wmsVersionFromEndpoint,
 } from "./helpers";
 import {
@@ -122,6 +124,10 @@ export interface WmsLayerParams {
   transparent: boolean;
   tileSize: string;
   version: string;
+  /** CRS of the requested tiles (default EPSG:3857); see {@link normalizeWmsCrs}. */
+  crs?: string;
+  /** False when the capabilities mark every requested layer `queryable="0"`. */
+  queryable?: false;
 }
 
 /**
@@ -138,6 +144,7 @@ export function buildWmsLayer(params: WmsLayerParams): GeoLibreLayer {
   const layers = params.layers.trim();
   const styles = params.styles.trim();
   const tileSize = toTileSize(params.tileSize);
+  const crs = normalizeWmsCrs(params.crs || undefined, version);
   const tileUrl = createWmsTileUrl({
     endpoint,
     layers,
@@ -146,6 +153,7 @@ export function buildWmsLayer(params: WmsLayerParams): GeoLibreLayer {
     transparent: params.transparent,
     tileSize,
     version,
+    crs,
   });
   const attribution = attributionForTileUrl(tileUrl);
   return createBaseLayer(
@@ -161,6 +169,9 @@ export function buildWmsLayer(params: WmsLayerParams): GeoLibreLayer {
       format: params.format,
       transparent: params.transparent,
       version,
+      crs,
+      // Identify skips a layer that answers no GetFeatureInfo (#2887).
+      ...(params.queryable === false ? { queryable: false } : {}),
       ...(attribution ? { attribution } : {}),
     },
     { service: "wms" },
@@ -184,6 +195,7 @@ export function wmsFieldsToParams(entry: ServiceLibraryEntry): WmsLayerParams {
     transparent: serviceFieldBoolean(fields, "transparent", true),
     tileSize: serviceFieldString(fields, "tileSize", "256"),
     version: normalizeWmsVersion(savedVersion || detectedVersion || "1.1.1"),
+    crs: serviceFieldString(fields, "crs"),
   };
 }
 
@@ -265,6 +277,8 @@ export interface WfsLayerParams {
   /** The output format that worked, which may differ from the requested one. */
   outputFormat: string;
   srsName: string;
+  /** Layers built earlier in the same batch but not added to the store yet. */
+  pendingLayers?: readonly GeoLibreLayer[];
 }
 
 /**
@@ -295,7 +309,7 @@ export function buildWfsGeoJsonLayer(params: WfsLayerParams): GeoLibreLayer {
         sourceKind: "wfs-getfeature",
         typeName: params.typeName,
       },
-      { geojson: params.data },
+      { geojson: params.data, pendingLayers: params.pendingLayers },
     ),
     geojson: params.data,
     sourcePath: params.featureUrl,
@@ -319,6 +333,8 @@ export interface OgcFeaturesLayerParams {
   numberMatched?: number;
   /** True when the collection holds more features than were loaded. */
   truncated: boolean;
+  /** Layers built earlier in the same batch but not added to the store yet. */
+  pendingLayers?: readonly GeoLibreLayer[];
 }
 
 /**
@@ -353,7 +369,7 @@ export function buildOgcFeaturesLayer(params: OgcFeaturesLayerParams): GeoLibreL
         ...(params.numberMatched !== undefined ? { numberMatched: params.numberMatched } : {}),
         truncated: params.truncated,
       },
-      { geojson: params.data },
+      { geojson: params.data, pendingLayers: params.pendingLayers },
     ),
     geojson: params.data,
     sourcePath: params.itemsUrl,
@@ -394,6 +410,8 @@ export interface ArcGISOptions {
   maxFeatures: number | undefined;
   /** MapServer sublayer ids (`0,2,5`), for a `map-service` entry. */
   sublayers: string | undefined;
+  /** Add each MapServer sublayer as its own layer in a group (`map-service`). */
+  splitSublayers: boolean;
   /** ImageServer rendering rule JSON, for an `image-service` entry. */
   renderingRule: string | undefined;
 }
@@ -411,6 +429,7 @@ export function arcgisFieldsToOptions(entry: ServiceLibraryEntry): ArcGISOptions
     pageSize: serviceFieldCount(fields, "pageSize"),
     maxFeatures: serviceFieldCount(fields, "maxFeatures"),
     sublayers: serviceFieldString(fields, "sublayers").trim() || undefined,
+    splitSublayers: serviceFieldBoolean(fields, "splitSublayers", false),
     renderingRule: serviceFieldString(fields, "renderingRule").trim() || undefined,
   };
 }
@@ -496,7 +515,17 @@ export async function applyServiceEntry(
       const { routeWmsLayerThroughNativeProtocol } = await loadLazyModule(
         () => import("../../../lib/xyz-url"),
       );
-      addLayer(routeWmsLayerThroughNativeProtocol(buildWmsLayer(params)), beforeLayerId);
+      // Only the desktop tile protocol reprojects a CRS other than EPSG:3857,
+      // and only a code its EPSG tables can resolve; anything else keeps Web
+      // Mercator, including every saved CRS in the web build.
+      const { reprojectableWmsCrs } = await loadLazyModule(
+        () => import("../../../lib/wms-projected"),
+      );
+      const crs = isTauri()
+        ? await reprojectableWmsCrs(usableWmsCrs(params.crs, params.version))
+        : undefined;
+      const wmsParams = { ...params, crs };
+      addLayer(routeWmsLayerThroughNativeProtocol(buildWmsLayer(wmsParams)), beforeLayerId);
       return;
     }
     case "wmts": {
@@ -519,6 +548,7 @@ export async function applyServiceEntry(
         portalUrl: options.portalUrl,
         renderingRule: options.renderingRule,
         sourceType: options.sourceType,
+        splitSublayers: options.splitSublayers,
         sublayers: options.sublayers,
         // Tokens are never persisted to the service library, so none is sent.
         token: undefined,
@@ -561,7 +591,7 @@ export async function applyServiceEntry(
         srsName: request.srsName,
       });
       addLayer(layer, beforeLayerId);
-      mapControllerRef.current?.fitLayer(layer);
+      if (shouldZoomToNewLayers()) mapControllerRef.current?.fitLayer(layer);
       return;
     }
     default: {

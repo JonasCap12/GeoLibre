@@ -7,6 +7,7 @@ import {
   DEFAULT_LAYER_STYLE,
   useAppStore,
   type MapPreferences,
+  type StoryChapterLocation,
 } from "@geolibre/core";
 import {
   ARCGIS_WORLD_ELEVATION_URL,
@@ -23,7 +24,7 @@ import type {
   ArcgisSceneSdk,
   ArcgisSdk,
 } from "../packages/map/src/arcgis-sdk";
-import { ARCGIS_ID_FIELD } from "../packages/map/src/arcgis-layers";
+import { ARCGIS_ID_FIELD, zoomToScale } from "../packages/map/src/arcgis-layers";
 import { geojsonLayer } from "./helpers/layer-fixtures";
 
 // The engine never loads the SDK here: `arcgis-sdk.ts` only describes its
@@ -32,6 +33,16 @@ import { geojsonLayer } from "./helpers/layer-fixtures";
 // native layers it builds, rebuilds and removes across syncLayers calls, how it
 // orders them, how camera state maps between MapLibre and SDK conventions, and
 // how a hit test resolves back to the app's feature identity.
+
+/**
+ * A story chapter location with no bearing or pitch. The engine leaves the
+ * camera's orientation alone when they are absent, which is what these tests
+ * rely on.
+ */
+const chapterAt = (center: [number, number], zoom: number): StoryChapterLocation => ({
+  center,
+  zoom,
+});
 
 interface FakeLayer extends ArcgisLayer {
   kind: string;
@@ -42,9 +53,15 @@ interface FakeLayer extends ArcgisLayer {
 function makeSdk() {
   const created: FakeLayer[] = [];
   const basemaps: { destroyed: boolean }[] = [];
-  const widgets: { kind: string; props: Record<string, unknown>; destroyed: boolean }[] = [];
+  const widgets: {
+    kind: string;
+    props: Record<string, unknown>;
+    destroyed: boolean;
+    label?: string;
+  }[] = [];
   const goTo: unknown[] = [];
   let watchers: (() => void)[] = [];
+  const viewHandlers = new Map<string, Set<(event: Record<string, unknown>) => void>>();
   const syncWatchers = new Set<() => void>();
   const layerClass = (kind: string) =>
     class {
@@ -89,11 +106,10 @@ function makeSdk() {
   const widgetClass = (kind: string) =>
     class {
       kind = kind;
-      unit: unknown;
       label: unknown;
       destroyed = false;
+      viewModel = { reset: () => {} };
       constructor(public props: Record<string, unknown> = {}) {
-        this.unit = props.unit;
         this.label = props.label;
         widgets.push(this as never);
       }
@@ -146,7 +162,7 @@ function makeSdk() {
     },
     destroy: () => {},
   };
-  const uiAdds: { component: unknown; position: unknown }[] = [];
+  const uiAdds: { component: unknown; position: unknown; index?: number }[] = [];
   const view = {
     type: "2d" as "2d" | "3d",
     viewingMode: "global" as "global" | "local",
@@ -171,7 +187,12 @@ function makeSdk() {
     height: 600,
     ui: {
       components: ["attribution", "zoom"],
-      add: (component: unknown, position: unknown) => uiAdds.push({ component, position }),
+      add: (component: unknown, position: unknown) =>
+        uiAdds.push(
+          typeof position === "object" && position
+            ? { component, ...(position as { position: string; index?: number }) }
+            : { component, position },
+        ),
       remove: (component: unknown) => {
         const i = uiAdds.findIndex((entry) => entry.component === component);
         if (i >= 0) uiAdds.splice(i, 1);
@@ -212,10 +233,32 @@ function makeSdk() {
       x: p.x ?? p.longitude ?? 0,
       y: p.y ?? p.latitude ?? 0,
     }),
-    toMap: (p: { x: number; y: number }) => ({ longitude: p.x, latitude: p.y, x: p.x, y: p.y }),
-    hitTest: async () => ({ results: hitResults, screenPoint: { x: 0, y: 0 } }),
+    toMap: (p: {
+      x: number;
+      y: number;
+    }): { longitude: number; latitude: number; x: number; y: number } | null => ({
+      longitude: p.x,
+      latitude: p.y,
+      x: p.x,
+      y: p.y,
+    }),
+    // As the SDK does, only graphics of the included layers are reported.
+    hitTest: async (_point: unknown, options?: { include?: unknown[] }) => ({
+      results: hitResults.filter(
+        (result) =>
+          !options?.include ||
+          !(result as { graphic?: { layer?: unknown } }).graphic?.layer ||
+          options.include.includes((result as { graphic: { layer: unknown } }).graphic.layer),
+      ),
+      screenPoint: { x: 0, y: 0 },
+    }),
     takeScreenshot: async () => ({ dataUrl: "data:image/png;base64,", data: {} as ImageData }),
-    on: (_type: string, _handler: unknown) => ({ remove: () => {} }),
+    on: (type: string, handler: (event: Record<string, unknown>) => void) => {
+      const handlers = viewHandlers.get(type) ?? new Set();
+      handlers.add(handler);
+      viewHandlers.set(type, handlers);
+      return { remove: () => handlers.delete(handler) };
+    },
     destroy: () => {
       view.destroyed = true;
     },
@@ -280,6 +323,7 @@ function makeSdk() {
       GeoJSONLayer: layerClass("geojson"),
       GraphicsLayer: layerClass("graphics"),
       WebTileLayer: layerClass("web-tile"),
+      BaseTileLayer: { createSubclass: () => layerClass("template-tile") },
       WMSLayer: layerClass("wms"),
       WMTSLayer: layerClass("wmts"),
       VectorTileLayer: layerClass("vector-tile"),
@@ -298,7 +342,6 @@ function makeSdk() {
     widgets: {
       Zoom: widgetClass("Zoom"),
       Compass: widgetClass("Compass"),
-      ScaleBar: widgetClass("ScaleBar"),
       Fullscreen: widgetClass("Fullscreen"),
       Locate: widgetClass("Locate"),
       LayerList: widgetClass("LayerList"),
@@ -347,6 +390,9 @@ function makeSdk() {
     uiAdds,
     layers,
     fireWatchers: () => watchers.forEach((w) => w()),
+    fireViewEvent: (type: string, event: Record<string, unknown>) => {
+      for (const handler of viewHandlers.get(type) ?? []) handler(event);
+    },
     setHitResults: (results: unknown[]) => {
       hitResults = results;
     },
@@ -451,7 +497,177 @@ const SQUARE = geojsonLayer({
   },
 });
 
+describe("ArcgisEngine camera moves", () => {
+  it("frames an extent at the zoom that fits it, without a zoom-14 cap", async () => {
+    const { engine, goTo } = makeEngine();
+    engine.fitBounds([-0.001, -0.001, 0.001, 0.001]);
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(goTo.length, 1);
+    assert.ok("xmin" in (goTo[0] as { target: object }).target);
+  });
+  it("flies to a point-sized extent at zoom 14 or closer", () => {
+    const { engine, goTo, rawView } = makeEngine();
+    engine.fitBounds([3, 4, 3, 4]);
+    assert.deepEqual((goTo[0] as { target: unknown }).target, { center: [3, 4], zoom: 14 });
+    rawView.zoom = 17;
+    engine.fitBounds([3, 4, 3, 4]);
+    assert.deepEqual((goTo[1] as { target: unknown }).target, { center: [3, 4], zoom: 17 });
+  });
+  it("fits a tile layer at its minimum render zoom when its extent is wider", () => {
+    const { engine, goTo } = makeEngine();
+    const tiles = {
+      ...geojsonLayer({ id: "t", geojson: undefined }),
+      type: "vector-tiles" as const,
+      source: { type: "vector", minzoom: 15, bounds: [-10, -10, 10, 10] },
+    };
+    engine.fitLayer(tiles);
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { center: [0, 0], zoom: 15 });
+    // A small enough extent is framed as usual.
+    engine.fitLayer({ ...tiles, source: { ...tiles.source, bounds: [0, 0, 0.001, 0.001] } });
+    assert.ok("xmin" in (goTo.at(-1) as { target: object }).target);
+  });
+  it("turns a story chapter once, and not when a later chapter superseded it", async () => {
+    const { engine, goTo } = makeEngine();
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true);
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo", false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(goTo.length, 2);
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo", true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const turns = goTo.filter((call) => "rotation" in (call as { target: object }).target);
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0], {
+      target: { rotation: -180 },
+      options: { duration: 30000, easing: "linear" },
+    });
+  });
+  it("marks the settle that ends a story move as scripted", async () => {
+    const { engine, fireWatchers, fireViewEvent } = makeEngine();
+    const seen: (boolean | undefined)[] = [];
+    engine.onCameraIdle((event) => seen.push(event?.storyCamera));
+    fireWatchers();
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5));
+    fireWatchers();
+    await Promise.resolve();
+    fireWatchers();
+    // A drag during a story move makes the next settle the user's.
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6));
+    fireViewEvent("drag", { x: 1, y: 1, action: "start" });
+    fireWatchers();
+    engine.destroy();
+    assert.deepEqual(seen, [false, true, false, false]);
+  });
+  it("rotates and tilts on a Ctrl drag at MapLibre's rates, and leaves plain drags alone", () => {
+    const { engine, goTo, fireViewEvent, rawView } = makeSceneEngine();
+    let stopped = 0;
+    const drag = (action: string, x: number, y: number, ctrlKey: boolean) =>
+      fireViewEvent("drag", {
+        action,
+        x,
+        y,
+        button: 0,
+        native: { ctrlKey },
+        stopPropagation: () => stopped++,
+      });
+    drag("start", 100, 100, false);
+    drag("update", 150, 50, false);
+    drag("end", 150, 50, false);
+    assert.equal(goTo.length, 0);
+    assert.equal(stopped, 0);
+    // The fake camera looks at heading 30, tilt 45: right 10px turns 8
+    // degrees, up 20px tilts 10 degrees further.
+    drag("start", 100, 100, true);
+    drag("update", 110, 80, true);
+    assert.deepEqual(goTo.at(-1), {
+      target: { heading: 38, tilt: 55 },
+      options: { animate: false },
+    });
+    // The next update builds on that target even when the camera has not
+    // landed there yet (an unanimated goTo may still be pending).
+    rawView.camera = { heading: 30, tilt: 45, position: { z: 1500 } };
+    drag("update", 120, 60, true);
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { heading: 46, tilt: 65 });
+    // Movement made while navigation is suspended is discarded, so resuming
+    // does not jump the camera by it.
+    const resume = engine.suspendNavigation();
+    drag("update", 170, 10, true);
+    resume();
+    const moves = goTo.length;
+    drag("update", 180, 0, true);
+    assert.equal(goTo.length, moves + 1);
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { heading: 54, tilt: 70 });
+    drag("end", 180, 0, true);
+    // Every Ctrl-drag event is swallowed, the suspended one twice (the
+    // suspension swallows drags too).
+    assert.equal(stopped, 7);
+  });
+  it("does not steer the camera on a Ctrl drag while navigation is suspended", () => {
+    const { engine, goTo, fireViewEvent } = makeSceneEngine();
+    const drag = (action: string, x: number, y: number) =>
+      fireViewEvent("drag", {
+        action,
+        x,
+        y,
+        button: 0,
+        native: { ctrlKey: true },
+        stopPropagation: () => {},
+      });
+    const resume = engine.suspendNavigation();
+    drag("start", 100, 100);
+    drag("update", 110, 80);
+    drag("end", 110, 80);
+    assert.equal(goTo.length, 0);
+    resume();
+    resume();
+    drag("start", 100, 100);
+    drag("update", 110, 80);
+    assert.equal(goTo.length, 1);
+  });
+  it("resets both heading and pitch from the compass, as MapLibre's does", () => {
+    const { goTo, widgets } = makeSceneEngine();
+    const compass = widgets.find((w) => w.kind === "Compass") as unknown as {
+      viewModel: { reset(): void };
+    };
+    compass.viewModel.reset();
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { heading: 0, tilt: 0 });
+  });
+  it("reads and steps the zoom of a view with no tiling scheme through its scale", () => {
+    const { engine, goTo, rawView } = makeEngine();
+    rawView.zoom = -1;
+    rawView.scale = zoomToScale(3);
+    assert.ok(Math.abs(engine.readView().zoom - 3) < 1e-9);
+    // A view with no scale yet reads as zoom 0, never a non-finite level.
+    rawView.scale = 0;
+    assert.equal(engine.readView().zoom, 0);
+    rawView.scale = zoomToScale(3);
+    engine.zoomIn();
+    const target = (goTo[0] as { target: { scale: number } }).target;
+    assert.ok(Math.abs(target.scale - zoomToScale(4)) < 1e-6);
+  });
+});
+
 describe("ArcgisEngine camera conventions", () => {
+  it("publishes geographic map clicks and removes the listener on cleanup", () => {
+    const { engine, fireViewEvent, rawView } = makeEngine();
+    // Screen and geographic coordinates differ, so forwarding event.x/y fails.
+    rawView.toMap = (p: { x: number; y: number }) => ({
+      longitude: p.x / 10,
+      latitude: p.y / 10,
+      x: p.x,
+      y: p.y,
+    });
+    const clicks: [number, number][] = [];
+    const unsubscribe = engine.onMapClick((lngLat) => clicks.push(lngLat));
+
+    fireViewEvent("click", { x: -765, y: 392.5 });
+    assert.deepEqual(clicks, [[-76.5, 39.25]]);
+
+    unsubscribe();
+    fireViewEvent("click", { x: 10, y: 20 });
+    assert.deepEqual(clicks, [[-76.5, 39.25]]);
+  });
+
   it("maps MapLibre bearings to SDK rotations and back", () => {
     assert.equal(bearingToRotation(0), 0);
     assert.equal(bearingToRotation(90), 270);
@@ -475,6 +691,11 @@ describe("ArcgisEngine camera conventions", () => {
     engine.applyView({ center: [1, 2], zoom: 7, bearing: 45, pitch: 0 });
     assert.equal(goTo.length, 1);
   });
+  it("returns no coordinate for a screen point that has no map location", () => {
+    const { engine, rawView } = makeSceneEngine();
+    rawView.toMap = () => null;
+    assert.equal(engine.getRenderSurface()?.unproject([10, 20]), null);
+  });
   it("clamps saved views against the project preferences before the jump", () => {
     const { engine, goTo } = makeEngine();
     engine.applyMapPreferences({
@@ -491,6 +712,139 @@ describe("ArcgisEngine camera conventions", () => {
     const call = goTo.at(-1) as { target: { center: [number, number]; zoom: number } };
     assert.deepEqual(call.target.center, [180, 85]);
     assert.equal(call.target.zoom, 10);
+  });
+  it("keeps a flat view inside restricted bounds and the zoom range", async () => {
+    const { engine, rawView, goTo, fireViewEvent } = makeEngine();
+    await engine.settleView(engine.readView());
+    Object.assign(rawView, { zoom: 7, center: { longitude: 10, latitude: 20 } });
+    goTo.length = 0;
+    // 10 degrees by 10 degrees must fill the 800 x 600 view: zoom out no
+    // further than the level at which the box's height spans 600 pixels.
+    engine.applyMapPreferences({ ...PREFERENCES, restrictBounds: true, bounds: [0, 0, 10, 10] });
+    // No SDK lateral or zoom limit (with continuous zoom the SDK refuses the
+    // wheel steps that would cross one): the settled view eases back inside.
+    assert.equal(rawView.constraints.geometry, null);
+    assert.equal(rawView.constraints.minZoom, -1);
+    assert.equal(rawView.constraints.maxScale, 0);
+    const call = goTo.at(-1) as { target: { center: [number, number] } };
+    assert.deepEqual(call.target.center, [10, 10]);
+    // At the minimum, a wheel step out is dropped; one in is not.
+    rawView.zoom = 6.5;
+    const wheel = (deltaY: number) => {
+      let stopped = false;
+      fireViewEvent("mouse-wheel", { deltaY, stopPropagation: () => (stopped = true) });
+      return stopped;
+    };
+    assert.equal(wheel(100), false);
+    goTo.length = 0;
+    rawView.zoom = 3;
+    engine.applyMapPreferences({ ...PREFERENCES, restrictBounds: true, bounds: [0, 0, 10, 10] });
+    const minZoom = (goTo.at(-1) as { target: { zoom: number } }).target.zoom;
+    assert.ok(minZoom > 5 && minZoom < 6, String(minZoom));
+    rawView.zoom = minZoom;
+    assert.equal(wheel(100), true);
+    assert.equal(wheel(-100), false);
+    // And at the maximum, a step in is dropped.
+    engine.applyMapPreferences({ ...PREFERENCES, maxZoom: 12 });
+    rawView.zoom = 12;
+    assert.equal(wheel(-100), true);
+    assert.equal(wheel(100), false);
+  });
+  it("holds a scene inside the zoom range and bounds once it settles", async () => {
+    const { engine, rawView, goTo, fireWatchers } = makeSceneEngine();
+    await engine.settleView(engine.readView());
+    Object.assign(rawView, { zoom: 2, center: { longitude: 30, latitude: 40 } });
+    goTo.length = 0;
+    engine.applyMapPreferences({
+      ...PREFERENCES,
+      minZoom: 4,
+      maxZoom: 12,
+      restrictBounds: true,
+      bounds: [-10, -10, 10, 10],
+    });
+    // On a globe the zoom range is also an altitude range, lower zoom higher.
+    const altitude = (rawView.constraints as { altitude: { min: number; max: number } }).altitude;
+    assert.ok(altitude.max > altitude.min && altitude.min > 0);
+    const call = goTo.at(-1) as { target: { center: [number, number]; zoom: number } };
+    assert.deepEqual(call.target.center, [10, 10]);
+    // Zoom 4, raised until the 20 degree box fills the view.
+    assert.ok(call.target.zoom > 4.5 && call.target.zoom < 5, String(call.target.zoom));
+    // Inside the range and bounds, nothing moves, nor does a centre a hair
+    // past the edge the correction moved it to.
+    Object.assign(rawView, { zoom: 6, center: { longitude: 10.0000001, latitude: 2 } });
+    goTo.length = 0;
+    fireWatchers();
+    assert.equal(goTo.length, 0);
+  });
+  it("reapplies the bounds' minimum zoom once the view has its size", async () => {
+    const { engine, rawView, goTo, fireWatchers } = makeEngine();
+    await engine.settleView(engine.readView());
+    Object.assign(rawView, { width: 0, height: 0, zoom: 3, center: { longitude: 5, latitude: 5 } });
+    goTo.length = 0;
+    engine.applyMapPreferences({ ...PREFERENCES, restrictBounds: true, bounds: [0, 0, 10, 10] });
+    // Unsized, the bounds cannot raise the minimum.
+    assert.equal(goTo.length, 0);
+    Object.assign(rawView, { width: 800, height: 600 });
+    fireWatchers();
+    assert.ok((goTo.at(-1) as { target: { zoom: number } }).target.zoom > 5);
+  });
+  it("does not correct the default camera before the stored one is placed", async () => {
+    const { engine, rawView, goTo } = makeEngine();
+    Object.assign(rawView, { zoom: 2, center: { longitude: 30, latitude: 40 } });
+    goTo.length = 0;
+    engine.applyMapPreferences({
+      ...PREFERENCES,
+      minZoom: 4,
+      restrictBounds: true,
+      bounds: [0, 0, 10, 10],
+    });
+    // The default camera is outside the limits, but settleView owns the move.
+    assert.equal(goTo.length, 0);
+    await engine.settleView({ center: [5, 5], zoom: 7, bearing: 0, pitch: 0 });
+    assert.deepEqual((goTo[0] as { target: { center: [number, number] } }).target.center, [5, 5]);
+  });
+  it("resolves whenDrawn on a settled draw, on its timeout, or when the view goes", async () => {
+    const shim = !globalThis.requestAnimationFrame;
+    if (shim)
+      Object.assign(globalThis, {
+        requestAnimationFrame: (cb: () => void) => setTimeout(cb, 0),
+        cancelAnimationFrame: (id: number) => clearTimeout(id),
+      });
+    const frames = () => new Promise((resolve) => setTimeout(resolve, 5));
+    // Timers run late on a loaded runner: poll rather than assume a delay.
+    const until = async (check: () => boolean, poke = () => {}) => {
+      for (let i = 0; i < 200 && !check(); i++) {
+        poke();
+        await frames();
+      }
+      return check();
+    };
+    try {
+      const { engine, fireWatchers } = makeEngine();
+      // The view reports drawn (two frames later the watcher is registered).
+      let drawn = false;
+      void engine.whenDrawn(60_000).then(() => (drawn = true));
+      assert.equal(
+        await until(
+          () => drawn,
+          () => fireWatchers(),
+        ),
+        true,
+      );
+      // Nothing reports: the timeout is the ceiling.
+      const started = Date.now();
+      await engine.whenDrawn(30);
+      assert.ok(Date.now() - started >= 25);
+      // The view is destroyed before the frames run: resolve, don't wait.
+      let gone = false;
+      void engine.whenDrawn(60_000).then(() => (gone = true));
+      engine.destroy();
+      assert.equal(await until(() => gone), true);
+    } finally {
+      if (shim)
+        for (const key of ["requestAnimationFrame", "cancelAnimationFrame"])
+          delete (globalThis as Record<string, unknown>)[key];
+    }
   });
   it("converts GeoJSON geometry to SDK geometry JSON", () => {
     assert.deepEqual(geojsonToArcgisGeometry({ type: "Point", coordinates: [1, 2] }), {
@@ -520,7 +874,7 @@ describe("ArcgisEngine camera conventions", () => {
         ],
       ],
     });
-    assert.equal((multi as { rings: unknown[] }).rings.length, 2);
+    assert.equal((multi as unknown as { rings: unknown[] }).rings.length, 2);
     assert.equal(geojsonToArcgisGeometry({ type: "GeometryCollection", geometries: [] }), null);
   });
 });
@@ -570,6 +924,7 @@ describe("ArcgisEngine controls", () => {
   });
 
   it("replaces the SDK's default UI with the Controls menu's default set", () => {
+    using _document = withDocument();
     const { engine, widgets, uiAdds, rawView } = makeEngine();
     assert.deepEqual(rawView.ui.components, []);
     // Fullscreen, compass and scale are on by default; navigation (zoom) and
@@ -577,14 +932,16 @@ describe("ArcgisEngine controls", () => {
     // equivalent and are skipped. Attribution is the view's own rendering
     // (`attributionVisible`), not a widget, and can never be turned off.
     assert.equal(rawView.attributionVisible, true);
+    // The scale bar is the 2D map's own control, not an SDK widget.
     assert.deepEqual(
       widgets.map((w) => w.kind),
-      ["Fullscreen", "Compass", "ScaleBar"],
+      ["Fullscreen", "Compass"],
     );
     assert.deepEqual(
       uiAdds.map((entry) => entry.position),
       ["top-right", "top-right", "bottom-left"],
     );
+    assert.match((uiAdds[2].component as { className: string }).className, /maplibregl-ctrl-scale/);
     assert.equal(engine.setBuiltInControlVisible("navigation", true), true);
     assert.equal(widgets.at(-1)?.kind, "Zoom");
     assert.equal(engine.setBuiltInControlVisible("attribution", false), false);
@@ -595,26 +952,91 @@ describe("ArcgisEngine controls", () => {
     assert.equal(engine.getBuiltInControlPosition("scale"), "bottom-right");
     assert.equal(uiAdds.at(-1)?.position, "bottom-right");
     // Missing controls are rejected before consulting the plugin control host.
-    assert.equal(engine.addControl(), false);
+    assert.equal(engine.addControl(undefined as never), false);
     assert.equal(engine.capabilities.domControls, true);
   });
+  it("keeps MapLibre's corner order when a control mounts after its neighbours", () => {
+    const { document } = parseHTML("<html><body></body></html>");
+    const previous = globalThis.document;
+    (globalThis as { document: unknown }).document = document;
+    try {
+      const { engine, uiAdds } = makeSceneEngine("global", {
+        onProjectionToggle: () => {},
+        onLayerVisibilityChange: () => {},
+      });
+      const topRight = () =>
+        uiAdds.filter((entry) => entry.position === "top-right").map((entry) => entry.index);
+      // Fullscreen, compass, globe, then the layer list, as on MapLibre.
+      assert.deepEqual(topRight(), [0, 1, 2, 3]);
+      // Shown again from the Controls menu, the globe slots back in before
+      // the layer list instead of being appended after it.
+      engine.setBuiltInControlVisible("globe", false);
+      engine.setBuiltInControlVisible("globe", true);
+      assert.equal(uiAdds.at(-1)?.index, 2);
+      // A control in another corner does not count towards the index.
+      engine.setBuiltInControlPosition("compass", "bottom-left");
+      engine.setBuiltInControlVisible("globe", false);
+      engine.setBuiltInControlVisible("globe", true);
+      assert.equal(uiAdds.at(-1)?.index, 1);
+      // Moved into the same corner, the scale bar goes before the layer list,
+      // which MapLibre mounts only once the style loads.
+      engine.setBuiltInControlPosition("scale", "top-right");
+      assert.equal(uiAdds.at(-1)?.index, 2);
+    } finally {
+      (globalThis as { document: unknown }).document = previous;
+    }
+  });
+  it("mounts moved controls in the corners an earlier view reported", () => {
+    using _document = withDocument();
+    const moves: [string, string][] = [];
+    const { engine, uiAdds } = makeEngine({
+      controlPositions: { compass: "bottom-left" },
+      onControlPositionChange: (control, position) => moves.push([control, position]),
+    });
+    // Fullscreen, compass, scale: the compass lands where it was moved to.
+    assert.deepEqual(
+      uiAdds.map((entry) => entry.position),
+      ["top-right", "bottom-left", "bottom-left"],
+    );
+    engine.setBuiltInControlPosition("scale", "top-left");
+    assert.deepEqual(moves, [["scale", "top-left"]]);
+  });
   it("forwards the scale unit and compass label to the widgets", () => {
-    const { engine, widgets } = makeEngine();
-    engine.applyMapPreferences({
-      minZoom: 0,
-      maxZoom: 24,
-      maxPitch: 85,
-      renderWorldCopies: true,
-      restrictBounds: false,
-      bounds: [-180, -85, 180, 85],
-      projection: "mercator",
-      scaleUnit: "imperial",
-    } as MapPreferences);
-    assert.equal(widgets.find((w) => w.kind === "ScaleBar")?.unit, "non-metric");
+    using _document = withDocument();
+    const { engine, widgets, uiAdds } = makeEngine();
+    const scale = uiAdds[2].component as { textContent: string };
+    const apply = (scaleUnit: MapPreferences["scaleUnit"]) =>
+      engine.applyMapPreferences({
+        minZoom: 0,
+        maxZoom: 24,
+        maxPitch: 85,
+        renderWorldCopies: true,
+        restrictBounds: false,
+        bounds: [-180, -85, 180, 85],
+        projection: "mercator",
+        scaleUnit,
+      } as MapPreferences);
+    apply("imperial");
+    assert.match(scale.textContent, / mi$/);
+    // The SDK's own scale bar had no nautical miles.
+    apply("nautical");
+    assert.match(scale.textContent, / nmi$/);
     engine.setCompassLabel("Reset");
     assert.equal(widgets.find((w) => w.kind === "Compass")?.label, "Reset");
   });
 });
+
+/** Install a DOM for the controls that build their own elements. */
+function withDocument(): Disposable {
+  const { document } = parseHTML("<html><body></body></html>");
+  const previous = globalThis.document;
+  (globalThis as { document: unknown }).document = document;
+  return {
+    [Symbol.dispose]() {
+      (globalThis as { document: unknown }).document = previous;
+    },
+  };
+}
 
 describe("ArcgisEngine layer sync", () => {
   beforeEach(() => {
@@ -632,10 +1054,10 @@ describe("ArcgisEngine layer sync", () => {
         ],
       },
     });
-    // Store order is topmost first: A above B.
+    // Store order is bottom to top: B above A.
     engine.syncLayers([SQUARE, other]);
     const kinds = layers.items.map((l) => `${l.kind}:${l.title}`);
-    assert.deepEqual(kinds, ["geojson:Layer B", "geojson:Layer A", "geojson:Layer A"]);
+    assert.deepEqual(kinds, ["geojson:Layer A", "geojson:Layer A", "geojson:Layer B"]);
     const square = created.filter((l) => l.title === "Layer A");
     assert.deepEqual(
       square.map((l) => l.props.geometryType),
@@ -647,7 +1069,7 @@ describe("ArcgisEngine layer sync", () => {
     engine.syncLayers([other, SQUARE]);
     assert.deepEqual(
       layers.items.map((l) => l.title),
-      ["Layer A", "Layer A", "Layer B"],
+      ["Layer B", "Layer A", "Layer A"],
     );
     assert.equal(created.length, 3);
   });
@@ -682,6 +1104,19 @@ describe("ArcgisEngine layer sync", () => {
     engine.syncLayers([{ ...archive, visible: false }]);
     assert.deepEqual(engine.getRenderStatus().errors, []);
   });
+  it("names a plugin-drawn layer it cannot show in the banner, while visible", () => {
+    const { engine } = makeEngine();
+    const mirror = {
+      ...geojsonLayer({ id: "pc", name: "Sentinel-2", geojson: undefined }),
+      type: "raster" as const,
+      source: { sourceId: "pc" },
+      metadata: { externalNativeLayer: true, nativeLayerIds: ["pc-layer"] },
+    };
+    engine.syncLayers([mirror]);
+    assert.match(engine.getRenderStatus().errors.join(), /Sentinel-2: drawn by a plugin/);
+    engine.syncLayers([{ ...mirror, visible: false }]);
+    assert.deepEqual(engine.getRenderStatus().errors, []);
+  });
   it("draws raster and service records through the SDK's layer classes", () => {
     const { engine, layers } = makeEngine();
     engine.syncLayers([
@@ -698,15 +1133,137 @@ describe("ArcgisEngine layer sync", () => {
     ]);
     assert.deepEqual(
       layers.items.map((l) => l.kind),
-      ["feature", "web-tile"],
+      ["web-tile", "feature"],
     );
-    assert.equal(layers.items[1].props.urlTemplate, "https://t/{level}/{col}/{row}.png");
-    assert.equal(layers.items[1].props.copyright, "© T");
+    assert.equal(layers.items[0].props.urlTemplate, "https://t/{level}/{col}/{row}.png");
+    assert.equal(layers.items[0].props.copyright, "© T");
+    // Story exports rebuild the layer in MapLibre, so they get the store template.
     assert.deepEqual(engine.getLayerRasterSource("xyz"), {
       type: "raster",
-      tiles: ["https://t/{level}/{col}/{row}.png"],
+      tiles: ["https://t/{z}/{x}/{y}.png"],
       attribution: "© T",
     });
+  });
+  it("draws TMS and bounding-box templates through a custom tile layer", () => {
+    const { engine, layers } = makeEngine();
+    engine.syncLayers([
+      {
+        ...geojsonLayer({ id: "tms", name: "TMS", geojson: undefined }),
+        type: "xyz",
+        source: { type: "raster", tiles: ["https://t/{z}/{x}/{y}.png"], scheme: "tms" },
+      },
+    ]);
+    assert.deepEqual(
+      layers.items.map((l) => l.kind),
+      ["template-tile"],
+    );
+    assert.equal(engine.getRenderStatus().errors.length, 0);
+    assert.deepEqual(engine.getLayerRasterSource("tms"), {
+      type: "raster",
+      tiles: ["https://t/{z}/{x}/{y}.png"],
+      scheme: "tms",
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: 22,
+    });
+  });
+  it("applies the raster effect and blend mode in place, the effect to rasters only", () => {
+    const { engine, created, layers } = makeEngine();
+    const tiles = {
+      ...geojsonLayer({ id: "xyz", name: "Tiles", geojson: undefined }),
+      type: "xyz" as const,
+      source: { type: "raster", tiles: ["https://t/{z}/{x}/{y}.png"] },
+    };
+    engine.syncLayers([tiles, SQUARE]);
+    const count = created.length;
+    engine.syncLayers([
+      { ...tiles, style: { ...DEFAULT_LAYER_STYLE, rasterSaturation: -1, blendMode: "multiply" } },
+      { ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, rasterSaturation: -1 } },
+    ]);
+    const raster = layers.items.find((l) => l.kind === "web-tile")!;
+    assert.equal(raster.effect, "brightness(1) contrast(1) saturate(0) hue-rotate(0deg)");
+    assert.equal(raster.blendMode, "multiply");
+    assert.ok(layers.items.filter((l) => l.kind === "geojson").every((l) => l.effect === null));
+    // The tile layer was not rebuilt for a slider change.
+    assert.ok(layers.items.includes(created.find((l) => l.kind === "web-tile")!));
+    assert.ok(created.length >= count);
+  });
+  it("changes a GeoJSON layer's blend mode in place", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([SQUARE]);
+    const count = created.length;
+    engine.syncLayers([{ ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, blendMode: "multiply" } }]);
+    assert.equal(created.length, count, "no native layer was rebuilt");
+    assert.ok(created.slice(-2).every((layer) => layer.blendMode === "multiply"));
+  });
+  it("hands story exports plain HTTP tile templates for service and desktop WMS layers", () => {
+    const { engine } = makeEngine();
+    const service = (id: string, url: string, metadata = {}) => ({
+      ...geojsonLayer({ id, name: id, geojson: undefined }),
+      type: "arcgis" as const,
+      source: { url },
+      metadata,
+    });
+    engine.syncLayers([
+      service("tiled", "https://h/rest/services/A/MapServer/", { arcgisTiled: true }),
+      service("dynamic", "https://h/rest/services/B/MapServer"),
+      service("imagery", "https://h/rest/services/C/ImageServer"),
+    ]);
+    assert.deepEqual(engine.getLayerRasterSource("tiled")?.tiles, [
+      "https://h/rest/services/A/MapServer/tile/{z}/{y}/{x}",
+    ]);
+    assert.match(
+      String((engine.getLayerRasterSource("dynamic")?.tiles as string[])[0]),
+      /^https:\/\/h\/rest\/services\/B\/MapServer\/export\?bbox=\{bbox-epsg-3857\}/,
+    );
+    assert.match(
+      String((engine.getLayerRasterSource("imagery")?.tiles as string[])[0]),
+      /ImageServer\/exportImage\?/,
+    );
+  });
+  it("fades a story chapter's layer opacity over the transition", () => {
+    const { engine, created } = makeEngine();
+    const frames: FrameRequestCallback[] = [];
+    const previous = {
+      requestAnimationFrame: globalThis.requestAnimationFrame,
+      cancelAnimationFrame: globalThis.cancelAnimationFrame,
+    };
+    Object.assign(globalThis, {
+      requestAnimationFrame: (cb: FrameRequestCallback) => frames.push(cb),
+      cancelAnimationFrame: () => {},
+    });
+    try {
+      engine.syncLayers([SQUARE]);
+      const native = created.at(-1)!;
+      const start = performance.now();
+      engine.setStoryLayerOpacity(SQUARE.id, 0, 1000);
+      // Still where it was until frames run.
+      assert.equal(native.opacity, 1);
+      frames.shift()!(start + 500);
+      assert.ok(native.opacity > 0.3 && native.opacity < 0.7, String(native.opacity));
+      frames.shift()!(start + 2000);
+      assert.equal(native.opacity, 0);
+      assert.equal(frames.length, 0);
+      // No duration applies at once.
+      engine.setStoryLayerOpacity(SQUARE.id, 0.5);
+      assert.equal(native.opacity, 0.5);
+    } finally {
+      Object.assign(globalThis, previous);
+    }
+  });
+  it("reuses a GeoJSON plan across opacity, visibility and name changes", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([SQUARE]);
+    const count = created.length;
+    const native = created[count - 1];
+    engine.syncLayers([{ ...SQUARE, opacity: 0.4, visible: false, name: "Renamed" }]);
+    assert.equal(created.length, count);
+    assert.equal(native.opacity, 0.4);
+    assert.equal(native.visible, false);
+    assert.equal(native.title, "Renamed");
+    // A re-style still rebuilds.
+    engine.syncLayers([{ ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, fillColor: "#00ff00" } }]);
+    assert.ok(created.length > count);
   });
   it("recompiles zoom-dependent layers when the integer zoom changes", () => {
     const { engine, created, rawView, fireWatchers } = makeEngine();
@@ -779,6 +1336,41 @@ describe("ArcgisEngine picking and highlight", () => {
     assert.equal(engine.identifyFeatures([3, 3]).length, 0);
     assert.equal(engine.identifyFeatures([0.5, 0.5], "other").length, 0);
   });
+  it("does not identify the companion layers a style draws", async () => {
+    const { engine, layers, setHitResults } = makeEngine();
+    engine.syncLayers([{ ...SQUARE, style: { ...SQUARE.style, invertedFillEnabled: true } }]);
+    const polygons = layers.items.filter((l) => l.props.geometryType === "polygon");
+    // The mask under the square's own polygon layer.
+    assert.equal(polygons.length, 2);
+    setHitResults(
+      polygons.map((layer) => ({
+        type: "graphic",
+        graphic: { attributes: { [ARCGIS_ID_FIELD]: "sq" }, layer },
+      })),
+    );
+    const features = await engine.identifyFeaturesAt({ x: 0.5, y: 0.5 });
+    assert.equal(features.length, 1);
+    setHitResults([
+      { type: "graphic", graphic: { attributes: { gl__sym: "s0" }, layer: polygons[0] } },
+    ]);
+    assert.deepEqual(await engine.identifyFeaturesAt({ x: 5, y: 5 }), []);
+  });
+  it("skips cluster graphics instead of reporting their object id as a feature", async () => {
+    const { engine, layers, setHitResults } = makeEngine();
+    engine.syncLayers([SQUARE]);
+    const pointLayer = layers.items.find((l) => l.props.geometryType === "point")!;
+    setHitResults([
+      {
+        type: "graphic",
+        graphic: {
+          attributes: { OBJECTID: 1, cluster_count: 12 },
+          layer: pointLayer,
+          isAggregate: true,
+        },
+      },
+    ]);
+    assert.deepEqual(await engine.identifyFeaturesAt({ x: 5, y: 5 }), []);
+  });
   it("answers an arbitrary coordinate synchronously from the store's geometry", () => {
     const { engine } = makeEngine();
     engine.syncLayers([SQUARE]);
@@ -836,6 +1428,102 @@ describe("ArcgisEngine picking and highlight", () => {
     assert.deepEqual(feature.properties, { OBJECTID: 7, NAME: "Parcel" });
     assert.equal(feature.geometry?.type, "Polygon");
   });
+  it("styles, highlights and reads back a native FeatureServer layer", async () => {
+    const { engine, layers, setHitResults, map } = makeEngine();
+    const record = {
+      ...geojsonLayer({ id: "fs", name: "Service", geojson: undefined }),
+      type: "arcgis" as const,
+      source: { type: "geojson", url: "https://h/rest/services/X/FeatureServer/0" },
+    };
+    // The layer draws with its style once the service's geometry type is known.
+    engine.syncLayers([{ ...record, style: { ...DEFAULT_LAYER_STYLE, fillColor: "#ff0000" } }]);
+    const service = layers.items[0] as (typeof layers.items)[0] & {
+      geometryType?: string;
+      queryFeatures?: unknown;
+    };
+    service.geometryType = "polygon";
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const renderer = service.renderer as { symbol: { type: string; color: number[] } };
+    assert.equal(renderer.symbol.type, "simple-fill");
+    assert.deepEqual(renderer.symbol.color.slice(0, 3), [255, 0, 0]);
+    // A hit leaves the feature's geometry behind for its highlight.
+    setHitResults([
+      {
+        type: "graphic",
+        graphic: {
+          attributes: { OBJECTID: 7 },
+          layer: service,
+          geometry: {
+            type: "polygon",
+            rings: [
+              [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 0],
+              ],
+            ],
+            spatialReference: { wkid: 4326 },
+          },
+        },
+      },
+    ]);
+    await engine.identifyFeaturesAt({ x: 0, y: 0 });
+    const before = (map.layers as unknown as { items: unknown[] }).items.length;
+    engine.highlightFeature(engine["layers"][0], "7");
+    assert.equal((map.layers as unknown as { items: unknown[] }).items.length, before + 1);
+    // GeoJSON comes from a service query.
+    service.queryFeatures = async () => ({
+      features: [
+        {
+          attributes: { OBJECTID: 1, NAME: "A" },
+          geometry: { type: "point", x: 3, y: 4, spatialReference: { wkid: 4326 } },
+          layer: null,
+        },
+      ],
+    });
+    (service as { objectIdField?: string }).objectIdField = "OBJECTID";
+    const collection = await engine.getLayerGeoJson("fs");
+    assert.equal(collection?.features.length, 1);
+    assert.equal(collection?.features[0].id, 1);
+    assert.deepEqual(collection?.features[0].properties, { OBJECTID: 1, NAME: "A" });
+    // A service past its record limit is paged.
+    const starts: unknown[] = [];
+    service.queryFeatures = async (query: { start?: number; num?: number }) => {
+      starts.push(query.start === undefined ? undefined : [query.start, query.num]);
+      const start = query.start ?? 0;
+      return {
+        exceededTransferLimit: start === 0,
+        features: [
+          {
+            attributes: { OBJECTID: start + 1 },
+            geometry: { type: "point", x: 3, y: 4, spatialReference: { wkid: 4326 } },
+            layer: null,
+          },
+        ],
+      };
+    };
+    assert.equal((await engine.getLayerGeoJson("fs"))?.features.length, 2);
+    // Later pages ask for as many rows as the first page returned.
+    assert.deepEqual(starts, [undefined, [1, 1]]);
+    // A service that ignores the offset keeps sending its first page: stop.
+    let calls = 0;
+    service.queryFeatures = async () => {
+      calls++;
+      return {
+        exceededTransferLimit: true,
+        features: [
+          {
+            attributes: { OBJECTID: 1 },
+            geometry: { type: "point", x: 3, y: 4, spatialReference: { wkid: 4326 } },
+            layer: null,
+          },
+        ],
+      };
+    };
+    assert.equal((await engine.getLayerGeoJson("fs"))?.features.length, 1);
+    assert.equal(calls, 2);
+  });
   it("keeps synchronous control results when a native hit test outlives the engine", async () => {
     const { setArcgisControlPicker } = await import("../packages/map/src/arcgis-control-adapters");
     const { engine, setHitResults } = makeEngine();
@@ -879,7 +1567,7 @@ describe("ArcgisEngine picking and highlight", () => {
     const selection = layers.items.at(-1);
     const clearPoint = engine.showSearchResult({ type: "Point", coordinates: [-77.0365, 38.8977] });
     const point = layers.items.at(-1)!;
-    assert.deepEqual(point.graphics!.getItemAt(0).geometry, {
+    assert.deepEqual(point.graphics!.getItemAt(0)!.geometry, {
       type: "point",
       x: -77.0365,
       y: 38.8977,
@@ -893,7 +1581,7 @@ describe("ArcgisEngine picking and highlight", () => {
     ];
     const clearCell = engine.showSearchResult({ type: "Polygon", coordinates: [ring] });
     const cell = layers.items.at(-1)!;
-    assert.equal(cell.graphics!.getItemAt(0).geometry?.type, "polygon");
+    assert.equal(cell.graphics!.getItemAt(0)!.geometry?.type, "polygon");
     clearPoint();
     clearPoint();
     assert.ok(point.destroyed);
@@ -1042,7 +1730,7 @@ describe("ArcgisEngine 3D scenes", () => {
     assert.deepEqual(polygon?.props.elevationInfo, { mode: "relative-to-ground", offset: 3 });
   });
 
-  it("hosts the globe toggle only with a projection callback, and no scale bar in 3D", () => {
+  it("hosts the globe toggle only with a projection callback, and the scale bar in 3D", () => {
     const { document } = parseHTML("<html><body></body></html>");
     const previous = globalThis.document;
     (globalThis as { document: unknown }).document = document;
@@ -1055,7 +1743,14 @@ describe("ArcgisEngine 3D scenes", () => {
         widgets.map((w) => w.kind),
         ["Fullscreen", "Compass"],
       );
-      assert.equal(engine.setBuiltInControlVisible("scale", true), false);
+      // The 2D map's scale bar measures a scene at its centre too.
+      assert.ok(
+        uiAdds.some((entry) =>
+          /maplibregl-ctrl-scale/.test(String((entry.component as HTMLElement).className)),
+        ),
+      );
+      assert.equal(engine.setBuiltInControlVisible("scale", false), true);
+      assert.equal(engine.setBuiltInControlVisible("scale", true), true);
       const globe = uiAdds.find(
         (entry) => entry.component instanceof document.defaultView!.HTMLElement,
       )?.component as HTMLElement | undefined;
@@ -1327,7 +2022,7 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
   const { document, HTMLElement } = parseHTML("<html><body></body></html>").window;
   const previous = { document: globalThis.document, HTMLElement: globalThis.HTMLElement };
   Object.assign(globalThis, { document, HTMLElement });
-  const { engine, rawView, goTo, uiAdds, fireWatchers } = makeEngine();
+  const { engine, rawView, goTo, uiAdds, fireWatchers, fireViewEvent } = makeEngine();
   rawView.container = document.body;
   const builtInCount = uiAdds.length;
   let facade!: MapLibreMap;
@@ -1350,6 +2045,9 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
       (uiAdds.at(-1)!.component as HTMLElement).classList.contains("maplibregl-ctrl-bottom-right"),
     );
     assert.equal(facade.hasControl(control), true);
+    assert.deepEqual(facade.unproject([3, 4]).toArray(), [3, 4]);
+    rawView.toMap = () => null;
+    assert.deepEqual(facade.unproject([3, 4]).toArray(), engine.readView().center);
     facade.jumpTo({ center: { lng: 3, lat: 4 }, zoom: 9 });
     assert.deepEqual(goTo.at(-1), {
       target: { center: [3, 4], zoom: 9, rotation: 0 },
@@ -1358,13 +2056,29 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
     facade.easeTo({ zoom: 10 });
     assert.equal((goTo.at(-1) as { options: { duration: number } }).options.duration, 500);
     const events: string[] = [];
-    for (const event of ["movestart", "moveend", "idle", "remove"])
+    for (const event of ["movestart", "moveend", "idle", "remove"] as const)
       facade.on(event, () => events.push(event));
     rawView.stationary = false;
     fireWatchers();
     rawView.stationary = true;
     fireWatchers();
     assert.deepEqual(events, ["movestart", "moveend", "idle"]);
+    // Camera frames and pointer events reach the facade as MapLibre's.
+    const live: string[] = [];
+    let clicked: number[] = [];
+    facade.on("move", () => live.push("move"));
+    facade.on("zoom", () => live.push("zoom"));
+    facade.on("click", (event: { lngLat: { toArray(): number[] } }) => {
+      clicked = event.lngLat.toArray();
+    });
+    rawView.toMap = (p: { x: number; y: number }) => ({ longitude: p.x, latitude: p.y }) as never;
+    rawView.zoom = 11;
+    fireWatchers();
+    assert.ok(live.includes("move") && live.includes("zoom"));
+    // The fake SDK re-runs every watcher, so the stationary one fired again.
+    events.splice(3);
+    fireViewEvent("click", { x: 5, y: 6 });
+    assert.deepEqual(clicked, [5, 6]);
     engine.removeControl(control);
     assert.equal(facade.hasControl(control), false);
     assert.equal(removed, 1);

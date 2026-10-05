@@ -3,15 +3,10 @@ import {
   BLANK_BASEMAP,
   DEFAULT_BASEMAP,
   DEFAULT_PROJECT_PREFERENCES,
-  getPlanetaryBasemapByStyleUrl,
-  getRegionalBasemapByStyleUrl,
   horizontalBbox,
-  isRegionalBasemapSentinel,
-  PLANETARY_BASEMAP_SENTINEL_PREFIX,
   scaleAltitudeToActiveBody,
   styleValue,
   useAppStore,
-  type RegionalBasemap,
 } from "@geolibre/core";
 import type {
   GeoLibreLayer,
@@ -19,7 +14,6 @@ import type {
   MapPreferences,
   MapProjection,
   MapViewState,
-  PlanetaryBasemap,
   StoryChapterAnimation,
   StoryChapterLocation,
 } from "@geolibre/core";
@@ -66,17 +60,35 @@ import {
 import { globeSafeMaxZoom } from "./globe-fit-bounds";
 import { drawExtentOnCanvas } from "./extent-drawing";
 import { captureEngineImage } from "./map-capture";
-import type { ExtentDrawingOptions, MapExtent } from "./map-engine";
+import type { CameraIdleEvent, ExtentDrawingOptions, MapExtent } from "./map-engine";
 import {
   blendModeSignature,
   installLayerBlendModes,
   syncLayerBlendModes,
 } from "./layer-blend-modes";
 import { ensureGeneratedImageHandler } from "./generated-images";
+import { installSelectionDragGuard } from "./selection-drag-guard";
 import { installGlobePopupOcclusion } from "./globe-popup-occlusion";
 import { isMapboxStyleUrl, loadMapboxStyle, redactMapboxStyleUrl } from "./mapbox-style";
 import { PlanetaryScaleControl } from "./planetary-scale-control";
-import { getOfflineBasemapStyle, isOfflineBasemapSentinel } from "./protomaps-basemap";
+import {
+  boundsFillMinZoom,
+  latFromMercatorY,
+  lngFromMercatorX,
+  mercatorBoundsForLngLatBounds,
+  mercatorXFromLng,
+  mercatorYFromLat,
+  normalizeMapBounds,
+} from "./map-bounds";
+import {
+  BLANK_BACKGROUND_LAYER_ID,
+  createBlankMapStyle,
+  defaultBlankBackgroundColor,
+  isGeoLibreSentinelStyleUrl,
+  resolveMapStyle,
+} from "./basemap-style";
+// Moved to ./basemap-style; re-exported so existing importers keep working.
+export { defaultBlankBackgroundColor };
 import { ResetBearingControl } from "./reset-bearing-control";
 import { MaptoolkitLogoControl } from "./maptoolkit-logo-control";
 import { TerrainControl, DEFAULT_TERRAIN_EXAGGERATION } from "./terrain-control";
@@ -115,16 +127,6 @@ const DEFAULT_PROJECTION: maplibregl.ProjectionSpecification = {
 const DEFAULT_MAX_PITCH = 85;
 /** Edge margin, in CSS pixels, kept free when fitting the camera to an extent. */
 const FIT_BOUNDS_PADDING = 40;
-const BLANK_BACKGROUND_LAYER_ID = "geolibre-blank-background";
-const BLANK_BACKGROUND_COLOR = "#ffffff";
-const DARK_BLANK_BACKGROUND_COLOR = "#262626";
-
-/** Theme-aware default used when a Blank background has no saved custom color. */
-export function defaultBlankBackgroundColor(
-  dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-): string {
-  return dark ? DARK_BLANK_BACKGROUND_COLOR : BLANK_BACKGROUND_COLOR;
-}
 const LAYER_CONTROL_EXCLUDED_LAYERS = [
   BLANK_BACKGROUND_LAYER_ID,
   highlightFillLayerId(),
@@ -211,167 +213,6 @@ function vectorTileLayerSuffix(layerId: string): string | undefined {
   return nativeLayerSuffix(layerId);
 }
 
-function createBlankMapStyle(): maplibregl.StyleSpecification {
-  return {
-    version: 8,
-    sources: {},
-    layers: [
-      {
-        id: BLANK_BACKGROUND_LAYER_ID,
-        type: "background",
-        paint: {
-          "background-color": BLANK_BACKGROUND_COLOR,
-        },
-      },
-    ],
-  };
-}
-
-/**
- * Whether a basemap style URL is one of GeoLibre's internal sentinels rather
- * than something fetchable. Every sentinel kind — planetary (`geolibre://
- * basemap/`), offline (`geolibre://offline-basemap/`), and regional
- * (`geolibre://regional-basemap/`) — is expanded to an inline style by
- * {@link resolveMapStyle} and would throw if handed to `fetch`.
- *
- * Matching on the scheme rather than enumerating the three prefixes keeps a
- * fourth sentinel kind from silently reintroducing that fetch, and covers a
- * sentinel whose id no longer resolves (which the per-kind lookups miss).
- */
-function isGeoLibreSentinelStyleUrl(styleUrl: string | undefined): boolean {
-  return Boolean(styleUrl?.startsWith("geolibre://"));
-}
-
-export function resolveMapStyle(
-  styleUrl: string | undefined,
-): string | maplibregl.StyleSpecification {
-  if (styleUrl === BLANK_BASEMAP) return createBlankMapStyle();
-  const offline = getOfflineBasemapStyle(styleUrl);
-  // Return a fresh copy (like the planetary path below builds a new object each
-  // call): MapLibre normalises/mutates the style it's handed, and the registry
-  // holds a single shared object — in split/compare view two Map instances
-  // resolve the same sentinel, so handing both the same object would let them
-  // corrupt each other's style state.
-  if (offline) return structuredClone(offline);
-  // An offline-basemap sentinel with no registered style (e.g. a project saved
-  // with one, reopened in a fresh session where the in-memory archive is gone)
-  // must not be fetched as a URL. Fall back to the default basemap.
-  if (isOfflineBasemapSentinel(styleUrl)) {
-    console.warn(
-      `Offline basemap "${styleUrl}" is not available in this session; falling back to the default basemap.`,
-    );
-    return DEFAULT_BASEMAP;
-  }
-  const planetary = getPlanetaryBasemapByStyleUrl(styleUrl);
-  if (planetary) return createPlanetaryMapStyle(planetary);
-  // A planetary sentinel that no longer resolves (e.g. a project saved with a
-  // basemap id that has since been renamed) must not be handed to MapLibre as a
-  // style URL — it would try to fetch the `geolibre://` sentinel and blank the
-  // map. Fall back to the default basemap instead.
-  if (styleUrl?.startsWith(PLANETARY_BASEMAP_SENTINEL_PREFIX)) {
-    console.warn(`Unknown planetary basemap "${styleUrl}"; falling back to the default basemap.`);
-    return DEFAULT_BASEMAP;
-  }
-  const regional = getRegionalBasemapByStyleUrl(styleUrl);
-  if (regional) return createRegionalMapStyle(regional);
-  // Same guard as the planetary path: a regional sentinel that no longer
-  // resolves must not be handed to MapLibre as a style URL.
-  if (isRegionalBasemapSentinel(styleUrl)) {
-    console.warn(`Unknown regional basemap "${styleUrl}"; falling back to the default basemap.`);
-    return DEFAULT_BASEMAP;
-  }
-  return styleUrl ?? DEFAULT_BASEMAP;
-}
-
-/**
- * A raster style for a {@link RegionalBasemap} — today the mainland-China
- * providers, whose tiles are ordinary Web-Mercator images (XYZ, or TMS when
- * `scheme` says so). A basemap with an `overlayTileUrl` (Amap Hybrid) stacks
- * its transparent roads-and-labels tiles above the imagery, so one selection
- * gives a labeled satellite basemap.
- *
- * Unlike the planetary styles this uses a light background rather than black:
- * these cover Earth, so a gap should read as missing map, not as space.
- */
-function createRegionalMapStyle(basemap: RegionalBasemap): maplibregl.StyleSpecification {
-  const rasterSource = (tiles: string, withAttribution: boolean) =>
-    ({
-      type: "raster",
-      tiles: [tiles],
-      tileSize: 256,
-      maxzoom: basemap.maxZoom,
-      ...(basemap.scheme ? { scheme: basemap.scheme } : {}),
-      // Credit the provider once; repeating it on the overlay would print the
-      // same attribution twice in the map's attribution control.
-      ...(withAttribution ? { attribution: basemap.attribution } : {}),
-    }) satisfies maplibregl.RasterSourceSpecification;
-
-  return {
-    version: 8,
-    sources: {
-      "regional-basemap": rasterSource(basemap.tileUrl, true),
-      ...(basemap.overlayTileUrl
-        ? { "regional-basemap-overlay": rasterSource(basemap.overlayTileUrl, false) }
-        : {}),
-    },
-    layers: [
-      {
-        id: BLANK_BACKGROUND_LAYER_ID,
-        type: "background",
-        paint: { "background-color": BLANK_BACKGROUND_COLOR },
-      },
-      { id: "regional-basemap", type: "raster", source: "regional-basemap" },
-      ...(basemap.overlayTileUrl
-        ? [
-            {
-              id: "regional-basemap-overlay",
-              type: "raster" as const,
-              source: "regional-basemap-overlay",
-            },
-          ]
-        : []),
-    ],
-  };
-}
-
-/**
- * A single-source raster style for a celestial body — the Moon/Mars mosaics or
- * the Earth satellite imagery the planet switcher uses. The tiles are images in
- * that body's Web-Mercator scheme (XYZ, or TMS when `basemap.scheme` says so),
- * so MapLibre renders them like any raster basemap. A dark background shows
- * through at zoom levels the source doesn't cover, matching how the planetary
- * tiles fade to black at the poles (and reading as space around the globe).
- */
-function createPlanetaryMapStyle(basemap: PlanetaryBasemap): maplibregl.StyleSpecification {
-  return {
-    version: 8,
-    sources: {
-      "planetary-basemap": {
-        type: "raster",
-        tiles: [basemap.tileUrl],
-        tileSize: 256,
-        maxzoom: basemap.maxZoom,
-        // OpenPlanetaryMap's S3 mosaics are TMS (flipped Y); the CARTO named
-        // maps are XYZ. MapLibre defaults to "xyz" when scheme is omitted.
-        ...(basemap.scheme ? { scheme: basemap.scheme } : {}),
-        attribution: basemap.attribution,
-      },
-    },
-    layers: [
-      {
-        id: BLANK_BACKGROUND_LAYER_ID,
-        type: "background",
-        paint: { "background-color": "#000000" },
-      },
-      {
-        id: "planetary-basemap",
-        type: "raster",
-        source: "planetary-basemap",
-      },
-    ],
-  };
-}
-
 // Moved to ./map-engine so MapEngine can reference it without importing this
 // module; re-exported here because 80-odd files import it from map-controller.
 export type { BuiltInMapControl };
@@ -384,6 +225,8 @@ export class MapController implements MapEngine {
   readonly kind = "maplibre" as const;
   readonly capabilities: MapEngineCapabilities = MAPLIBRE_CAPABILITIES;
   private map: maplibregl.Map | null = null;
+  /** Whether {@link clampViewToPreferences} has a clamp queued on `moveend`. */
+  private pendingViewClamp = false;
   private navigationControl: maplibregl.NavigationControl | null = null;
   private fullscreenControl: maplibregl.FullscreenControl | null = null;
   private compassControl: ResetBearingControl | null = null;
@@ -523,6 +366,10 @@ export class MapController implements MapEngine {
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
     ensureGeneratedImageHandler(this.map);
+    // A leftover text selection would otherwise turn a map drag into a native
+    // drag of the selection in WebKit; see selection-drag-guard.ts.
+    this.selectionDragGuardDispose?.();
+    this.selectionDragGuardDispose = installSelectionDragGuard(this.map.getCanvasContainer());
     installGlobePopupOcclusion(maplibregl);
     // Per-layer blend modes wrap MapLibre's render loop, so they have to be in
     // place before the first frame. Feature-detected: an unsupported build
@@ -984,6 +831,8 @@ export class MapController implements MapEngine {
     this.abortPendingMapboxStyle();
     this.removeClusterZoomListener();
     this.removePendingNativeFilterListener();
+    this.selectionDragGuardDispose?.();
+    this.selectionDragGuardDispose = null;
     this.map?.remove();
     this.map = null;
     this.styleReady = false;
@@ -1154,7 +1003,7 @@ export class MapController implements MapEngine {
     this.map.setTransformConstrain(
       createMapTransformConstraint(preferences, this.map, minZoom, maxZoom),
     );
-    this.applyView(this.readView());
+    this.clampViewToPreferences();
     // The ellipsoid or the scale unit can change here (Settings' dropdowns)
     // without the basemap changing, so push the unit and redraw the body-aware
     // scale bar now — the store's ellipsoid subscription has already updated the
@@ -1163,6 +1012,37 @@ export class MapController implements MapEngine {
     // or both).
     this.scaleControl?.setUnit(preferences.scaleUnit);
     this.scaleControl?.refresh();
+  }
+
+  /**
+   * Re-apply the current camera so the constraints {@link applyMapPreferences}
+   * just installed (min/max zoom, max pitch, max bounds) actually clamp it.
+   *
+   * `applyView` gets there by jumping, and a jump *stops* an in-flight camera
+   * animation, leaving the camera wherever that animation had reached. Map
+   * preferences do change mid-animation: loading a LiDAR point cloud flips the
+   * projection preference through the deck.gl overlays' shared mercator lock
+   * from the very `load` event the plugin fires right after starting its
+   * fly-to-the-data, so that fly-to was being cancelled before it had moved a
+   * pixel and the layer never came into view. While the camera is moving,
+   * clamp once it settles instead — the setters above already constrain the
+   * animation's own target, so nothing escapes the new limits in the meantime.
+   */
+  private clampViewToPreferences(): void {
+    if (!this.map) return;
+    if (!this.isCameraMoving()) {
+      this.applyView(this.readView());
+      return;
+    }
+    // One deferred clamp is enough however many preference changes land during
+    // the same movement, and it must not re-arm on the `moveend` its own jump
+    // fires.
+    if (this.pendingViewClamp) return;
+    this.pendingViewClamp = true;
+    this.map.once("moveend", () => {
+      this.pendingViewClamp = false;
+      this.applyView(this.readView());
+    });
   }
 
   readView(): MapViewState {
@@ -1598,6 +1478,7 @@ export class MapController implements MapEngine {
   private searchDisposers = new Set<() => void>();
 
   private extentDrawingDispose: (() => void) | null = null;
+  private selectionDragGuardDispose: (() => void) | null = null;
 
   getRenderSurface() {
     return this.map;
@@ -1617,11 +1498,35 @@ export class MapController implements MapEngine {
     return captureEngineImage(this);
   }
 
-  onCameraIdle(listener: () => void): () => void {
+  onMapClick(listener: (lngLat: [number, number]) => void): () => void {
     const map = this.map;
-    map?.on("moveend", listener);
+    const onClick = (event: maplibregl.MapMouseEvent) =>
+      listener([event.lngLat.lng, event.lngLat.lat]);
+    map?.on("click", onClick);
     return () => {
-      map?.off("moveend", listener);
+      map?.off("click", onClick);
+    };
+  }
+
+  isCameraMoving(): boolean {
+    return this.map?.isMoving() ?? false;
+  }
+
+  onCameraMove(listener: () => void): () => void {
+    const map = this.map;
+    map?.on("move", listener);
+    return () => {
+      map?.off("move", listener);
+    };
+  }
+
+  onCameraIdle(listener: (event?: CameraIdleEvent) => void): () => void {
+    const map = this.map;
+    const onMoveEnd = (event: maplibregl.MapLibreEvent & { storyCameraToken?: number }) =>
+      listener({ storyCamera: event?.storyCameraToken !== undefined });
+    map?.on("moveend", onMoveEnd);
+    return () => {
+      map?.off("moveend", onMoveEnd);
     };
   }
   stopCamera(): void {
@@ -2850,19 +2755,8 @@ function effectiveMinZoomForPreferences(
   map: maplibregl.Map,
   requestedMinZoom: number,
 ): number {
-  const bounds = preferences.restrictBounds && normalizeMapBounds(preferences.bounds);
-  if (!bounds) return requestedMinZoom;
-
-  const mercatorBounds = mercatorBoundsForLngLatBounds(bounds);
-  const widthRatio = Math.abs(mercatorBounds.east - mercatorBounds.west);
-  const heightRatio = Math.abs(mercatorBounds.south - mercatorBounds.north);
-  if (widthRatio <= 0 || heightRatio <= 0) return requestedMinZoom;
-
   const canvas = map.getCanvas();
-  const minZoomForWidth = Math.log2(canvas.clientWidth / (512 * widthRatio));
-  const minZoomForHeight = Math.log2(canvas.clientHeight / (512 * heightRatio));
-
-  return clampNumber(Math.max(requestedMinZoom, minZoomForWidth, minZoomForHeight), 0, 24);
+  return boundsFillMinZoom(preferences, canvas.clientWidth, canvas.clientHeight, requestedMinZoom);
 }
 
 function constrainCenterToVisibleBounds(
@@ -2896,53 +2790,6 @@ function constrainCenterToVisibleBounds(
         : (mercatorBounds.north + mercatorBounds.south) / 2,
     ),
   );
-}
-
-function mercatorBoundsForLngLatBounds(bounds: MapPreferences["bounds"]): {
-  west: number;
-  south: number;
-  east: number;
-  north: number;
-} {
-  return {
-    west: mercatorXFromLng(bounds[0]),
-    south: mercatorYFromLat(bounds[1]),
-    east: mercatorXFromLng(bounds[2]),
-    north: mercatorYFromLat(bounds[3]),
-  };
-}
-
-function mercatorXFromLng(lng: number): number {
-  return (lng + 180) / 360;
-}
-
-function lngFromMercatorX(x: number): number {
-  return x * 360 - 180;
-}
-
-function mercatorYFromLat(lat: number): number {
-  const radians = (clampNumber(lat, -85, 85) * Math.PI) / 180;
-  return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
-}
-
-function latFromMercatorY(y: number): number {
-  return (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
-}
-
-function normalizeMapBounds(bounds: MapPreferences["bounds"]): MapPreferences["bounds"] | null {
-  const [west, south, east, north] = bounds;
-  if (![west, south, east, north].every(Number.isFinite)) return null;
-  const normalized: MapPreferences["bounds"] = [
-    clampNumber(west, -180, 180),
-    clampNumber(south, -85, 85),
-    clampNumber(east, -180, 180),
-    clampNumber(north, -85, 85),
-  ];
-  if (normalized[0] >= normalized[2] || normalized[1] >= normalized[3]) {
-    return null;
-  }
-
-  return normalized;
 }
 
 function mapBoundsForPreferences(preferences: MapPreferences): maplibregl.LngLatBoundsLike | null {

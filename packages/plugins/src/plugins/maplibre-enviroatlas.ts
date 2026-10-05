@@ -7,9 +7,10 @@ import {
   type ServiceRef,
 } from "maplibre-gl-enviroatlas";
 import type { GeoLibreLayer } from "@geolibre/core";
+import { pluginDisplayTitle } from "../plugin-i18n";
 import type { GeoLibreAppAPI, GeoLibrePlugin } from "../types";
 import { mountMapControlInPanel, unmountMapControlFromPanel } from "./dockable-map-control";
-import { getStyleMap } from "./style-map";
+import { getControlMap } from "./style-map";
 import {
   createWebServiceStoreSync,
   layerTypeForTiles,
@@ -148,9 +149,11 @@ export const maplibreEnviroAtlasPlugin: GeoLibrePlugin = {
   id: "maplibre-gl-enviroatlas",
   name: "US EPA EnviroAtlas",
   version: "0.1.1",
-  engines: ["maplibre", "mapbox"],
+  // The control's raster layers are mirrored into store layers; on ArcGIS its
+  // style is only recorded and the engine draws those store layers.
+  engines: ["maplibre", "mapbox", "arcgis"],
   activate: (app: GeoLibreAppAPI) => {
-    if (!getStyleMap(app) || !app.registerRightPanel || !app.openRightPanel) return false;
+    if (!getControlMap(app) || !app.registerRightPanel || !app.openRightPanel) return false;
     if (!enviroAtlasControl) {
       enviroAtlasControl = new EnviroAtlasControl(getEnviroAtlasControlOptions());
     }
@@ -158,7 +161,7 @@ export const maplibreEnviroAtlasPlugin: GeoLibrePlugin = {
     const activeControl = enviroAtlasControl;
     unregisterPanel = app.registerRightPanel({
       id: PANEL_ID,
-      title: "US EPA EnviroAtlas",
+      title: pluginDisplayTitle(app, "maplibre-gl-enviroatlas", "US EPA EnviroAtlas"),
       dock: "replace-style",
       defaultWidth: 360,
       deactivatePluginOnClose: true,

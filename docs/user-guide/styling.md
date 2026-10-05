@@ -128,7 +128,7 @@ Further down the Style panel, the **Popup** section designs what a viewer sees w
 - **Value type** formats the value: **Number** (decimals, thousands separator), **Date** (date, date and time, time, ISO 8601, or year), **Link**, **Image**, or plain **Text**. For **Text**, **Number** and **Date** fields, **Prefix** and **Suffix** wrap the result, which is where a currency symbol or a unit goes.
 - **In hover tooltip** puts a field in the tooltip's short subset. Keep it to one or two fields: the tip follows the pointer, so it is a glance, not a table. Image fields are skipped there and stay in the click popup, where there is room to show the picture.
 
-Layers loaded through **Add Vector Layer** are designed here too. That panel has its own **Popup** checkbox per layer, which opens a separate, unstyled attribute table on click; it is off by default so the two do not both answer the same click, and the design above is what a viewer gets. Tick it only if you want the control's raw table back.
+Layers loaded through **Add Vector Layer** are designed here too, once the panel has handed them over to GeoLibre, which it does for every layer it loads in GeoJSON mode with up to 100,000 features (see [Adding data](adding-data.md#files)). A layer the panel keeps, such as a tiled or streamed one, has no features in GeoLibre for the designer to read, so the Popup section does not appear for it. The panel's own **Popup** checkbox opens a separate, unstyled attribute table on click; it is off by default so the two do not both answer the same click. Tick it only if you want the control's raw table back.
 
 Fields you hid or excluded from the [attribute table](attribute-table.md) stay out of the popup: the popup design selects from the visible fields and cannot re-expose a hidden one. A layer with nothing configured behaves exactly as before, and the whole design saves with the project, so it travels to the Python package and the MCP authoring tools as well.
 
@@ -142,6 +142,25 @@ For raster layers the Style panel exposes image adjustments:
 - **Hue rotation** (in degrees)
 
 These let you tune the look of GeoTIFF, COG, and tile-based raster layers without changing the underlying data.
+
+### Raster symbology and histogram stretch
+
+GeoTIFF and COG layers add a **Raster symbology** section with a **Render mode**:
+
+- **Single band (pseudocolor)** draws one **Band** through a colormap, which can be reversed or replaced with your own colors, and optionally **Classify into discrete classes** (equal interval, quantile, or manual breaks).
+- **RGB composite** maps three bands to red, green, and blue.
+- **Index (normalized difference)** computes an index such as NDVI from two bands.
+
+**Min** and **Max** set the stretch range (left empty, they show `auto`), and **Stretch** (**Linear**, **Logarithmic**, or **Square root**) and **Gamma** shape it. **No data** reads the nodata value from the file, renders every pixel, or uses a custom value.
+
+Under **Histogram**, a single-band (unclassified) or RGB raster shows the distribution of its pixel values with the active stretch window shaded between two handles:
+
+- **Drag a handle** to set the minimum or maximum; the **Min**/**Max** inputs follow, and typing a value moves the handle.
+- From the keyboard, focus a handle and use the arrow keys, with `Shift` or `Page Up`/`Page Down` for steps ten times larger and `Home`/`End` for the ends.
+- An **RGB composite** shows one histogram per channel, each with its own **Min** and **Max**. Editing one channel pins the others at their current automatic range so they do not jump.
+- With no range set, the automatic window is the 2nd to 98th percentile of the band.
+
+For a single-band or index raster that is not classified, **Viewport stretch** fits the range to the pixels currently on screen instead: **Viewport min / max**, **Viewport 5–95 percentile**, or **Viewport mean ± 2 standard deviations**, then **Apply to viewport**. Tick **Update automatically when the map moves** to keep refitting as you pan and zoom. The stretch is saved with the layer.
 
 ### Spectral profile
 

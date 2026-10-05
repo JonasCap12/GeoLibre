@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./test";
 import { layerRow, readFixture } from "./helpers";
 import { DESKTOP_SETTINGS_STORAGE_KEY } from "../apps/geolibre-desktop/src/lib/storage-keys";
 
@@ -48,11 +48,11 @@ test("ArcGIS renderer draws the project basemap, a dropped GeoJSON layer and ide
   });
   await expect(page.locator(".esri-ui .esri-compass")).toBeVisible();
   // New projects use the globe projection, which the SDK draws as a 3D
-  // SceneView. Its toggle switches to a flat MapView, the only view the SDK's
-  // scale bar measures.
+  // SceneView; the scale bar measures at its centre. Its toggle switches to
+  // a flat MapView.
   const globe = page.locator(".geolibre-arcgis-globe button");
   await expect(globe).toHaveClass(/maplibregl-ctrl-globe-enabled/);
-  await expect(page.locator(".esri-ui .esri-scale-bar")).toHaveCount(0);
+  await expect(page.locator(".esri-ui .maplibregl-ctrl-scale")).toBeVisible({ timeout: 60_000 });
   await globe.click();
   // A view swap keeps the outgoing canvas until its replacement draws.
   await expect(globe).toHaveCount(1, { timeout: 60_000 });
@@ -62,7 +62,9 @@ test("ArcGIS renderer draws the project basemap, a dropped GeoJSON layer and ide
       timeout: 60_000,
     },
   );
-  await expect(page.locator(".esri-ui .esri-scale-bar")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".esri-ui .maplibregl-ctrl-scale")).toHaveText(/\d+ (k?m)$/, {
+    timeout: 60_000,
+  });
 
   // Esri choices persist separately from the shared basemap, with exactly one
   // selected choice; choosing a shared style clears the native override.
@@ -137,6 +139,20 @@ test("ArcGIS renderer draws the project basemap, a dropped GeoJSON layer and ide
   ).toBeVisible();
   await layerRow(page, "smoke").getByRole("button", { name: "Show layer", exact: true }).click();
   await expect(page.getByRole("button", { name: "Hide smoke", exact: true })).toBeVisible();
+  await layerRow(page, "smoke")
+    .getByRole("button", { name: "Identify features", exact: true })
+    .click();
+  await expect(page.locator("[data-testid=arcgis-canvas] .esri-view-surface")).toHaveCSS(
+    "cursor",
+    "crosshair",
+  );
+  await layerRow(page, "smoke")
+    .getByRole("button", { name: "Deactivate identify", exact: true })
+    .click();
+  await expect(page.locator("[data-testid=arcgis-canvas] .esri-view-surface")).not.toHaveCSS(
+    "cursor",
+    "crosshair",
+  );
   await expect(page.locator("[data-testid=arcgis-canvas] [role=alert]")).toHaveCount(0);
 });
 

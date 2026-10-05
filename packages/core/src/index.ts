@@ -13,10 +13,12 @@ export * from "./routing";
 export * from "./polyline";
 export * from "./vector-color";
 export * from "./expressions";
+export * from "./style-layer-evaluator";
 export * from "./document-locale";
 export * from "./label-number-format";
 export * from "./external-native-paint";
 export * from "./attribute-form";
+export * from "./layer-descriptive-metadata";
 export * from "./popup";
 export * from "./joins";
 export * from "./virtual-fields";
@@ -30,18 +32,22 @@ export * from "./scale-units";
 export * from "./elevation";
 export * from "./camera-altitude";
 export * from "./project";
+export * from "./project-diff";
 export * from "./style-library";
 export * from "./layer-library";
 export * from "./layer-defaults";
 export * from "./layer-style-clipboard";
+export * from "./layer-style-file";
 export * from "./layer-groups";
 export * from "./pixel-format";
+export * from "./s3";
 export * from "./print-layout-config";
 export { createSampleStoryMap } from "./storymap-sample";
 export {
   applyStoryLayerOpacity,
   isStoryHiddenLayer,
   storyLayerOpacityFactor,
+  storyLocationView,
   storyVisibleLayers,
 } from "./storymap-playback";
 export {
@@ -61,11 +67,16 @@ export {
   canUndoProjectRestore,
   DEFAULT_COLLABORATION_STATE,
   IDENTIFY_ALL_LAYERS_ID,
+  type IdentifyState,
+  identifyAllIncludes,
+  identifyStateWithoutLayers,
+  resolveIdentifyTarget,
   projectPathLabel,
   registerProjectRestoreHistory,
   subscribeProjectRestoreHistory,
   redo,
   undo,
+  shouldZoomToNewLayers,
   useAppStore,
   useAppCapability,
   type AppState,
@@ -76,6 +87,18 @@ export {
   type StatisticsToolKind,
   type VectorToolKind,
 } from "./store";
+export {
+  NO_LAYERS,
+  selectLayerById,
+  selectLayerIds,
+  selectLayerSummaries,
+  selectLayersWhen,
+  useLayer,
+  useLayerIds,
+  useLayerSummaries,
+  useLayersWhen,
+  type LayerSummary,
+} from "./layer-selectors";
 export {
   getHistoryCoalesceMs,
   setHistoryCoalesceMs,
@@ -157,6 +180,7 @@ export {
   CESIUM_ION_SOURCE_KIND,
   CESIUM_OSM_BUILDINGS_ASSET_ID,
   CESIUM_BING_AERIAL_ASSET_ID,
+  CESIUM_GOOGLE_PHOTOREALISTIC_ASSET_ID,
   cesiumIonAssetId,
   cesiumIonAssetKind,
   createCesiumIonLayer,
@@ -164,6 +188,8 @@ export {
   isCesiumOnlyLayer,
   parseCesiumIonAssetId,
   type CesiumIonAssetKind,
+  type CesiumIonQuickPick,
+  type CesiumIonQuickPickGroup,
   type CesiumIonLayerOptions,
 } from "./cesium-ion";
 export {
@@ -188,13 +214,36 @@ export {
   stripGoogleMapsApiKeyHeader,
 } from "./three-d-tiles";
 export {
+  changedPreferenceCredentials,
+  environmentVariableAccount,
+  geocodingApiKeyAccount,
+  isSecretEnvironmentVariable,
+  lookupProjectCredential,
+  overlayStoredEnvironmentVariables,
+  overlayStoredGeocodingApiKeys,
+  overlayStoredPreferenceCredentials,
+  resolveProjectHeaderReferences,
+  setProjectCredentialLookup,
+  splitProjectCredentials,
+  type ProjectCredentialLookup,
+} from "./project-credential-refs";
+export {
+  allowsCredentialHeaders,
+  hasHeaderReferences,
+  isHeaderReferenceOnly,
+  resolveHeaderReferences,
+} from "./header-references";
+export {
   isCredentialFieldName,
+  isCredentialUrlParam,
   MAX_REDACT_DEPTH,
   PROJECT_CREDENTIAL_FIELDS,
   PUBLISHABLE_PLUGIN_SETTINGS,
+  redactConfigurationCredentials,
   redactCredentials,
   redactProjectCredentials,
   redactUrlCredentials,
+  setRegistryPublishableSettings,
   type CredentialRedactionResult,
 } from "./credentials";
 export { excludeHiddenFieldsFromGeojson, excludeHiddenFieldsFromProject } from "./visibility";

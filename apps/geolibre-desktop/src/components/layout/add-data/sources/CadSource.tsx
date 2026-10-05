@@ -3,13 +3,7 @@ import type { FeatureCollection } from "geojson";
 import { FileUp, Layers } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  type CadLayerInfo,
-  type DuckDbVectorFile,
-  loadDuckDbVectorFile,
-  readCadLayers,
-  reprojectFeatureCollectionToWgs84,
-} from "../../../../lib/duckdb-vector-loader";
+import type { CadLayerInfo, DuckDbVectorFile } from "../../../../lib/duckdb-vector-loader";
 import { isBinaryDxf } from "../../../../lib/cad-encoding";
 import { dropCadOutliers, findCadOutliers } from "../../../../lib/cad-outliers";
 import { appendDiagnostic } from "../../../../lib/diagnostics";
@@ -61,6 +55,12 @@ export function CadSource() {
   const [defaultName] = useState(() => t("addData.cad.defaultName"));
   const source = useAddDataSource(defaultName);
   const [selectedFile, setSelectedFile] = useState<SelectedCadFile | null>(null);
+  // CAD drawings routinely carry elevations (contours, 3D polylines, surveyed
+  // points) that MapLibre's flat 2D layers ignore, so the layer defaults to
+  // GeoLibre's deck.gl Z-coordinate renderer the way LandXML does (issue
+  // #2559). The flag is inert for a drawing with no real Z, and the Style panel
+  // switches back to 2D at any time.
+  const [elevation3dEnabled, setElevation3dEnabled] = useState(true);
   const [layers, setLayers] = useState<CadLayerInfo[]>([]);
   // `null` = nothing chosen yet; "" is a real selection (an unnamed OGR layer,
   // which ST_Read reads as the first layer), so the two must stay distinct.
@@ -112,9 +112,7 @@ export function CadSource() {
     if (extensionFromPath(path) === "dwg") {
       const support = readDwgSupport(new Uint8Array(data));
       if (support && !support.supported) {
-        throw new Error(
-          t("addData.cad.errorDwgVersion", { release: dwgReleaseLabel(support) }),
-        );
+        throw new Error(t("addData.cad.errorDwgVersion", { release: dwgReleaseLabel(support) }));
       }
     }
 
@@ -126,7 +124,9 @@ export function CadSource() {
     }
 
     // GDAL first: it reads DWG as well as DXF, and its layer list is what the
-    // rest of the CAD path expects.
+    // rest of the CAD path expects. Imported on use so the DuckDB loader stays
+    // off the startup path.
+    const { readCadLayers } = await import("../../../../lib/duckdb-vector-loader");
     let cadLayers: CadLayerInfo[] = [];
     try {
       cadLayers = await readCadLayers(buildVectorFile(file));
@@ -226,13 +226,18 @@ export function CadSource() {
     let featureCollection: FeatureCollection;
     if (fallbackDrawing) {
       // The in-process reader emits the drawing's own coordinates, so it goes
-      // through the same reprojection step GDAL's output does.
+      // through the same reprojection step GDAL's output does. Imported on use
+      // so the DuckDB loader stays off the startup path.
+      const { reprojectFeatureCollectionToWgs84 } =
+        await import("../../../../lib/duckdb-vector-loader");
       featureCollection = await reprojectFeatureCollectionToWgs84(
         fallbackDrawing.toFeatureCollection(selectedLayer),
         overrideSourceCrs || null,
       );
     } else {
       try {
+        // Imported on use so the DuckDB loader stays off the startup path.
+        const { loadDuckDbVectorFile } = await import("../../../../lib/duckdb-vector-loader");
         featureCollection = await loadDuckDbVectorFile(buildVectorFile(selectedFile), {
           layer: selectedLayer,
           overrideSourceCrs,
@@ -273,20 +278,23 @@ export function CadSource() {
       }
     }
 
+    const baseLayer = createBaseLayer(
+      name,
+      "geojson",
+      { type: "geojson" },
+      {
+        sourceKind: "cad",
+        cadLayer: selectedLayer,
+        sourceCrs: overrideSourceCrs || null,
+        featureCount: featureCollection.features.length,
+      },
+      { geojson: featureCollection },
+    );
+
     source.addAndClose(
       {
-        ...createBaseLayer(
-          name,
-          "geojson",
-          { type: "geojson" },
-          {
-            sourceKind: "cad",
-            cadLayer: selectedLayer,
-            sourceCrs: overrideSourceCrs || null,
-            featureCount: featureCollection.features.length,
-          },
-          { geojson: featureCollection },
-        ),
+        ...baseLayer,
+        style: { ...baseLayer.style, elevation3dEnabled },
         geojson: featureCollection,
         sourcePath: selectedFile.path,
       },
@@ -401,6 +409,18 @@ export function CadSource() {
             </span>
           </span>
         </label>
+
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={elevation3dEnabled}
+              onChange={(event) => setElevation3dEnabled(event.target.checked)}
+            />
+            {t("addData.cad.elevation3d")}
+          </label>
+          <p className="text-xs text-muted-foreground">{t("addData.cad.elevation3dHelp")}</p>
+        </div>
 
         <SampleDataSelect
           samples={CAD_SAMPLES.map((sample) => ({

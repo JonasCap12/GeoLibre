@@ -43,13 +43,15 @@ nav:
   - Features: features.md
   - Comparison: comparison.md
   - Demos: demos.md
+  - Gallery: gallery.md
   - Downloads: downloads.md
   - Sponsor: sponsor.md
   # Keep this deployment-relative: production serves at /, while PR previews
   # are nested under /pages-preview/GeoLibre/pr-<number>/.
-  - Launch GeoLibre Web: demo/
+  - Launch GeoLibre Web: https://web.geolibre.app
   - User Guide:
       - Interface Overview: user-guide/interface.md
+      - Rendering Engines: user-guide/rendering-engines.md
       - Projects: user-guide/projects.md
       - Adding Data: user-guide/adding-data.md
       - Supported Data Formats: data-formats.md
@@ -58,12 +60,17 @@ nav:
       - Styling Layers: user-guide/styling.md
       - Attribute Table: user-guide/attribute-table.md
       - Map Controls & Tools: user-guide/map-controls.md
+      - GPS Tracking & Field Collection: user-guide/field-collection.md
+      - Print Layout: user-guide/print-layout.md
       - Processing Tools: user-guide/processing.md
+      - Model Builder: user-guide/model-builder.md
       - AI Segmentation: user-guide/segmentation.md
+      - Point Cloud Annotation: user-guide/point-cloud-annotation.md
       - SQL Workspace: user-guide/sql-workspace.md
       - Python Console: user-guide/python-console.md
       - AI Assistant: user-guide/ai-assistant.md
       - Data Integrations: user-guide/data-integrations.md
+      - Cloud Storage (S3): user-guide/cloud-storage.md
       - Plugins & Marketplace: user-guide/plugins.md
       - Web Services: user-guide/web-services.md
       - Settings & Preferences: user-guide/settings.md
@@ -85,6 +92,10 @@ nav:
       - Source Code Deep Dive (中文): tutorials/source-code-deep-dive-zh.md
   - Reference:
       - Architecture: architecture.md
+      - MapLibre Renderer: maplibre-renderer.md
+      - Mapbox Renderer: mapbox-renderer.md
+      - Cesium Renderer: cesium-renderer.md
+      - ArcGIS Renderer: arcgis-renderer.md
       - Self-Hosting: self-hosting.md
       - Server API: server-api.md
       - Self-Hosted Accounts: selfhost-auth.md
@@ -96,6 +107,7 @@ nav:
       - Collaboration: collaboration.md
       - UI Profiles: ui-profiles.md
       - Deployment Capabilities: deployment-capabilities.md
+      - Deployment Policy: deployment-policy.md
       - Internationalization: i18n.md
       - Python Package: python.md
       - R Package: r.md

@@ -5,9 +5,10 @@ import {
   type NationalMapControlOptions,
 } from "maplibre-gl-national-map";
 import type { GeoLibreLayer } from "@geolibre/core";
+import { pluginDisplayTitle } from "../plugin-i18n";
 import type { GeoLibreAppAPI, GeoLibrePlugin } from "../types";
 import { mountMapControlInPanel, unmountMapControlFromPanel } from "./dockable-map-control";
-import { getStyleMap } from "./style-map";
+import { getControlMap } from "./style-map";
 import {
   createWebServiceStoreSync,
   layerTypeForTiles,
@@ -130,9 +131,11 @@ export const maplibreNationalMapPlugin: GeoLibrePlugin = {
   id: "maplibre-gl-national-map",
   name: "USGS National Map",
   version: "0.1.1",
-  engines: ["maplibre", "mapbox"],
+  // The control's raster layers are mirrored into store layers; on ArcGIS its
+  // style is only recorded and the engine draws those store layers.
+  engines: ["maplibre", "mapbox", "arcgis"],
   activate: (app: GeoLibreAppAPI) => {
-    if (!getStyleMap(app) || !app.registerRightPanel || !app.openRightPanel) return false;
+    if (!getControlMap(app) || !app.registerRightPanel || !app.openRightPanel) return false;
     if (!nationalMapControl) {
       nationalMapControl = new NationalMapControl(getNationalMapControlOptions());
     }
@@ -140,7 +143,7 @@ export const maplibreNationalMapPlugin: GeoLibrePlugin = {
     const activeControl = nationalMapControl;
     unregisterPanel = app.registerRightPanel({
       id: PANEL_ID,
-      title: "USGS National Map",
+      title: pluginDisplayTitle(app, "maplibre-gl-national-map", "USGS National Map"),
       dock: "replace-style",
       defaultWidth: 340,
       deactivatePluginOnClose: true,

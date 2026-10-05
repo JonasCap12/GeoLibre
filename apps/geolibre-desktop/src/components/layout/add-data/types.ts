@@ -12,6 +12,7 @@ export type AddDataKind =
   | "ogc-features"
   | "ogc-vector-tiles"
   | "gpx"
+  | "landxml"
   | "georss"
   | "delimited-text"
   | "cad"
@@ -24,6 +25,7 @@ export type AddDataKind =
   | "polyline"
   | "arcgis"
   | "postgres"
+  | "mssql"
   | "iceberg"
   | "deckgl-viz"
   | "video"
@@ -36,6 +38,7 @@ export type AddDataKind =
 export type FeedMode = "url" | "file";
 export type GpxMode = FeedMode;
 export type GpxLayerKind = "waypoints" | "tracks" | "trackPoints" | "routes" | "routePoints";
+export type LandXmlMode = FeedMode;
 export type GeoRssMode = FeedMode;
 export type DelimitedTextMode = FeedMode;
 export type DelimitedTextDelimiter = "comma" | "tab" | "semicolon" | "pipe" | "custom";

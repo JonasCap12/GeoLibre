@@ -18,9 +18,10 @@ import { tilesUrl } from "@geolibre/core";
  * with a CORS-less 406 response, so clients cannot reliably call it directly.
  */
 export const OVERPASS_DEFAULT_ENDPOINT = tilesUrl("/overpass");
+export const OVERPASS_DEV_ENDPOINT = "/overpass";
 export const OVERPASS_REQUEST_TIMEOUT_MS = 75_000;
 export const OSM_CUSTOM_TAG_MAX_LENGTH = 255;
-// Keep these mirrored limits aligned with isAllowedOverpassQuery in workers/tiles/src/index.ts.
+// Keep these mirrored limits aligned with isAllowedOverpassQuery in workers/tiles/src/overpass-query.ts.
 export const MAX_ALL_QUERY_AREA_SQUARE_DEGREES = 0.25;
 export const MAX_QUERY_AREA_SQUARE_DEGREES = 4;
 
@@ -65,6 +66,13 @@ export type OverpassFetch = (
   url: string,
   init: RequestInit,
 ) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
+
+/** Use Vite's same-origin relay in development, including LAN/Tailscale URLs. */
+export function defaultOverpassEndpoint(
+  dev = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV),
+): string {
+  return dev ? OVERPASS_DEV_ENDPOINT : OVERPASS_DEFAULT_ENDPOINT;
+}
 
 const PRESET_TAGS: Record<Exclude<OsmDownloadPreset, "all" | "custom">, string> = {
   buildings: '"building"',
@@ -152,7 +160,9 @@ export function buildOsmDownloadQuery(
         ].filter(([, boxWest, , boxEast]) => boxWest < boxEast);
   const formattedBoxes = boxes.map((box) => box.map(formatOverpassCoordinate).join(","));
   const selectors = formattedBoxes.map((box) => `nwr${tagFilter}(${box});`).join("");
-  return `[out:json][timeout:60];${formattedBoxes.length > 1 ? `(${selectors});` : selectors}out geom;`;
+  return `[out:json][timeout:60];${
+    formattedBoxes.length > 1 ? `(${selectors});` : selectors
+  }out geom;`;
 }
 
 /** Run a bounded Overpass query and convert its JSON response to GeoJSON. */
@@ -167,7 +177,7 @@ export async function downloadOsmGeoJson(
   } = {},
 ): Promise<FeatureCollection> {
   const query = buildOsmDownloadQuery(bbox, filter);
-  const endpoint = options.endpoint ?? OVERPASS_DEFAULT_ENDPOINT;
+  const endpoint = options.endpoint ?? defaultOverpassEndpoint();
   const fetchImpl = options.fetchImpl ?? (fetch as unknown as OverpassFetch);
   const requestController = new AbortController();
   const abortFromCaller = () => requestController.abort(options.signal?.reason);

@@ -102,6 +102,50 @@ describe("diagnostics network info capture", () => {
     assert.ok(!record.detail?.includes("SECRET123"));
   });
 
+  it("redacts SigV4 presigned S3 URLs, including the session token", () => {
+    appendDiagnostic({
+      category: "network",
+      level: "error",
+      message: "GET failed",
+      url: "https://b.s3.amazonaws.com/k.tif?X-Amz-Credential=ASIAKEY%2F20260101&X-Amz-Security-Token=SESSIONTOKEN&X-Amz-Signature=SIGNATURE",
+    });
+    const [record] = getDiagnosticsSnapshot().records;
+    assert.ok(record.url?.startsWith("https://b.s3.amazonaws.com/k.tif?"));
+    for (const secret of ["ASIAKEY", "SESSIONTOKEN", "SIGNATURE"]) {
+      assert.ok(!record.url?.includes(secret), secret);
+    }
+  });
+
+  it("removes OAuth secrets from callback URLs and embedded diagnostic text", () => {
+    appendDiagnostic({
+      category: "runtime",
+      level: "error",
+      message:
+        "Deep link failed (org.geolibre.desktop:/oauth/callback?code=CALLBACK_CODE&state=CALLBACK_STATE&iss=https%3A%2F%2Fshare.geolibre.app)",
+      detail:
+        "Exchange failed for https://share.geolibre.app/oauth/token?code_verifier=PKCE_SECRET&refresh_token=REFRESH_SECRET&safe=visible",
+      source: "org.geolibre.desktop:/oauth/callback?code=SOURCE_CODE",
+      url: "org.geolibre.desktop:/oauth/callback?code=URL_CODE&state=URL_STATE",
+    });
+    const [record] = getDiagnosticsSnapshot().records;
+    const exported = JSON.stringify(record);
+    for (const secret of [
+      "CALLBACK_CODE",
+      "CALLBACK_STATE",
+      "PKCE_SECRET",
+      "REFRESH_SECRET",
+      "SOURCE_CODE",
+      "URL_CODE",
+      "URL_STATE",
+    ]) {
+      assert.ok(!exported.includes(secret), `${secret} escaped redaction`);
+    }
+    assert.ok(record.message.includes("org.geolibre.desktop:/oauth/callback"));
+    assert.ok(record.detail?.includes("safe=visible"));
+    assert.ok(record.source?.includes("REDACTED"));
+    assert.ok(record.url?.includes("REDACTED"));
+  });
+
   it("does not filter info-level entries from other categories", () => {
     appendDiagnostic({
       category: "console",
@@ -141,7 +185,7 @@ describe("diagnostics network info capture", () => {
 describe("diagnostics startup transient suppression", () => {
   type Listener = (event: unknown) => void;
   const listeners = new Map<string, Listener>();
-  const win = (globalThis as { window?: Record<string, unknown> }).window!;
+  const win = (globalThis as unknown as { window?: Record<string, unknown> }).window!;
   let installCapture: DiagnosticsModule["installDiagnosticsCapture"];
   let realWarn: typeof console.warn;
   let realError: typeof console.error;
@@ -340,6 +384,26 @@ describe("diagnostics startup transient suppression", () => {
     // Echoed to the console for contributors, but not recorded in the panel.
     assert.deepEqual(echoed, [message]);
     assert.equal(getDiagnosticsSnapshot().totalCount, 0);
+  });
+
+  it("passes every completed response to network observers, logged or not", async () => {
+    const { observeNetworkResponses } =
+      await import("../apps/geolibre-desktop/src/lib/diagnostics");
+    const statuses = [200, 404];
+    win.fetch = (() =>
+      Promise.resolve(new Response(null, { status: statuses.shift() }))) as unknown as typeof fetch;
+    install();
+    const seen: Array<{ url: string; status: number }> = [];
+    const stop = observeNetworkResponses(({ url, status }) => seen.push({ url, status }));
+    // A throwing observer must not break the request or the others.
+    const stopThrowing = observeNetworkResponses(() => {
+      throw new Error("observer bug");
+    });
+    await (win.fetch as typeof fetch)("https://t.example/1/0/0.png");
+    stop();
+    await (win.fetch as typeof fetch)("https://t.example/1/0/1.png");
+    stopThrowing();
+    assert.deepEqual(seen, [{ url: "https://t.example/1/0/0.png", status: 200 }]);
   });
 
   it("flags an unmarked non-ok response as an error", async () => {

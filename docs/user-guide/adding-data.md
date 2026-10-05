@@ -15,13 +15,16 @@ To collect supported dataset links from a catalog or other webpage and open seve
 | **Vector Layer** | Opens the Add Vector panel (backed by `maplibre-gl-vector`). Loads GeoJSON, GeoParquet, FlatGeobuf, zipped Shapefile, GeoPackage, KML/KMZ, GML, and other vector formats from a file or URL. |
 | **Raster Layer** | Opens the Add Raster panel (backed by `maplibre-gl-raster`). Loads GeoTIFF and Cloud-Optimized GeoTIFF (COG) from a file or URL. |
 | **Delimited Text Layer** | Loads CSV/TSV from a file or URL, using longitude and latitude columns to build point features, or by geocoding one or more address columns (see [Geocoding](data-integrations.md#geocoding)). |
-| **CAD (DXF/DWG) Layer** | Loads AutoCAD drawings, converting their entities to vector features. |
+| **CAD (DXF/DWG) Layer** | Loads AutoCAD drawings, converting their entities to vector features. Coordinate Z values (contours, 3D polylines, surveyed points) are kept and rendered in 3D unless **Render Z values in 3D** is unchecked. |
 | **File Geodatabase (GDB)** | Opens an Esri file geodatabase and adds one of its feature classes as a layer. |
 | **Geotagged Photos** | Reads the EXIF GPS tags from a set of photos and places each one on the map as a point with a thumbnail. |
 | **GPX Layer** | Loads a GPX file or URL and splits it into separate waypoint, track, and route layers. |
+| **LandXML Layer** | Loads a LandXML file or URL and imports selected TIN surfaces, horizontal alignments, vertical profile metadata, and survey points. Projected coordinates are reprojected from the selected or embedded source CRS. |
 | **Encoded Polyline** | Loads Google (precision 5) or Valhalla/Mapbox (precision 6) encoded polyline strings from pasted text or uploaded text files. |
 | **MBTiles Layer** | Loads a local MBTiles tile archive (desktop app). |
 | **OSM PBF Layer** | Reads an OpenStreetMap `.osm.pbf` extract and adds the features you select from it. |
+
+A layer the Add Vector panel loads in GeoJSON mode, with up to 100,000 features, is handed over to GeoLibre once it has loaded, so it gets the same Style panel as a file dropped on the map: joins, virtual fields, the attribute form, popup design, editor tracking, diagrams, and geometry generators included. It then leaves the panel's own layer list and is managed from the Layers panel. The panel keeps the layers it draws as tiles, streamed GeoParquet, larger layers, and KML/KMZ layers with placemark icons; for those, the Style panel shows only the settings the panel can draw. A saved project still reopens a handed-over layer from its URL or file path, and a URL-backed one refreshes the same way.
 
 Vector files are reprojected to EPSG:4326 on load. In the browser, vector import relies on DuckDB-WASM Spatial, with direct handling for GeoJSON, zipped Shapefiles, and KMZ archives. The source CRS is read from the file itself — the layer metadata for the GDAL-read formats, a Shapefile's `.prj` sidecar, or a GeoParquet's `geo` metadata — so a national grid such as EPSG:2100 (GGRS87 / Greek Grid) lands in the right place with nothing to configure.
 
@@ -60,8 +63,8 @@ GeoParquet opens across its variants: 1.0 and 1.1 files (including one carrying 
 | --- | --- |
 | **XYZ Layer** | A raster or vector tile service using a `{z}/{x}/{y}` URL template. |
 | **[WCS Layer](../data-formats.md#wcs-raster-subsets)** | Downloads numerical GeoTIFF subsets from WCS 1.0.0 services. |
-| **WMS Layer** | A Web Map Service layer, with click-to-identify through GetFeatureInfo where supported. |
-| **WFS Layer** | A Web Feature Service layer, with optional automatic refresh. |
+| **WMS Layer** | A Web Map Service layer, with click-to-identify through GetFeatureInfo where supported. In the desktop app, once the layers are retrieved, a layer can be requested in any coordinate reference system it offers; the tiles are reprojected to Web Mercator. |
+| **WFS Layer** | A Web Feature Service layer, with optional automatic refresh. GeoLibre asks for GeoJSON first and falls back to GML when the server offers no GeoJSON output, so GML-only services (MapServer, most INSPIRE services) load too. GML in WGS84, ETRS89, NAD83 or Web Mercator is read directly, and GML in any other EPSG coordinate system (a national grid, a UTM zone) is reprojected; a system GeoLibre does not know is reported as an error rather than drawn in the wrong place. In the desktop app, WFS requests go through the native HTTP client, so services that send no CORS headers load too. |
 | **WMTS Layer** | A Web Map Tile Service layer. |
 | **OGC API - Features** | An OGC API - Features endpoint; pick a collection and add it as a vector layer. |
 | **OGC Vector Tiles** | An OGC API - Tiles vector tile service. |

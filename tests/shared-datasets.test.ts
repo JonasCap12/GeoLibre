@@ -62,6 +62,7 @@ const DATASET: SharedDataset = {
   owner: "nhut",
   createdAt: "2026-09-22T00:00:00Z",
   updatedAt: "2026-09-22T00:00:00Z",
+  tags: [],
   contentUrl: `${BASE}/api/datasets/abc/content`,
 };
 

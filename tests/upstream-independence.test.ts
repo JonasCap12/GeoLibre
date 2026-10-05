@@ -61,8 +61,10 @@ const DOCUMENTATION_LINKS = new Set([
   "apps/geolibre-desktop/src/components/layout/ManagePluginsDialog.tsx",
   "apps/geolibre-desktop/src/components/layout/NoServiceWorkerBanner.tsx",
   "apps/geolibre-desktop/src/components/layout/ShareProjectDialog.tsx",
-  "apps/geolibre-desktop/src/components/layout/TopToolbar.tsx",
   "apps/geolibre-desktop/src/components/layout/toolbar/constants.ts",
+  // The command palette's search keywords, which name the home page without
+  // fetching it. Upstream moved them out of TopToolbar.tsx into this file.
+  "apps/geolibre-desktop/src/components/layout/toolbar/toolbar-commands.ts",
   "apps/geolibre-desktop/src/components/processing/model-builder/ModelBuilderPanel.tsx",
   "apps/geolibre-desktop/src/lib/geolens-fetch.ts",
   "apps/geolibre-desktop/src/lib/updates.ts",
@@ -215,16 +217,26 @@ describe("upstream independence", () => {
   });
 
   it("routes every tiles-Worker service through the shared resolver", () => {
-    // The eight browser-facing tiles routes are the dependency that matters:
-    // one variable moves them all, but only while they all go through it.
+    // The browser-facing tiles routes are the dependency that matters: one
+    // variable moves them all, but only while they all go through it.
     const callers = [
       "packages/core/src/ellipsoids.ts",
       "packages/plugins/src/plugins/maplibre-openaerialmap.ts",
       "packages/plugins/src/plugins/osm-downloader-api.ts",
       "packages/plugins/src/plugins/source-coop-api.ts",
       "packages/plugins/src/plugins/maplibre-open-data-catalogs.ts",
-      "apps/geolibre-desktop/src/hooks/usePlugins.ts",
+      // Upstream moved the GitHub-raw vector proxy here out of usePlugins.ts.
+      "apps/geolibre-desktop/src/lib/app-api.ts",
       "apps/geolibre-desktop/src/components/layout/BasemapExtractPanel.tsx",
+      // The gods-eye-view and ODP feeds upstream added, each of which arrived
+      // naming the upstream tiles host directly.
+      "packages/plugins/src/plugins/gods-eye-view-aircraft-feeds.ts",
+      "packages/plugins/src/plugins/gods-eye-view-cctv-feeds.ts",
+      "packages/plugins/src/plugins/gods-eye-view-feeds.ts",
+      "packages/plugins/src/plugins/gods-eye-view-fire-feeds.ts",
+      "packages/plugins/src/plugins/gods-eye-view-global-feeds.ts",
+      "packages/plugins/src/plugins/gods-eye-view-transit-feeds.ts",
+      "packages/plugins/src/plugins/ocean-data-platform-api.ts",
     ];
     for (const file of callers) {
       const source = stripComments(readFileSync(join(REPO_ROOT, file), "utf8"));

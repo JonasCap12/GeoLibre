@@ -128,6 +128,18 @@ function mapStillHasStyle(map: maplibregl.Map): boolean {
 const MAX_GENERATED_IMAGE_FACTORIES = 512;
 
 /**
+ * The registered factory for a generated image id, for renderers that bake
+ * their own sprite sheet (the ArcGIS vector tile layer) instead of answering
+ * MapLibre's `styleimagemissing`.
+ *
+ * @param id - A generated image id.
+ * @returns The factory, or `undefined` when the id is not a generated image.
+ */
+export function generatedImageFactory(id: string): GeneratedImageFactory | undefined {
+  return factories.get(id);
+}
+
+/**
  * Register the factory that generates the image for `id`. Idempotent: re-running
  * with the same id keeps the existing factory (the id fully determines the
  * pixels, so any factory for it is equivalent). Evicts the oldest entry when the
@@ -153,7 +165,17 @@ export function registerGeneratedImage(id: string, factory: GeneratedImageFactor
       // A removed map is still a live object here. Skip it; the `remove`
       // listener drops the ref, but this pass can run before that event.
       if (!mapStillHasStyle(map)) continue;
-      if (map.hasImage(id)) {
+      // mapbox-gl's image manager has no image scope until its style has
+      // loaded, so `hasImage` throws there instead of answering false. A map
+      // that is not ready holds no stale placeholder to replace, and asks for
+      // the image through `styleimagemissing` once it is.
+      let stale = false;
+      try {
+        stale = map.hasImage(id);
+      } catch {
+        continue;
+      }
+      if (stale) {
         try {
           map.removeImage(id);
         } catch {

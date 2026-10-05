@@ -9,6 +9,8 @@ import type {
 } from "@geolibre/core";
 import type { FeatureCollection, Geometry, Point, Polygon } from "geojson";
 import type * as maplibregl from "maplibre-gl";
+import type { SupportedLayerKinds } from "./layer-kind";
+import { MAPLIBRE_SUPPORTED_LAYER_KINDS } from "./maplibre-layer-kinds";
 
 /** Shared search highlight color across rendering engines. */
 export const SEARCH_HIGHLIGHT_COLOR = "#ef4444";
@@ -57,8 +59,8 @@ export interface MapEngine {
 
   // ------------------------------------------------------------------- camera
 
-  /** Place the camera at `view` immediately, without animation. */
-  applyView(view: MapViewState): void;
+  /** Place the camera at `view` without animation, resolving after asynchronous engines settle. */
+  applyView(view: MapViewState): void | Promise<void>;
   /** Animate the camera to `view` with a short ease. */
   easeToView(view: MapViewState): void;
   /** The camera's current position, in the store's engine-neutral shape. */
@@ -166,7 +168,23 @@ export interface MapEngine {
   getRenderSurface(): MapRenderSurface | null;
   getRenderStatus(): { pending: string[]; errors: string[] };
   captureImage(): Promise<Blob>;
-  onCameraIdle(listener: () => void): () => void;
+  /** Subscribe to primary-button map clicks in geographic coordinates. */
+  onMapClick(listener: (lngLat: [number, number]) => void): () => void;
+  /** Whether the camera is currently moving or animating. */
+  isCameraMoving(): boolean;
+  /** Subscribe to camera changes while the view is moving. */
+  onCameraMove(listener: () => void): () => void;
+  /**
+   * Subscribe to the camera settling. `storyCamera` marks a settle that ends a
+   * story chapter or chapter-preview move, which is scripted, not navigation.
+   */
+  onCameraIdle(listener: (event?: CameraIdleEvent) => void): () => void;
+  /**
+   * Resolve once the view has settled and drawn everything it is loading, or
+   * after `timeoutMs`, for captures that drive the camera (the Print Layout
+   * atlas). Engines without it are waited on through {@link onCameraIdle}.
+   */
+  whenDrawn?(timeoutMs: number): Promise<void>;
   stopCamera(): void;
   suspendNavigation(): () => void;
 
@@ -270,10 +288,82 @@ export interface MapEngineCapabilities {
    * built-in on-map controls have somewhere to mount.
    */
   readonly domControls: boolean;
+  /**
+   * Straight screen-space geometry pinned through
+   * {@link MapRenderSurface.project} tracks the map closely enough to draw an
+   * overlay with, so a panel renders its own SVG outline instead of asking for
+   * a native one through {@link MapEngine.showExtent}.
+   *
+   * Both 2D engines qualify — including in globe projection, where a
+   * four-corner box is already the accepted approximation — and the SVG is what
+   * the extract panels want, because it sits above the interleaved deck.gl
+   * raster overlay that a style layer would end up underneath. The globe
+   * engines do not: a box wide enough to wrap past the limb has corners that
+   * project to nothing, so they draw the extent natively instead.
+   */
+  readonly screenOverlays: boolean;
+  /**
+   * The engine draws flat when the project asks for a `mercator` projection, so
+   * globe-only features read `preferences.map.projection` to decide whether
+   * they apply. Without it the engine is a globe whatever that preference says,
+   * because it has no flat mode the preference maps onto.
+   */
+  readonly flatProjection: boolean;
+  /**
+   * {@link MapEngine.setTerrainCogSource} can install a custom DEM — a COG URL,
+   * a local file, or a raster layer already on the map — as the elevation
+   * source. Without it the engine only has its own default terrain, so the
+   * Terrain source controls are hidden rather than left to fail quietly.
+   */
+  readonly terrainSource: boolean;
+  /**
+   * The engine draws Zarr layers itself from the store record, so the
+   * `maplibre-gl-zarr` control is never mounted: Zarr layers are added through
+   * the Add Data form and restored, styled, and time-stepped through the record
+   * alone (opengeos/GeoLibre#2261).
+   */
+  readonly nativeZarr: boolean;
+  /**
+   * The engine loads KML/KMZ, CZML and Cesium ion assets through its own data
+   * source loaders. Without it KML is converted to map layers by the host
+   * importer, and CZML and ion assets are not offered.
+   */
+  readonly nativeDataSources: boolean;
+  /**
+   * The engine publishes itself only once its map has finished its first load
+   * (the initial style, or a ready view), so UI that hands work to plugin panels
+   * must wait for the engine rather than for the renderer switch.
+   */
+  readonly deferredEngineReady: boolean;
+  /** The built-in measure control can draw its sketch on this engine. */
+  readonly measureTool: boolean;
+  /**
+   * The raster and PMTiles add-layer panels (`IControl`s the plugins mount on
+   * the map) work here. Without it those formats, and Zarr, are added through
+   * the Add Data dialog's forms instead.
+   */
+  readonly controlLayerPanels: boolean;
+  /**
+   * What the engine's per-kind layer dispatch does with each
+   * layer kind (`classifyLayer`): draws it from the store record (`"native"`), leaves it
+   * to a plugin control (`"plugin"`), or never draws it (`"unsupported"`).
+   * MapLibre's layer sync and the Cesium and ArcGIS kind checks read this
+   * same object; Mapbox's kind switch is separate, and
+   * tests/layer-support-matrix.test.ts holds every table to its engine's
+   * dispatch. It describes kinds, not records: whether one record
+   * draws still depends on its data, which the per-record support checks
+   * (`isCesiumSupportedLayerType`, `isMapboxSupportedLayer`,
+   * `isArcgisSupportedLayer`) answer. ArcGIS's `"plugin"` kinds draw on its
+   * deck.gl overlay, so they also need {@link deckOverlay}.
+   */
+  readonly supportedLayerKinds: SupportedLayerKinds;
 }
 
 /**
- * Capabilities of the MapLibre engine: everything, by construction.
+ * Capabilities of the MapLibre engine: everything, by construction, except the
+ * flags that describe another engine's own loaders or lifecycle (`nativeZarr`,
+ * `nativeDataSources`, `deferredEngineReady`) — MapLibre reaches those through
+ * its controls and publishes itself synchronously.
  *
  * Frozen, not merely `readonly`. Every `MapController` — the primary map and
  * each split-view pane — exposes this one object, and `readonly` is erased at
@@ -290,6 +380,15 @@ export const MAPLIBRE_CAPABILITIES: MapEngineCapabilities = Object.freeze({
   picking: true,
   onMapDrawing: true,
   domControls: true,
+  screenOverlays: true,
+  flatProjection: true,
+  terrainSource: true,
+  nativeZarr: false,
+  nativeDataSources: false,
+  deferredEngineReady: false,
+  measureTool: true,
+  controlLayerPanels: true,
+  supportedLayerKinds: MAPLIBRE_SUPPORTED_LAYER_KINDS,
 });
 
 /** One feature returned by {@link MapEngine.identifyFeatures}. */
@@ -326,6 +425,11 @@ export interface ManualPlacementOptions {
  * reports them: `west < east` always, and a span across the antimeridian
  * carries `east > 180` instead of inverting the pair.
  */
+/** Details of a camera-idle notification; engines that can't tell omit it. */
+export interface CameraIdleEvent {
+  storyCamera: boolean;
+}
+
 export type MapExtent = [west: number, south: number, east: number, north: number];
 
 export interface MapRenderSurface {
@@ -333,7 +437,8 @@ export interface MapRenderSurface {
   getContainer(): HTMLElement;
   getBearing(): number;
   project(location: [number, number]): { x: number; y: number };
-  unproject(point: [number, number]): { lng: number; lat: number };
+  /** Convert a canvas point to degrees, or return `null` when it has no map location. */
+  unproject(point: [number, number]): { lng: number; lat: number } | null;
   redraw(): void;
 }
 

@@ -904,6 +904,55 @@ export interface AttributeFormConfig {
   fields: AttributeFormFieldConfig[];
 }
 
+/** Point of contact recorded in a layer's {@link LayerDescriptiveMetadata}. */
+export interface LayerMetadataContact {
+  name?: string;
+  email?: string;
+  organization?: string;
+}
+
+/** A related resource recorded in a layer's {@link LayerDescriptiveMetadata}. */
+export interface LayerMetadataLink {
+  /** Absolute URL of the resource. */
+  href: string;
+  /** Relation type (STAC/IANA link relation such as `"license"` or `"related"`). */
+  rel?: string;
+  /** Human-readable label. */
+  title?: string;
+}
+
+/**
+ * Time span the layer's data covers. Each bound is an ISO 8601 date
+ * (`YYYY-MM-DD`) or date-time; either may be omitted for an open interval.
+ */
+export interface LayerMetadataTemporalExtent {
+  start?: string;
+  end?: string;
+}
+
+/**
+ * User-authored, catalog-style description of a layer (issue #2858), edited in
+ * the layer's Metadata dialog and exported as a STAC Item. Distinct from the
+ * internal {@link GeoLibreLayer.metadata} record the renderers and plugins key
+ * off: every field here is free-form documentation that changes nothing about
+ * how the layer renders. Helpers live in `layer-descriptive-metadata.ts`.
+ */
+export interface LayerDescriptiveMetadata {
+  title?: string;
+  /** Free-text summary of the data (STAC `description`, ISO abstract). */
+  abstract?: string;
+  keywords?: string[];
+  /** SPDX license identifier (e.g. `"CC-BY-4.0"`) or free text. */
+  license?: string;
+  /** Credit line for the data's producers. */
+  attribution?: string;
+  contact?: LayerMetadataContact;
+  /** How the data was produced: sources and processing steps. */
+  lineage?: string;
+  temporalExtent?: LayerMetadataTemporalExtent;
+  links?: LayerMetadataLink[];
+}
+
 /**
  * How a popup renders one field's value (issue #2113). `"auto"` reproduces the
  * untyped rendering the Identify popup has always done — sanitized KML
@@ -976,6 +1025,21 @@ export interface LayerPopupConfig {
   bodyExpression?: string;
   /** `false` drops the synthetic `id` row. Defaults to `true`. */
   showFeatureId?: boolean;
+  /**
+   * Widest the click popup may grow, in CSS pixels. Unset keeps the default
+   * (520px, or 420px for a popup carrying an image). Clamped to the range
+   * `resolvePopupMaxWidth` enforces and always capped by the viewport, so a
+   * value wider than the window still leaves the map usable.
+   */
+  maxWidth?: number;
+  /**
+   * Tallest an `"image"` field's thumbnail may draw inside the popup, in CSS
+   * pixels. Unset keeps the default (`min(50vh, 420px)`). Clamped by
+   * `resolvePopupImageHeight`. Pair it with {@link maxWidth} for a
+   * bigger picture: the thumbnail keeps its aspect ratio, so widening the
+   * popup is what lets a landscape photo use the extra height.
+   */
+  imageHeight?: number;
   /**
    * The fields to show and their order. An empty or absent list keeps today's
    * behavior: every visible property, in the feature's own key order.
@@ -1204,6 +1268,8 @@ export interface GeoLibreLayer {
   metadata: Record<string, unknown>;
   beforeId?: string;
   geojson?: FeatureCollection;
+  /** A SQL Server write needs a successful table reread before it may be submitted again. */
+  mssqlWritebackPending?: boolean;
   /**
    * Explicit capability set for the layer (query, create, update, delete, export).
    * Unset capabilities default to the inferred behavior for the layer's source kind.
@@ -1230,6 +1296,13 @@ export interface GeoLibreLayer {
    * panel's Popup section. Absent means the default full-property dump.
    */
   popup?: LayerPopupConfig;
+  /**
+   * User-authored catalog metadata (title, abstract, keywords, license,
+   * contact, lineage, temporal extent, links), edited in the layer's Metadata
+   * dialog. Absent when nothing has been entered; an empty record is never
+   * written to a project file.
+   */
+  descriptiveMetadata?: LayerDescriptiveMetadata;
   /**
    * Persistent attribute joins applied to this layer's features, in order.
    * The joined columns are materialized into `geojson` feature properties (so
@@ -1304,7 +1377,9 @@ export interface AddTileLayerOptions {
   tiles: string[];
   /**
    * Layer discriminator, controlling how the layer is labelled and (for WMS)
-   * dev-server proxied. Defaults to `"xyz"`.
+   * dev-server proxied. Defaults to `"xyz"`. The layer's `source.type` is
+   * always `"raster"`, so any other value (such as `"vector-tiles"` from an
+   * untyped JS caller) throws rather than persisting a mislabelled source.
    */
   type?: "xyz" | "wms" | "wmts" | "raster";
   /** Service or base URL recorded on the source for display and restore. */
@@ -1636,18 +1711,40 @@ export interface MapPreferences {
   /**
    * Notation the status bar reports the pointer coordinate in: `"dd"` decimal
    * degrees (default), `"dms"` degrees/minutes/seconds, `"ddm"` degrees and
-   * decimal minutes, or `"utm"` zone easting/northing. Stored as a string
-   * rather than a union so `@geolibre/core` does not have to depend on the
-   * formatter, which lives with the app's DMS helpers and the Gridlines
-   * plugin's UTM projection; the app normalises unknown values to `"dd"`.
+   * decimal minutes, `"utm"` zone easting/northing, `"mgrs"`/`"usng"` grid
+   * references, or `"epsg"` x/y in the CRS named by `coordinateEpsgCode`.
+   * Stored as a string rather than a union so `@geolibre/core` does not have to
+   * depend on the formatter, which lives with the app's DMS helpers and the
+   * Gridlines plugin's UTM projection; the app normalises unknown values to
+   * `"dd"`.
    */
   coordinateFormat: string;
+  /**
+   * EPSG code the `"epsg"` coordinate format projects the pointer into, e.g.
+   * `3857` or `32618`. Kept beside `coordinateFormat` rather than inside it so
+   * the code survives cycling through the other notations. Absent means the
+   * app default (EPSG:3857).
+   */
+  coordinateEpsgCode?: number;
+  /**
+   * Whether the map fits to a layer's extent after data is added (Add Data
+   * menus, drag-and-drop, file import, tool outputs). Defaults to `true`; turn
+   * it off to keep the current view. Explicit "Zoom to layer" actions always
+   * fit regardless of this setting.
+   */
+  zoomToNewLayers: boolean;
 }
 
 export interface RuntimeEnvironmentVariable {
   key: string;
   value: string;
   enabled: boolean;
+  /**
+   * Absent or `true`: the value is a secret (desktop keeps it in the OS
+   * keychain; every egress removes it). `false`: an ordinary value saved in the
+   * project and kept on share/export.
+   */
+  secret?: boolean;
 }
 
 declare global {
@@ -1711,8 +1808,13 @@ export const DEFAULT_PROJECT_PREFERENCES: ProjectPreferences = {
     showPointerElevation: false,
     terrainEnabled: false,
     coordinateFormat: "dd",
+    zoomToNewLayers: true,
     mapboxStyleUrl: "mapbox://styles/mapbox/standard",
     arcgisBasemap: "arcgis/streets",
+    // With an Ion token this is the globe's photographic default. The
+    // availability gate transparently falls back to the project basemap when
+    // no token is configured.
+    cesiumBasemap: "bing-aerial",
   },
   environmentVariables: [],
   geocoding: {
@@ -1821,12 +1923,19 @@ export const DEFAULT_LEGEND_CONFIG: LegendConfig = Object.freeze({
   >,
 });
 
-/** Camera target captured for a story chapter. */
+/**
+ * Camera target captured for a story chapter. `pitch` and `bearing` are
+ * optional in memory: a location built in code may omit them, and every engine
+ * then keeps that part of the current camera (see `storyLocationView`). A
+ * chapter read from a project file or a CSV never omits them: loading fills an
+ * absent value with 0 (`normalizeStoryChapter`, `parseStoryMapCsv`), so a file
+ * without them still plays north-up and flat, as it always has.
+ */
 export interface StoryChapterLocation {
   center: [number, number];
   zoom: number;
-  pitch: number;
-  bearing: number;
+  pitch?: number;
+  bearing?: number;
 }
 
 /** Where a chapter's text panel sits over the map. */
@@ -2258,6 +2367,8 @@ export interface LayerLibraryEntry {
   attributeForm?: AttributeFormConfig;
   /** Popup/tooltip design to reapply. */
   popup?: LayerPopupConfig;
+  /** User-authored catalog metadata to reapply. */
+  descriptiveMetadata?: LayerDescriptiveMetadata;
   /**
    * Embedded features, present only for a layer whose source cannot be
    * re-read (in-memory features) or whose local file may be unavailable.
@@ -2351,7 +2462,32 @@ export interface GeoLibreProject {
   styleLibrary?: StyleLibraryEntry[];
   /** Anchored review comments on map points or features (issue #1518). */
   comments?: ProjectComment[];
+  /**
+   * Interaction state applied when the project opens: the Identify target and
+   * which map controls and toolbar panels start shown (issue #2688). Written by
+   * the Python `geolibre` package from `set_identify` / `show_control`, so a
+   * saved or HTML-exported notebook map opens the way it was set up. Omitted
+   * by default; the app keeps what it loaded and writes it back unchanged.
+   */
+  interaction?: ProjectInteraction;
   metadata: Record<string, unknown>;
+}
+
+/**
+ * Startup interaction state carried by a project (see
+ * {@link GeoLibreProject.interaction}).
+ */
+export interface ProjectInteraction {
+  /**
+   * Identify target on open: a layer id, `"all"` for every visible queryable
+   * layer, a list of layer ids to identify only those, or `null` for off.
+   */
+  identify?: string | string[] | null;
+  /**
+   * Map control or toolbar panel name (`"search"`, `"bookmark"`, `"globe"`,
+   * ...) to whether it starts shown. Unknown names are ignored on open.
+   */
+  controls?: Record<string, boolean>;
 }
 
 export type CommentAnchor =

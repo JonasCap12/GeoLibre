@@ -106,7 +106,10 @@ describe("findCadOutliers", () => {
   it("skips features with no usable geometry instead of placing them at zero", () => {
     const features: Feature[] = [
       ...cluster(200),
-      { type: "Feature", properties: { Layer: "empty" }, geometry: null },
+      // GeoJSON permits a null geometry; @types/geojson's `Feature` does not
+      // model one, so a cast is the only way to hand the reader the shape it has
+      // to survive. `centreOf` answers null for it, which is what this asserts.
+      { type: "Feature", properties: { Layer: "empty" }, geometry: null } as unknown as Feature,
     ];
     const report = findCadOutliers(collect(features));
     // A null geometry is not a stray; it is nothing. Treating it as (0, 0)

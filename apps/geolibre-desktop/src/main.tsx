@@ -42,10 +42,6 @@ import "./index.css";
 import "./lib/basemap-style";
 import "./lib/geoagent-style";
 import "./lib/lidar-style";
-// Register the MapLibre RTL text plugin so Arabic/Hebrew/Persian basemap labels
-// are shaped correctly instead of rendering reversed. Must run before any map is
-// created. See https://github.com/hyperknot/openfreemap/issues/118.
-import "./lib/rtl-text";
 import "./lib/swipe-style";
 import { registerSW } from "virtual:pwa-register";
 import { TooltipProvider } from "@geolibre/ui";
@@ -66,11 +62,13 @@ import "./lib/auth-return-url-boot";
 import i18n, { AVAILABLE_LANGUAGES, i18nReady, setActiveLanguage } from "./i18n";
 import { startAnalytics } from "./lib/analytics";
 import { installDiagnosticsCapture } from "./lib/diagnostics";
-import { isWindows } from "./lib/is-mobile";
+import { notify } from "./lib/notify";
+import { isDesktopRuntime, isWindows } from "./lib/is-mobile";
 import { isTauri } from "./lib/is-tauri";
 import { installStaleChunkReload } from "./lib/stale-chunk-reload";
 import { resolveAuthGate, type AuthGateConfig } from "./lib/auth-gate";
 import { getInitialThemeMode } from "./hooks/useThemeMode";
+import { KeychainWaitScreen } from "./components/common/KeychainWaitScreen";
 import { applyTemporaryDesktopSettings } from "./hooks/useDesktopSettings";
 import {
   desktopSettingsUrl,
@@ -78,17 +76,70 @@ import {
   sharedSettingsLanguage,
 } from "./lib/desktop-settings-url";
 import { parseDeploymentCapabilities, useAppStore } from "@geolibre/core";
+import { readConfiguredAppName } from "./lib/app-name";
 import { readDeploymentEnvValue } from "./lib/deployment-env";
+import { loadDeploymentPolicy } from "./lib/deployment-policy";
 import { initializeNativeProjectOpen } from "./lib/native-project-open";
 
 import { initializeNativeCoordinateOpen } from "./lib/native-coordinate-open";
+import { initializeNativeShareAuth } from "./lib/native-share-auth";
+import { configureShareOAuthReadiness, markColdShareCallback } from "./lib/share-oauth";
 
 installDiagnosticsCapture();
 
+// A deployment-configured app name also titles the browser tab; index.html's
+// static <title> stays the fallback when none is set. Best effort: a title
+// failure must not stop the app from rendering. Applied once up front from the
+// env so the tab is right while deployment.json is in flight, and again once
+// the policy (which can set branding.appName) has been applied.
+function applyConfiguredAppName(): void {
+  try {
+    const configuredAppName = readConfiguredAppName();
+    if (configuredAppName) document.title = configuredAppName;
+  } catch (error) {
+    console.error("[GeoLibre] Failed to apply the configured app name", error);
+  }
+}
+applyConfiguredAppName();
+
+// deployment.json (issue #2783): the deployment's policy, fetched before the
+// app renders so nothing paints with settings it then retracts. Absent
+// (404/HTML fallback/error/timeout) means today's env-driven behavior. The
+// fetch goes through the diagnostics wrapper installed above, whose optional
+// marker keeps a 404 at info level.
+const deploymentPolicyReady = loadDeploymentPolicy().then((policy) => {
+  applyConfiguredAppName();
+  // Capability application below is deliberately NOT guarded: if it throws, the
+  // app must fail to start rather than render with the default full grant.
+
+  // What this deployment is allowed to do (issue #1673). Applied before the
+  // app renders, so no surface ever paints with the full grant and then
+  // retracts it. Primary source: deployment.json. The legacy
+  // VITE_GEOLIBRE_CAPABILITIES input is still honoured as a fallback:
+  // policy > window.__GEOLIBRE_DEPLOYMENT_ENV__ > build environment.
+  // `capabilities: []` grants none; an omitted value uses the legacy env
+  // fallback when set, then the default full grant only if that is unset.
+  if (policy?.capabilities !== undefined) {
+    useAppStore.getState().setDeploymentCapabilities(policy.capabilities);
+    return;
+  }
+  const configuredCapabilities = readDeploymentEnvValue("VITE_GEOLIBRE_CAPABILITIES");
+  if (configuredCapabilities) {
+    useAppStore
+      .getState()
+      .setDeploymentCapabilities(parseDeploymentCapabilities(configuredCapabilities));
+  }
+});
+
+const nativeShareAuthReady = isDesktopRuntime()
+  ? initializeNativeShareAuth(markColdShareCallback)
+  : Promise.resolve();
 const nativeCoordinateOpenReady = initializeNativeCoordinateOpen();
 const nativeProjectOpenReady = initializeNativeProjectOpen();
+let nativeShareFetchReady: Promise<void> = Promise.resolve();
 let nativeArcGISFetchReady: Promise<void> = Promise.resolve();
 let nativeSidecarFetchReady: Promise<void> = Promise.resolve();
+let nativeWmsIdentifyFetchReady: Promise<void> = Promise.resolve();
 // Install desktop-only transports before requests can be issued. ArcGIS uses
 // a dedicated guarded Rust command; the other adapters use scoped HTTP hosts.
 if (isTauri()) {
@@ -111,6 +162,13 @@ if (isTauri()) {
         console.error("[GeoLibre] Failed to install native sidecar fetch", error);
       });
   }
+  nativeWmsIdentifyFetchReady = import("./lib/wms-identify-fetch")
+    .then(({ installNativeWmsIdentifyFetch }) => installNativeWmsIdentifyFetch())
+    .catch((error: unknown) => {
+      // Identify would stay on the webview fetch, which fails on WMS servers
+      // without CORS headers (#2712), so surface the install failure.
+      console.error("[GeoLibre] Failed to install native WMS identify fetch", error);
+    });
   void import("./lib/geocoding-fetch")
     .then(({ installNativeGeocodingFetch }) => installNativeGeocodingFetch())
     .catch((error: unknown) => {
@@ -119,18 +177,12 @@ if (isTauri()) {
       // silent unhandled rejection.
       console.error("[GeoLibre] Failed to install native geocoding fetch", error);
     });
-  // Likewise route share.geolibre.app (project Share + gallery) through the
-  // native HTTP client: the share server's CORS policy allows the web origin but
-  // not the Tauri WebView origin, so a browser fetch fails as "Could not reach
-  // share.geolibre.app." Lazy + desktop-only so web/embedded never import the
-  // Tauri HTTP plugin.
-  void import("./lib/share-fetch")
-    .then(({ installNativeShareFetch }) => installNativeShareFetch())
-    .catch((error: unknown) => {
-      // On failure the share client stays on the browser fetch (the CORS-blocked
-      // path this fixes); surface it rather than swallow the rejection.
-      console.error("[GeoLibre] Failed to install native share fetch", error);
-    });
+  // Built-in share host only: await the narrow native HTTP adapter before
+  // either OAuth sign-in or token requests. Self-hosted origins retain browser
+  // fetch and must explicitly allow this Tauri origin in their CORS policy.
+  nativeShareFetchReady = import("./lib/share-fetch").then(({ installNativeShareFetch }) =>
+    installNativeShareFetch(),
+  );
   // GeoLens sends X-Api-Key, which preflights in a WebView. Keep the built-in
   // datasets.geolibre.app connection working even when its CORS origin
   // allowlist does not include the packaged desktop origin.
@@ -140,22 +192,20 @@ if (isTauri()) {
       console.error("[GeoLibre] Failed to install native GeoLens fetch", error);
     });
 }
+if (isDesktopRuntime()) {
+  configureShareOAuthReadiness(
+    Promise.all([nativeShareAuthReady, nativeShareFetchReady, deploymentPolicyReady]).then(
+      () => undefined,
+    ),
+  );
+} else {
+  void nativeShareFetchReady.catch(() => {
+    console.error("[GeoLibre] Failed to install native share transport");
+  });
+}
 // Recover from chunks orphaned by a web redeploy (stale lazy import → 404). A
 // no-op in the desktop build, whose chunks are bundled locally.
 installStaleChunkReload();
-
-// What this deployment is allowed to do (issue #1673). Read once, before the
-// app renders, so no surface ever paints with the full grant and then retracts
-// it. Comes from the deployment/build env only — never from a URL parameter or
-// a project file — because a capability a visitor can hand themselves is not a
-// restriction. An absent value keeps the default full grant, so existing
-// deployments are unchanged.
-const configuredCapabilities = readDeploymentEnvValue("VITE_GEOLIBRE_CAPABILITIES");
-if (configuredCapabilities) {
-  useAppStore
-    .getState()
-    .setDeploymentCapabilities(parseDeploymentCapabilities(configuredCapabilities));
-}
 
 // "Web app" here means the *build*, never anything the visitor controls: the
 // desktop shell and the Jupyter embed wheel are compiled without the gate, but a
@@ -174,13 +224,14 @@ const isHostedWebApp = !isTauri() && !__GEOLIBRE_EMBED_BUILD__;
 startAnalytics(isHostedWebApp);
 // Clerk or Auth0, whichever this deployment configured (neither, normally).
 const authGate = resolveAuthGate(isHostedWebApp);
-if (authGate) {
+if (authGate || isDesktopRuntime()) {
   // Apply the initial theme now rather than leaving it to <App />. A gate paints
-  // a full-screen signed-out page *before* App mounts, and App is where
-  // useThemeMode adds the `dark` class — so without this a dark-mode visitor
-  // gets a white sign-in screen that flips to dark only after signing in. This
-  // sets exactly what useThemeMode's layout effect will set a moment later
-  // (same helper, same `?theme=` handling), so it is a no-op once App mounts.
+  // a full-screen signed-out page, and desktop may paint the keychain waiting
+  // screen, *before* App mounts, and App is where useThemeMode adds the `dark`
+  // class — so without this a dark-mode user gets a white screen that flips to
+  // dark only once the app renders. This sets exactly what useThemeMode's
+  // layout effect will set a moment later (same helper, same `?theme=`
+  // handling), so it is a no-op once App mounts.
   const initialTheme = getInitialThemeMode();
   document.documentElement.classList.toggle("dark", initialTheme === "dark");
   document.documentElement.style.colorScheme = initialTheme;
@@ -265,9 +316,28 @@ const sharedSettingsReady = sharedSettingsUrl
         // with the visitor's local settings, but make a bad URL visible in the
         // diagnostics capture and developer console.
         console.error("[GeoLibre] Failed to load shared desktop settings", error);
+        // The link promised a configured app; say why it looks like the
+        // visitor's own instead. Worded once translations are up.
+        void i18nReady.then(() =>
+          notify.warning(i18n.t("notifications.sharedSettingsFailed"), {
+            dedupeKey: "shared-settings",
+          }),
+        );
         return null;
       })
   : Promise.resolve(null);
+
+const root = ReactDOM.createRoot(document.getElementById("root")!);
+
+const desktopCredentialsReady = sharedSettingsReady
+  .then(() =>
+    import("./lib/credential-hydration").then(({ hydrateDesktopCredentials }) =>
+      hydrateDesktopCredentials(),
+    ),
+  )
+  .catch((error: unknown) => {
+    console.error("[GeoLibre] Failed to load desktop credentials", error);
+  });
 
 const startupLanguageReady = Promise.all([i18nReady, sharedSettingsReady]).then(
   async ([, settings]) => {
@@ -284,15 +354,51 @@ const startupLanguageReady = Promise.all([i18nReady, sharedSettingsReady]).then(
       // Shared language is optional presentation configuration. If its lazy
       // catalog cannot load, retain the language i18next already initialized.
       console.error("[GeoLibre] Failed to apply shared settings language", error);
+      notify.warning(i18n.t("notifications.sharedLanguageFailed"), {
+        dedupeKey: "shared-settings-language",
+      });
     }
   },
 );
+
+// A locked keyring (common on Linux when it is not unlocked at login) holds
+// hydration until the user answers the unlock prompt. Say so rather than
+// leaving the window blank, which looks frozen when the prompt is behind it.
+const KEYCHAIN_WAIT_SCREEN_DELAY_MS = 300;
+let appRendered = false;
+if (isDesktopRuntime()) {
+  const waitTimer = window.setTimeout(() => {
+    void startupLanguageReady
+      .catch(() => undefined)
+      .then(() => {
+        if (appRendered) return;
+        root.render(
+          <KeychainWaitScreen
+            title={i18n.t("startup.keychainWaitTitle")}
+            detail={i18n.t("startup.keychainWaitDetail")}
+          />,
+        );
+      });
+  }, KEYCHAIN_WAIT_SCREEN_DELAY_MS);
+  void desktopCredentialsReady.finally(() => window.clearTimeout(waitTimer));
+}
 
 // Fetch both chunks in parallel rather than waterfalling the boundary import
 // after App resolves — a free win, and it matters over the network in the web
 // build where these are separate fetches.
 void Promise.all([
-  import("./App"),
+  // Start App's chunk downloading and evaluating while deployment.json is in
+  // flight, then apply the policy-dependent module setup once both are done.
+  // Nothing in App's module graph reads deployment settings at import time
+  // (the GeoLens default URL is seeded by initGeoLensDefaultUrl below), so the
+  // chunk can evaluate before the policy is applied; nothing renders until the
+  // policy has been.
+  Promise.all([import("./App"), import("./hooks/usePlugins"), deploymentPolicyReady]).then(
+    ([app, plugins]) => {
+      plugins.initGeoLensDefaultUrl();
+      return app;
+    },
+  ),
   import("./components/common/error-boundaries"),
   loadAuthGate(authGate),
   // Sidecar-dependent panels can issue a request as soon as App mounts. On
@@ -300,6 +406,8 @@ void Promise.all([
   nativeSidecarFetchReady,
   // Restored ArcGIS layers can query immediately when App mounts.
   nativeArcGISFetchReady,
+  // An Identify click on a restored WMS layer must not beat the native fetcher.
+  nativeWmsIdentifyFetchReady,
   // Capture a file-association or command-line project path before App decides
   // whether to restore a configured startup project or the default workspace.
   nativeProjectOpenReady,
@@ -307,11 +415,14 @@ void Promise.all([
   // Gate the first render on i18next being initialized with the active locale's
   // (lazily loaded) catalog, so the UI never paints raw translation keys.
   startupLanguageReady,
+  // Keychain-held tokens must be in the settings store before any consumer reads them.
+  desktopCredentialsReady,
 ])
   .then(([{ default: App }, { AppErrorBoundary }, withAuthGate]) => {
     const app = <App />;
     const authenticatedApp = withAuthGate ? withAuthGate(app) : app;
-    ReactDOM.createRoot(document.getElementById("root")!).render(
+    appRendered = true;
+    root.render(
       <React.StrictMode>
         <I18nextProvider i18n={i18n}>
           <AppErrorBoundary>

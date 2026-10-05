@@ -1,4 +1,7 @@
 mod arcgis_http;
+mod aws_credentials;
+mod aws_sts;
+mod plugin_http;
 // Earth Engine sign-in uses Google's OAuth loopback-redirect flow, which binds
 // a listener on 127.0.0.1 to accept the browser's redirect. Accepting an
 // inbound connection requires the `com.apple.security.network.server`
@@ -58,6 +61,40 @@ mod native_duckdb {
 compile_error!("the `mas` (Mac App Store) build must not enable `native-duckdb`: DuckDB loads its spatial extension as unsigned native code at runtime, which App Sandbox and App Store guideline 2.5.2 forbid.");
 
 mod http_body;
+// OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret
+// Service) for tokens and API keys saved in Settings (issue #1667). Mobile has
+// no keyring backend, and the keyring crate silently falls back to an
+// in-memory mock store on unsupported targets, which would lose credentials
+// without an error. Those targets get a stub that fails loudly instead.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod secure_store;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+mod secure_store {
+    use std::collections::HashMap;
+
+    const UNAVAILABLE: &str = "Secure credential storage is not available on this platform.";
+
+    #[tauri::command]
+    pub async fn secure_store_get_many(_accounts: Vec<String>) -> Result<HashMap<String, String>, String> {
+        Err(UNAVAILABLE.to_string())
+    }
+
+    /// Nothing to seal: reads always fail here.
+    #[tauri::command]
+    pub fn secure_store_seal() {}
+
+    pub fn reset_read_gate(_label: &str) {}
+
+    #[tauri::command]
+    pub async fn secure_store_set(_account: String, _secret: String) -> Result<(), String> {
+        Err(UNAVAILABLE.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn secure_store_delete(_account: String) -> Result<(), String> {
+        Err(UNAVAILABLE.to_string())
+    }
+}
 
 use earth_engine_oauth::{poll_earth_engine_oauth, start_earth_engine_oauth};
 #[cfg(not(any(feature = "mas", target_os = "ios")))]
@@ -180,10 +217,12 @@ const SIDECAR_PORT: u16 = 8765;
 // backend/geolibre_server/geolibre_server/app/postgis.py.
 #[cfg(not(feature = "mas"))]
 const POSTGIS_HOSTS_ENV: &str = "GEOLIBRE_POSTGIS_HOSTS";
-// Desktop is the case that restriction is not aimed at: the sidecar is
-// loopback-bound, token-authenticated, and spawned for one user who is also its
-// operator, so it would only mean a user cannot reach their own database
-// without setting an environment variable for a process the app launches.
+// SQL Server endpoints use the same destination restriction for shared deployments.
+#[cfg(not(feature = "mas"))]
+const MSSQL_HOSTS_ENV: &str = "GEOLIBRE_MSSQL_HOSTS";
+#[cfg(not(feature = "mas"))]
+const MSSQL_HOSTS_DESKTOP_DEFAULT: &str = "*";
+// Desktop starts its loopback sidecar for one user, so the default is unrestricted.
 #[cfg(not(feature = "mas"))]
 const POSTGIS_HOSTS_DESKTOP_DEFAULT: &str = "*";
 // The desktop JupyterLab server for the Notebook panel. Loopback-bound and
@@ -248,6 +287,28 @@ struct JupyterServerState {
 #[cfg(not(feature = "mas"))]
 struct MartinProcess {
     child: Child,
+}
+
+#[cfg(not(feature = "mas"))]
+impl MartinProcess {
+    /// Whether the Martin child is still alive. A server that crashed or was
+    /// killed from outside must not keep blocking new starts with "already
+    /// running", so the start path clears the slot when this reports false.
+    /// Only a confirmed exit counts: a failed `try_wait` keeps the process, so
+    /// a transient inspection error can never kill a healthy server.
+    fn is_running(&mut self) -> bool {
+        !matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+}
+
+/// Clear a recorded Martin process that has already exited, then report
+/// whether a live one is still holding the slot.
+#[cfg(not(feature = "mas"))]
+fn martin_slot_is_busy(process: &mut Option<MartinProcess>) -> bool {
+    if process.as_mut().is_some_and(|martin| !martin.is_running()) {
+        *process = None;
+    }
+    process.is_some()
 }
 
 #[cfg(not(feature = "mas"))]
@@ -361,6 +422,7 @@ pub fn run() {
         .manage(pending_project_paths)
         .manage(SelectedImagePaths::default())
         .manage(arcgis_http::ArcGISRequests::default())
+        .manage(plugin_http::PluginHttpRequests::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // Runs before persisted-scope's setup hook so legacy photo grants are
@@ -396,6 +458,10 @@ pub fn run() {
     #[cfg(not(any(feature = "mas", target_os = "ios")))]
     let builder = builder.manage(EarthEngineOAuthState::default());
 
+    // The AWS SSO device sign-in is HTTPS plus a cache file, so it runs in
+    // every build, the App Store one included (which has no AWS CLI fallback).
+    let builder = builder.manage(aws_credentials::AwsSsoLoginState::default());
+
     // The Martin/sidecar/Jupyter process managers exist only where the commands
     // that spawn those processes do; the MAS build compiles both out together.
     #[cfg(not(feature = "mas"))]
@@ -419,18 +485,27 @@ pub fn run() {
             native_duckdb::count_native_vector_file_features,
             ensure_martin_binary,
             fetch_url_bytes,
+            fetch_url_response,
             arcgis_http::fetch_arcgis_response,
             arcgis_http::cancel_arcgis_request,
+            plugin_http::plugin_http_request,
+            plugin_http::cancel_plugin_http_request,
+            aws_credentials::aws_list_profiles,
+            aws_credentials::aws_resolve_credentials,
+            aws_credentials::aws_sso_login_start,
+            aws_credentials::aws_sso_login_poll,
             install_external_plugin_archive,
             native_duckdb::load_native_vector_file,
             load_external_plugin_bundles,
             pick_image_paths,
             read_selected_image,
             read_admin_profile,
+            read_deployment_policy,
             read_env_vars,
             take_pending_project_paths,
             allow_raster_asset,
             read_local_file,
+            write_local_geojson_file,
             read_project_file,
             read_shapefile_siblings,
             resolve_url_redirect,
@@ -443,10 +518,43 @@ pub fn run() {
             start_jupyter_server,
             stop_jupyter_server,
             start_earth_engine_oauth,
-            poll_earth_engine_oauth
+            poll_earth_engine_oauth,
+            secure_store::secure_store_get_many,
+            secure_store::secure_store_seal,
+            secure_store::secure_store_set,
+            secure_store::secure_store_delete
         ])
+        // A new document in a webview hydrates credentials again, so give it
+        // back its one startup read (secure_store.rs, issue #2858).
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                secure_store::reset_read_gate(webview.label());
+            }
+        })
         .setup(|app| {
             create_main_window(app)?;
+            // Nothing on Linux claims the OAuth callback scheme for us.
+            // `tauri-bundler` writes `Exec=` into the bundled .desktop with no
+            // field code, so `xdg-open org.geolibre.desktop:/oauth/callback?...`
+            // starts the app with an empty argv and the authorization code is
+            // dropped on the floor; an AppImage installs no .desktop at all.
+            // Registering at runtime writes a `%u`-qualified handler entry and
+            // makes it the scheme default, which covers deb, rpm, AppImage and
+            // the AUR/COPR repackages alike (#2667). Off the main thread: this
+            // shells out to update-desktop-database and xdg-mime, and window
+            // creation must not wait on them.
+            #[cfg(target_os = "linux")]
+            spawn_deep_link_registration(app);
+            // The portable zip has no installer step, so nothing registers the
+            // OAuth callback scheme and a sign-in link from the browser never
+            // reaches the app (#2667). `build-portable.ps1` drops a marker next
+            // to the exe; only that build claims the scheme, per user, at
+            // runtime. NSIS/MSI already register it at install time, and MSIX
+            // declares it in the package manifest and virtualizes HKCU writes.
+            #[cfg(windows)]
+            if is_portable_windows_build() {
+                spawn_deep_link_registration(app);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -469,8 +577,37 @@ pub fn run() {
     });
 }
 
+#[cfg(any(target_os = "linux", windows))]
+fn spawn_deep_link_registration(app: &tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    let handle = app.handle().clone();
+    std::thread::spawn(move || {
+        if let Err(error) = handle.deep_link().register_all() {
+            eprintln!("Deep link: could not register URL schemes ({error}).");
+        }
+    });
+}
+
 fn current_working_directory() -> PathBuf {
     env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Marker file `packaging/portable/build-portable.ps1` writes next to the exe.
+#[cfg(any(windows, test))]
+const PORTABLE_MARKER_FILE: &str = "portable.marker";
+
+/// Whether this process runs from the portable zip rather than an installer.
+#[cfg(windows)]
+fn is_portable_windows_build() -> bool {
+    env::current_exe().is_ok_and(|exe| exe_has_portable_marker(&exe))
+}
+
+/// Whether a portable marker file sits next to `exe`. Kept free of
+/// `current_exe()` so the check is testable on every platform.
+#[cfg(any(windows, test))]
+fn exe_has_portable_marker(exe: &Path) -> bool {
+    exe.parent()
+        .is_some_and(|dir| dir.join(PORTABLE_MARKER_FILE).is_file())
 }
 
 fn has_geolibre_project_extension(path: &Path) -> bool {
@@ -487,6 +624,37 @@ fn project_path_string(path: &Path) -> String {
     value.into_owned()
 }
 
+/// A launch argument as a local path.
+///
+/// The Linux desktop entry uses the `%u` field code, which is the only one that
+/// serves both the project file association and the OAuth callback scheme, and
+/// it hands over a URI. GIO localizes `file://` to a plain path before exec, but
+/// KIO and others do not, so both spellings arrive in practice (#2671).
+///
+/// Anything that is not a resolvable local `file://` URI is passed through
+/// untouched, so a non-UTF-8 path keeps its original bytes and a URI that names
+/// a remote host falls through to the caller's extension and canonicalize
+/// checks, which reject it.
+fn launch_argument_path(argument: std::ffi::OsString) -> PathBuf {
+    if let Some(text) = argument.to_str() {
+        // Scheme comparison is case-insensitive per RFC 3986. Every real
+        // launcher emits lowercase, but matching exactly would silently drop
+        // the launch rather than fall back to anything useful.
+        if text
+            .get(..7)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
+        {
+            if let Some(path) = tauri::Url::parse(text)
+                .ok()
+                .and_then(|url| url.to_file_path().ok())
+            {
+                return path;
+            }
+        }
+    }
+    PathBuf::from(argument)
+}
+
 /// Resolve existing GeoLibre project files supplied by the operating system.
 ///
 /// Other CLI flags are deliberately ignored. Resolving the path before it
@@ -499,7 +667,7 @@ where
 {
     args.into_iter()
         .filter_map(|argument| {
-            let candidate = PathBuf::from(argument);
+            let candidate = launch_argument_path(argument);
             if !has_geolibre_project_extension(&candidate) {
                 return None;
             }
@@ -557,7 +725,7 @@ fn take_pending_project_paths(state: tauri::State<'_, PendingProjectPaths>) -> V
 /// `/...` or a Windows drive-letter `C:\...`, never a UNC `\\host\share`), free
 /// of `..` traversal, ending in a GeoLibre project extension — `.geolibre` or
 /// `.geolibre.json`. These are the canonical formats `saveProject` writes and
-/// `isGeoLibreProjectPath` recognizes in `tauri-io.ts`.
+/// `isGeoLibreProjectFileName` recognizes in `file-io/paths.ts`.
 ///
 /// Without this, the command was an arbitrary local-file reader: any webview JS
 /// or loaded plugin could `invoke("read_project_file", { path: "~/.ssh/id_rsa" })`
@@ -597,7 +765,7 @@ pub(crate) fn is_allowed_project_path(path: &str) -> bool {
 fn read_project_file(path: String) -> Result<String, String> {
     if !is_allowed_project_path(&path) {
         return Err(format!(
-            "Refusing to read \"{path}\": not an absolute local project file path"
+            "Refusing to read \"{path}\": a project file must be an absolute local path whose name ends in .geolibre or .geolibre.json"
         ));
     }
     // Resolve symlinks and re-check the extension, so a symlink named
@@ -617,9 +785,9 @@ fn read_project_file(path: String) -> Result<String, String> {
 }
 
 /// Local vector file extensions the restore path may re-read (lowercased, no
-/// dot). Mirrors `VECTOR_FILE_DIALOG_EXTENSIONS` in `tauri-io.ts`; keep the two
+/// dot). Mirrors `VECTOR_FILE_DIALOG_EXTENSIONS` in `file-io/paths.ts`; keep the two
 /// in step.
-// SYNC: VECTOR_FILE_DIALOG_EXTENSIONS in src/lib/tauri-io.ts — grep "SYNC:" to
+// SYNC: VECTOR_FILE_DIALOG_EXTENSIONS in src/lib/file-io/paths.ts — grep "SYNC:" to
 // find the partner list and update both together.
 const RESTORABLE_VECTOR_EXTENSIONS: [&str; 17] = [
     "geojson",
@@ -648,7 +816,7 @@ const RESTORABLE_VECTOR_EXTENSIONS: [&str; 17] = [
 ///
 /// This is a Rust-side backstop mirroring the frontend guard
 /// (`isAbsoluteLocalPath` + `hasPathTraversal` + `isRestorableVectorPath` in
-/// `tauri-io.ts`). It narrows the attack surface of a compromised webview or
+/// `file-io/paths.ts`). It narrows the attack surface of a compromised webview or
 /// rogue plugin: arbitrary system files (`/etc/passwd`, SSH keys, most shell and
 /// app configs) are blocked. It does not make the command harmless — the
 /// allowlist still includes broad extensions like `json`, so a script that knows
@@ -698,6 +866,152 @@ fn read_local_file(path: String) -> Result<tauri::ipc::Response, String> {
     fs::read(&path)
         .map(tauri::ipc::Response::new)
         .map_err(|error| format!("Could not read local file: {error}"))
+}
+
+/// Whether `path` names a GeoJSON file the attribute write-back may overwrite:
+/// an absolute local path (see `is_safe_absolute_path`) ending in `.geojson` or
+/// `.json`, excluding `.geolibre.json` project files.
+fn is_allowed_geojson_write_path(path: &str) -> bool {
+    if !is_safe_absolute_path(path) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    (lower.ends_with(".geojson") || lower.ends_with(".json")) && !lower.ends_with(".geolibre.json")
+}
+
+/// Whether `bytes` parse as a JSON object whose `type` is `FeatureCollection`
+/// and whose `features` is an array of `Feature` objects (a leading UTF-8
+/// byte-order mark is allowed).
+fn is_geojson_feature_collection(bytes: &[u8]) -> bool {
+    let bytes = bytes
+        .strip_prefix(b"\xEF\xBB\xBF".as_slice())
+        .unwrap_or(bytes);
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .is_some_and(|value| {
+            value.get("type").and_then(|t| t.as_str()) == Some("FeatureCollection")
+                && value
+                    .get("features")
+                    .and_then(|f| f.as_array())
+                    .is_some_and(|features| {
+                        features.iter().all(|feature| {
+                            feature.get("type").and_then(|t| t.as_str()) == Some("Feature")
+                        })
+                    })
+        })
+}
+
+/// Whether a canonicalized path points at a network share. `canonicalize` on
+/// Windows returns a verbatim path, `\\?\C:\…` for a local drive but
+/// `\\?\UNC\host\share\…` for a share; a symlink or junction can resolve to
+/// one even when the path the caller passed was local.
+fn is_unc_resolved_path(resolved: &str) -> bool {
+    let rest = resolved
+        .strip_prefix(r"\\?\")
+        .or_else(|| resolved.strip_prefix(r"\\.\"));
+    match rest {
+        Some(rest) => rest.to_ascii_lowercase().starts_with(r"unc\"),
+        None => resolved.starts_with(r"\\") || resolved.starts_with("//"),
+    }
+}
+
+/// Distinguishes concurrent writes to the same file (a double-clicked save), so
+/// they never share a temporary file.
+static GEOJSON_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Overwrite an existing local GeoJSON file with edited contents, for Layer
+/// actions > Save edits to source file (GeoLibre#2439).
+///
+/// A GeoJSON rewrite needs no GeoPandas, so it no longer goes through the
+/// optional Python sidecar, which is not running unless something started it:
+/// the save used to fail with a connection error and leave the file unchanged.
+/// Like `read_local_file`, this bypasses the `fs` plugin's runtime scope, which
+/// does not cover a path dropped onto the map or restored with a project. The
+/// guard is narrower than a read's: the file must already exist (write-back
+/// replaces a layer's own source, never creates a file), and the canonical
+/// path is re-checked so a symlink cannot redirect the write. Because `.json` is
+/// a common GeoJSON extension but also a common config format, both the file
+/// being replaced and the new contents must be GeoJSON FeatureCollections, so
+/// the command cannot clobber arbitrary JSON. The contents go to a temporary
+/// file beside the target, which takes the target's permissions and is renamed
+/// over it, so a failed write never leaves the source half-written.
+#[tauri::command]
+fn write_local_geojson_file(path: String, contents: String) -> Result<(), String> {
+    if !is_allowed_geojson_write_path(&path) {
+        return Err(format!(
+            "Refusing to write \"{path}\": not an absolute local GeoJSON file path"
+        ));
+    }
+    let canonical = fs::canonicalize(&path)
+        .map_err(|error| format!("Could not save to source file: {error}"))?;
+    // The full `is_safe_absolute_path` guard can't be re-run on the resolved
+    // path, because `canonicalize` yields a `\\?\C:\…` verbatim path on
+    // Windows that it would reject. Re-check the parts a symlink or junction
+    // could change: the extension, and that it stays off network shares.
+    let resolved = canonical.to_string_lossy().to_ascii_lowercase();
+    if is_unc_resolved_path(&resolved) {
+        return Err(format!(
+            "Refusing to write \"{path}\": resolves to a network path"
+        ));
+    }
+    if !((resolved.ends_with(".geojson") || resolved.ends_with(".json"))
+        && !resolved.ends_with(".geolibre.json"))
+    {
+        return Err(format!(
+            "Refusing to write \"{path}\": resolves to a non-GeoJSON file"
+        ));
+    }
+    if !canonical.is_file() {
+        return Err(format!("Refusing to write \"{path}\": not a file"));
+    }
+    if !is_geojson_feature_collection(contents.as_bytes()) {
+        return Err(
+            "Refusing to write: the edited layer is not a GeoJSON FeatureCollection".into(),
+        );
+    }
+    let existing =
+        fs::read(&canonical).map_err(|error| format!("Could not save to source file: {error}"))?;
+    if !is_geojson_feature_collection(&existing) {
+        return Err(format!(
+            "Refusing to write \"{path}\": the file is not a GeoJSON FeatureCollection"
+        ));
+    }
+    let permissions = fs::metadata(&canonical)
+        .map_err(|error| format!("Could not save to source file: {error}"))?
+        .permissions();
+    let file_name = canonical
+        .file_name()
+        .ok_or_else(|| format!("Refusing to write \"{path}\": no file name"))?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(file_name);
+    temp_name.push(format!(
+        ".geolibre-{}-{}.tmp",
+        std::process::id(),
+        GEOJSON_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temp = canonical.with_file_name(temp_name);
+    // `create_new` refuses a path that already exists, so a symlink planted at
+    // the temporary name cannot redirect the write. The file starts owner-only
+    // (Unix) so the contents are never readable more widely than intended, and
+    // takes the target's permissions before the rename so a restrictive (e.g.
+    // 0600) source is not loosened.
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let write = options
+        .open(&temp)
+        .and_then(|mut file| {
+            std::io::Write::write_all(&mut file, contents.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| fs::set_permissions(&temp, permissions))
+        .and_then(|()| fs::rename(&temp, &canonical));
+    if let Err(error) = write {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("Could not save to source file: {error}"));
+    }
+    Ok(())
 }
 
 /// Pick images without adding them to Tauri's filesystem or asset scopes. The
@@ -889,11 +1203,27 @@ fn is_safe_absolute_path(path: &str) -> bool {
     !path.split(['/', '\\']).any(|segment| segment == "..")
 }
 
-/// Read the optional admin UI-profile file (`<app_config_dir>/admin-profile.json`).
+/// Read optional configuration without parsing or normalizing its UTF-8 text.
+/// Only a missing file is treated as absent; all other read errors propagate.
+fn read_optional_config_file(path: &Path) -> Result<Option<String>, std::io::Error> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn read_admin_profile_file(path: &Path) -> Result<Option<String>, String> {
+    read_optional_config_file(path)
+        .map_err(|error| format!("Could not read admin profile: {error}"))
+}
+
+/// Read the optional legacy admin UI-profile file
+/// (`<app_config_dir>/admin-profile.json`), still honoured when the primary
+/// `deployment.json` policy has no non-empty `interface` section.
 ///
-/// Returns `Ok(None)` when the file is absent so a missing file is not an error;
-/// administrators drop one in to pre-configure and optionally lock the UI profile
-/// for a deployment. See `docs/ui-profiles.md`.
+/// Returns `Ok(None)` when the file is absent so a missing file is not an error.
+/// See `docs/ui-profiles.md`.
 #[tauri::command]
 fn read_admin_profile(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let config_dir = app
@@ -901,11 +1231,19 @@ fn read_admin_profile(app: tauri::AppHandle) -> Result<Option<String>, String> {
         .app_config_dir()
         .map_err(|error| format!("Could not resolve config directory: {error}"))?;
     let path = config_dir.join("admin-profile.json");
-    match fs::read_to_string(&path) {
-        Ok(contents) => Ok(Some(contents)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("Could not read admin profile: {error}")),
-    }
+    read_admin_profile_file(&path)
+}
+
+/// Read the optional deployment policy (`<app_config_dir>/deployment.json`).
+/// Returns its raw UTF-8 text, or `None` only when the file is absent.
+#[tauri::command]
+fn read_deployment_policy(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("Could not resolve config directory: {error}"))?;
+    read_optional_config_file(&config_dir.join("deployment.json"))
+        .map_err(|error| format!("Could not read deployment policy: {error}"))
 }
 
 /// The only environment variable names `read_env_vars` will ever return. This
@@ -924,12 +1262,15 @@ const ALLOWED_ENV_VARS: &[&str] = &[
     "GOOGLE_GENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MODEL",
     "OLLAMA_BASE_URL",
     "OLLAMA_MODEL",
     "OPENAI_COMPATIBLE_BASE_URL",
     "OPENAI_COMPATIBLE_API_KEY",
     "OPENAI_COMPATIBLE_MODEL",
     "TAVILY_API_KEY",
+    "JEV_API_KEY",
 ];
 
 /// Read the AI Assistant's allowlisted variables from the OS environment.
@@ -1318,6 +1659,29 @@ fn guarded_http_client() -> Result<reqwest::blocking::Client, String> {
     CLIENT.get_or_init(build_guarded_http_client).clone()
 }
 
+/// An async `reqwest` client builder with the same SSRF guard, enterprise CAs
+/// and mTLS identity as [`build_guarded_http_client_with_redirects`]. The async
+/// transports (ArcGIS, plugin requests) add their own redirect policy and any
+/// extra settings, then build and cache the client themselves.
+fn guarded_async_client_builder(
+    redirects: reqwest::redirect::Policy,
+) -> Result<reqwest::ClientBuilder, String> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(REMOTE_TILE_CONNECT_TIMEOUT_SECS))
+        .dns_resolver(std::sync::Arc::new(GuardedDnsResolver))
+        .user_agent("GeoLibre Desktop")
+        .redirect(redirects);
+    for certificate in extra_ca_certificates()? {
+        builder = builder.add_root_certificate(certificate);
+    }
+    Ok(match client_identity()? {
+        #[cfg(not(target_os = "android"))]
+        Some(ClientIdentity::Pkcs12(identity)) => builder.use_native_tls().identity(identity),
+        Some(ClientIdentity::Pem(identity)) => builder.use_rustls_tls().identity(identity),
+        None => builder.use_rustls_tls(),
+    })
+}
+
 fn build_guarded_http_client() -> Result<reqwest::blocking::Client, String> {
     build_guarded_http_client_with_redirects(guarded_redirect_policy())
 }
@@ -1374,6 +1738,69 @@ async fn fetch_url_bytes(
     .map_err(|error| format!("Tile fetch task failed: {error}"))?
 }
 
+/// A native response that keeps the status and body even when the status is
+/// not a success, for protocols whose error answers carry a machine-readable
+/// body (an OGC `ExceptionReport` on a 400, say).
+#[derive(Serialize)]
+struct NativeHttpResponse {
+    status: u16,
+    content_type: Option<String>,
+    body: Vec<u8>,
+}
+
+/// Fetches a URL, bypassing browser CORS, and returns the status, content type
+/// and body whatever the status. Same guards, timeout clamp and optional body
+/// limit as [`fetch_url_bytes`], which instead rejects any non-success status.
+#[tauri::command]
+async fn fetch_url_response(
+    url: String,
+    timeout_secs: Option<u64>,
+    max_bytes: Option<u64>,
+) -> Result<NativeHttpResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_url_response_blocking(url, timeout_secs, max_bytes)
+    })
+    .await
+    .map_err(|error| format!("Fetch task failed: {error}"))?
+}
+
+fn fetch_url_response_blocking(
+    url: String,
+    timeout_secs: Option<u64>,
+    max_bytes: Option<u64>,
+) -> Result<NativeHttpResponse, String> {
+    ensure_fetchable_url(&url)?;
+
+    let client = guarded_http_client()?;
+    let timeout = resolve_fetch_timeout_secs(timeout_secs);
+
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_secs(timeout))
+        .send()
+        .map_err(|error| request_error_message(&error))?;
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let body = if let Some(limit) = max_bytes {
+        let content_length = response.content_length();
+        http_body::read_limited_body(response, content_length, limit)?
+    } else {
+        response
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| format!("Could not read response body: {error}"))?
+    };
+    Ok(NativeHttpResponse {
+        status,
+        content_type,
+        body,
+    })
+}
+
 /// Resolves the request budget for a fetch, defaulting to the tile timeout and
 /// clamping a caller-supplied value into `[REMOTE_TILE_TIMEOUT_SECS,
 /// MAX_FETCH_TIMEOUT_SECS]`. A caller can therefore only ever raise the budget,
@@ -1402,6 +1829,8 @@ fn fetch_url_bytes_blocking(
         .map_err(|error| request_error_message(&error))?;
     let status = response.status();
     if !status.is_success() {
+        // Keep this wording: `tileErrorStatus` in `src/lib/tile-retry.ts` reads
+        // the status from it to decide whether a tile is retried.
         return Err(format!("Request failed with status {status}"));
     }
 
@@ -2109,11 +2538,11 @@ fn start_martin_server_blocking(
     let binary = ensure_martin_binary_path(&app)?;
     let state = app.state::<MartinServerState>();
     {
-        let process = state
+        let mut process = state
             .process
             .lock()
             .map_err(|_| "Could not lock Martin process state.".to_string())?;
-        if process.is_some() {
+        if martin_slot_is_busy(&mut process) {
             return Err(
                 "A Martin server is already running. Stop it before starting a new one."
                     .to_string(),
@@ -2133,7 +2562,7 @@ fn start_martin_server_blocking(
                     .process
                     .lock()
                     .map_err(|_| "Could not lock Martin process state.".to_string())?;
-                if process.is_some() {
+                if martin_slot_is_busy(&mut process) {
                     drop(info.process);
                     return Err(
                         "A Martin server is already running. Stop it before starting a new one."
@@ -2181,7 +2610,9 @@ fn add_main_sidecar_extras(command: &mut Command) {
         .arg("--extra")
         .arg("ml")
         .arg("--extra")
-        .arg("postgis");
+        .arg("postgis")
+        .arg("--extra")
+        .arg("mssql");
 }
 
 #[cfg(not(feature = "mas"))]
@@ -2251,6 +2682,10 @@ fn start_geolibre_sidecar_blocking(app: tauri::AppHandle) -> Result<SidecarServe
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| POSTGIS_HOSTS_DESKTOP_DEFAULT.to_string());
+    let mssql_hosts = env::var(MSSQL_HOSTS_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| MSSQL_HOSTS_DESKTOP_DEFAULT.to_string());
 
     let mut command = Command::new(&uv);
     command
@@ -2260,10 +2695,9 @@ fn start_geolibre_sidecar_blocking(app: tauri::AppHandle) -> Result<SidecarServe
         .arg("--frozen")
         .arg("--project")
         .arg(&project_dir);
-    // The main sidecar serves both the AI segmentation proxy and editable
-    // PostGIS layers. Unlike whitebox/conversion (separate managed venvs),
-    // neither feature has a lazy bootstrap, so both extras must be synced into
-    // the sidecar environment here.
+    // The main sidecar serves AI segmentation, editable PostGIS and SQL Server
+    // layers. Unlike whitebox/conversion (separate managed venvs), their extras
+    // must be synced into this environment here.
     add_main_sidecar_extras(&mut command);
     command
         .arg("uvicorn")
@@ -2277,6 +2711,8 @@ fn start_geolibre_sidecar_blocking(app: tauri::AppHandle) -> Result<SidecarServe
         .env("GEOLIBRE_SIDECAR_TOKEN", sidecar_token())
         .env("GEOLIBRE_RUNTIME_DIR", &runtime_dir)
         .env(POSTGIS_HOSTS_ENV, &postgis_hosts)
+        .env(MSSQL_HOSTS_ENV, &mssql_hosts)
+        .env("GEOLIBRE_MSSQL_DESKTOP_AUTH", "1")
         .env("UV_CACHE_DIR", runtime_dir.join("uv-cache"))
         .env("UV_PYTHON_INSTALL_DIR", runtime_dir.join("uv-python"))
         .env("UV_PROJECT_ENVIRONMENT", runtime_dir.join("sidecar-server"))
@@ -2699,8 +3135,9 @@ fn wait_for_jupyter_health(
 // is the only thing that identifies *why* startup failed (a uv resolution error,
 // a missing `jupyter` executable, a port conflict...), and in an installed build
 // there is no terminal to read it from, so it has to travel with the error.
-// Shared by the Jupyter and sidecar waiters, and by both of their failure paths
-// (early exit and timeout), so no path can quietly drop the one useful detail.
+// Shared by the Jupyter, sidecar and Martin waiters, and by both of their
+// failure paths (early exit and timeout), so no path can quietly drop the one
+// useful detail.
 #[cfg(not(feature = "mas"))]
 fn child_failure_message(summary: &str, output: &CapturedOutput) -> String {
     // The child may have only just exited, with its last lines still in flight.
@@ -3948,15 +4385,18 @@ fn spawn_martin_server(
     let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start Martin: {error}"))?;
+    // Drain both pipes from the moment we spawn, and for as long as Martin
+    // runs. Martin logs at least one line per auto-published table before it
+    // binds its port, so a database with a few hundred tables overflows the
+    // pipe buffer during discovery: reading only after exit (the old shape)
+    // left Martin blocked on a log write and every health poll timing out.
+    let output = CapturedOutput::attach(&mut child);
 
-    if let Err(error) = wait_for_martin_health(&base_url, &mut child) {
+    if let Err(error) = wait_for_martin_health(&base_url, &mut child, &output) {
         let _ = child.kill();
         let _ = child.wait();
         return Err(error);
     }
-
-    let _ = child.stdout.take();
-    let _ = child.stderr.take();
 
     Ok(SpawnedMartinServer {
         base_url,
@@ -3966,7 +4406,11 @@ fn spawn_martin_server(
 }
 
 #[cfg(not(feature = "mas"))]
-fn wait_for_martin_health(base_url: &str, child: &mut Child) -> Result<(), String> {
+fn wait_for_martin_health(
+    base_url: &str,
+    child: &mut Child,
+    output: &CapturedOutput,
+) -> Result<(), String> {
     let health_url = format!("{base_url}/health");
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(500))
@@ -3978,12 +4422,10 @@ fn wait_for_martin_health(base_url: &str, child: &mut Child) -> Result<(), Strin
             .try_wait()
             .map_err(|error| format!("Could not inspect Martin process: {error}"))?
         {
-            let output = read_child_output(child);
-            return Err(if output.trim().is_empty() {
-                format!("Martin exited before it was ready: {status}")
-            } else {
-                format!("Martin exited before it was ready: {output}")
-            });
+            return Err(child_failure_message(
+                &format!("Martin exited before it was ready (exit status: {status})."),
+                output,
+            ));
         }
 
         if client
@@ -3998,19 +4440,10 @@ fn wait_for_martin_health(base_url: &str, child: &mut Child) -> Result<(), Strin
         thread::sleep(Duration::from_millis(100));
     }
 
-    Err("Martin did not become ready in time.".to_string())
-}
-
-#[cfg(not(feature = "mas"))]
-fn read_child_output(child: &mut Child) -> String {
-    let mut output = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut output);
-    }
-    if let Some(mut stderr) = child.stderr.take() {
-        let _ = stderr.read_to_string(&mut output);
-    }
-    output
+    Err(child_failure_message(
+        "Martin did not become ready in time.",
+        output,
+    ))
 }
 
 #[derive(Serialize)]
@@ -4502,11 +4935,12 @@ fn configure_linux_webkit() {}
 mod tests {
     use super::{
         client_cert_is_pkcs12, client_cert_password_without_path, ensure_fetchable_url,
-        is_allowed_local_vector_path, is_allowed_project_path, is_disallowed_ip,
-        is_image_picker_path, is_persisted_image_file,
-        is_safe_absolute_path, is_ssrf_guard_error, path_is_under, project_path_string,
-        project_paths_from_args, read_mbtiles_zoom_range, resolve_fetch_timeout_secs, tcp_table_port,
-        MAX_FETCH_TIMEOUT_SECS, REMOTE_TILE_TIMEOUT_SECS, SSRF_BLOCKED_MESSAGE,
+        is_allowed_geojson_write_path, is_allowed_local_vector_path, is_allowed_project_path,
+        is_disallowed_ip, is_image_picker_path, is_persisted_image_file, is_safe_absolute_path,
+        is_ssrf_guard_error, is_unc_resolved_path, path_is_under, project_path_string,
+        project_paths_from_args, read_mbtiles_zoom_range, resolve_fetch_timeout_secs,
+        tcp_table_port, write_local_geojson_file, MAX_FETCH_TIMEOUT_SECS, REMOTE_TILE_TIMEOUT_SECS,
+        SSRF_BLOCKED_MESSAGE,
     };
     #[cfg(target_os = "linux")]
     use super::{
@@ -4514,6 +4948,7 @@ mod tests {
         linux_needs_wasm_osr_workaround, linux_uses_nvidia_renderer, nvidia_is_primary_gpu,
         LinuxDmabufWorkaround, WASM_OSR_ENTRY_JSC_OPTIONS,
     };
+    use std::fs;
     // Everything these imports feed is compiled out of the `mas` build, so the
     // tests that exercise it (and their scaffolding) are gated with it.
     #[cfg(not(feature = "mas"))]
@@ -4522,6 +4957,9 @@ mod tests {
         find_zip_manifest_path, plugin_archive_file_name, resolve_sidecar_in_resource_dir,
         CapturedOutput, CAPTURED_LOG_MAX_LINES, CAPTURED_LOG_REPORTED_LINES, CAPTURED_LOG_SETTLE,
     };
+    // Only the unix-only Martin tests (they spawn `sh`) use these.
+    #[cfg(all(unix, not(feature = "mas")))]
+    use super::{martin_slot_is_busy, wait_for_martin_health, MartinProcess};
     #[cfg(not(feature = "mas"))]
     use std::env;
     #[cfg(not(feature = "mas"))]
@@ -4529,7 +4967,6 @@ mod tests {
     #[cfg(not(feature = "mas"))]
     use std::io::{Cursor, Write};
     use std::net::IpAddr;
-    #[cfg(not(feature = "mas"))]
     use std::path::PathBuf;
     #[cfg(not(feature = "mas"))]
     use std::process::Command;
@@ -4569,7 +5006,7 @@ mod tests {
 
     #[cfg(not(feature = "mas"))]
     #[test]
-    fn main_sidecar_installs_postgis_runtime() {
+    fn main_sidecar_installs_database_runtimes() {
         let mut command = Command::new("uv");
         add_main_sidecar_extras(&mut command);
         let args: Vec<_> = command.get_args().collect();
@@ -4580,6 +5017,8 @@ mod tests {
                 OsStr::new("ml"),
                 OsStr::new("--extra"),
                 OsStr::new("postgis"),
+                OsStr::new("--extra"),
+                OsStr::new("mssql"),
             ]
         );
     }
@@ -4588,10 +5027,8 @@ mod tests {
     // on drop, so scratch dirs are cleaned up even when an assertion panics.
     // Uses the process id (no rand dependency) and clears any leftover from a
     // prior run at construction.
-    #[cfg(not(feature = "mas"))]
     struct ScratchDir(PathBuf);
 
-    #[cfg(not(feature = "mas"))]
     impl ScratchDir {
         fn new(name: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("geolibre-{name}-{}", std::process::id()));
@@ -4605,11 +5042,83 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "mas"))]
     impl Drop for ScratchDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn optional_config_file_returns_none_only_when_missing() {
+        let root = ScratchDir::new("optional-config-missing");
+        let path = root.path().join("deployment.json");
+        assert_eq!(super::read_optional_config_file(&path).unwrap(), None);
+        assert_eq!(super::read_admin_profile_file(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn optional_config_file_preserves_raw_utf8_text() {
+        let root = ScratchDir::new("optional-config-text");
+        let path = root.path().join("deployment.json");
+        for contents in [
+            "",
+            " \r\n{\"name\":\"café\"}\r\n ",
+            "\u{feff}{\"enabled\":true}\n",
+        ] {
+            fs::write(&path, contents).unwrap();
+            assert_eq!(
+                super::read_optional_config_file(&path).unwrap(),
+                Some(contents.to_owned())
+            );
+            assert_eq!(
+                super::read_admin_profile_file(&path).unwrap(),
+                Some(contents.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn optional_config_file_propagates_non_not_found_errors() {
+        let root = ScratchDir::new("optional-config-errors");
+        let directory = root.path().join("deployment.json");
+        fs::create_dir(&directory).unwrap();
+        let invalid_utf8 = root.path().join("admin-profile.json");
+        fs::write(&invalid_utf8, [0xff]).unwrap();
+
+        for path in [&directory, &invalid_utf8] {
+            let original_error = fs::read_to_string(path).unwrap_err();
+            let error = super::read_optional_config_file(path).unwrap_err();
+            assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+            assert_eq!(error.kind(), original_error.kind());
+            assert_eq!(error.to_string(), original_error.to_string());
+            assert_eq!(
+                super::read_admin_profile_file(path).unwrap_err(),
+                format!("Could not read admin profile: {original_error}")
+            );
+        }
+    }
+
+    // Only a regular marker file next to the exe marks the portable build: an
+    // installed exe must never claim the scheme, and a same-named directory
+    // (or a marker elsewhere) is not the packaging script's output.
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn portable_marker_requires_a_file_next_to_the_exe() {
+        let root = ScratchDir::new("portable-marker");
+        let exe = root.path().join("geolibre-desktop.exe");
+        assert!(!super::exe_has_portable_marker(&exe));
+
+        std::fs::create_dir(root.path().join(super::PORTABLE_MARKER_FILE)).unwrap();
+        assert!(!super::exe_has_portable_marker(&exe));
+        std::fs::remove_dir(root.path().join(super::PORTABLE_MARKER_FILE)).unwrap();
+
+        let nested = root.path().join("bin");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(root.path().join(super::PORTABLE_MARKER_FILE), "").unwrap();
+        assert!(super::exe_has_portable_marker(&exe));
+        assert!(!super::exe_has_portable_marker(
+            &nested.join("geolibre-desktop.exe")
+        ));
     }
 
     #[cfg(not(feature = "mas"))]
@@ -4641,6 +5150,64 @@ mod tests {
                 project_path_string(&legacy.canonicalize().unwrap()),
             ]
         );
+    }
+
+    #[cfg(all(unix, not(feature = "mas")))]
+    #[test]
+    fn accepts_file_uri_arguments_from_linux_launchers() {
+        let root = ScratchDir::new("project-argument-file-uri");
+        let spaced = root.path().join("my project.geolibre");
+        std::fs::write(&spaced, "{}").unwrap();
+        let canonical = spaced.canonicalize().unwrap();
+        // Percent-encoded, exactly as a launcher that does not localize `%u`
+        // spells it. The bare path spelling is covered above.
+        let uri = format!(
+            "file://{}",
+            canonical
+                .to_str()
+                .unwrap()
+                .replace('%', "%25")
+                .replace(' ', "%20")
+        );
+
+        assert_eq!(
+            project_paths_from_args([OsString::from(uri)], root.path()),
+            [project_path_string(&canonical)]
+        );
+    }
+
+    #[cfg(all(unix, not(feature = "mas")))]
+    #[test]
+    fn accepts_file_uris_whatever_the_scheme_casing() {
+        let root = ScratchDir::new("project-argument-uri-casing");
+        let project = root.path().join("cased.geolibre");
+        std::fs::write(&project, "{}").unwrap();
+        let canonical = project.canonicalize().unwrap();
+
+        for scheme in ["file", "FILE", "File"] {
+            assert_eq!(
+                project_paths_from_args(
+                    [OsString::from(format!(
+                        "{scheme}://{}",
+                        canonical.to_str().unwrap()
+                    ))],
+                    root.path()
+                ),
+                [project_path_string(&canonical)],
+                "{scheme}:// was not accepted"
+            );
+        }
+    }
+
+    #[cfg(all(unix, not(feature = "mas")))]
+    #[test]
+    fn rejects_file_uris_that_name_a_remote_host() {
+        let root = ScratchDir::new("project-argument-remote-uri");
+        assert!(project_paths_from_args(
+            [OsString::from("file://example.com/shared/project.geolibre")],
+            root.path()
+        )
+        .is_empty());
     }
 
     #[cfg(all(unix, not(feature = "mas")))]
@@ -4985,6 +5552,109 @@ mod tests {
     }
 
     #[test]
+    fn geojson_write_path_accepts_only_absolute_geojson_files() {
+        assert!(is_allowed_geojson_write_path("/data/parks.geojson"));
+        assert!(is_allowed_geojson_write_path("/data/parks.JSON"));
+        assert!(is_allowed_geojson_write_path("C:\\gis\\parks.GeoJSON"));
+        // Other vector formats go through the sidecar, never this command.
+        assert!(!is_allowed_geojson_write_path("/data/parks.gpkg"));
+        assert!(!is_allowed_geojson_write_path("/data/parks.shp"));
+        // Project files are not layer sources.
+        assert!(!is_allowed_geojson_write_path("/data/map.geolibre.json"));
+        assert!(!is_allowed_geojson_write_path("/data/map.GEOLIBRE.JSON"));
+        // Relative, traversal, and UNC paths.
+        assert!(!is_allowed_geojson_write_path("parks.geojson"));
+        assert!(!is_allowed_geojson_write_path("/data/../etc/parks.geojson"));
+        assert!(!is_allowed_geojson_write_path(
+            "//server/share/parks.geojson"
+        ));
+        assert!(!is_allowed_geojson_write_path(""));
+    }
+
+    #[test]
+    fn unc_resolved_paths_are_detected() {
+        assert!(is_unc_resolved_path(r"\\?\unc\host\share\parks.geojson"));
+        assert!(is_unc_resolved_path(r"\\?\UNC\host\share\parks.geojson"));
+        assert!(is_unc_resolved_path(r"\\host\share\parks.geojson"));
+        assert!(is_unc_resolved_path("//host/share/parks.geojson"));
+        assert!(!is_unc_resolved_path(r"\\?\c:\gis\parks.geojson"));
+        assert!(!is_unc_resolved_path("/home/user/parks.geojson"));
+    }
+
+    #[test]
+    fn write_local_geojson_file_replaces_an_existing_file_only() {
+        let dir = std::env::temp_dir().join(format!("geolibre-write-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let old = r#"{"type":"FeatureCollection","features":[]}"#;
+        let new = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"area":99},"geometry":null}]}"#;
+        let target = dir.join("parks.geojson");
+        fs::write(&target, old).unwrap();
+        let path = target.to_string_lossy().into_owned();
+
+        write_local_geojson_file(path.clone(), new.into()).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), new);
+        // Only the target remains: the temporary file was renamed over it.
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+
+        // Contents that are not a FeatureCollection are refused, including a
+        // FeatureCollection without a `features` array.
+        assert!(write_local_geojson_file(path.clone(), r#"{"a":1}"#.into()).is_err());
+        assert!(write_local_geojson_file(
+            path.clone(),
+            r#"{"type":"FeatureCollection","features":"x"}"#.into()
+        )
+        .is_err());
+        assert!(
+            write_local_geojson_file(path.clone(), r#"{"type":"FeatureCollection"}"#.into())
+                .is_err()
+        );
+        // ...or one whose features are not all Feature objects.
+        assert!(write_local_geojson_file(
+            path.clone(),
+            r#"{"type":"FeatureCollection","features":[null]}"#.into()
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), new);
+        assert_eq!(fs::read_to_string(&target).unwrap(), new);
+
+        // A missing file is not created.
+        let missing = dir.join("missing.geojson").to_string_lossy().into_owned();
+        assert!(write_local_geojson_file(missing, new.into()).is_err());
+        assert!(!dir.join("missing.geojson").exists());
+
+        // An existing `.json` file that is not GeoJSON (a config file, say) is
+        // never overwritten.
+        let config = dir.join("settings.json");
+        fs::write(&config, r#"{"theme":"dark"}"#).unwrap();
+        let config_path = config.to_string_lossy().into_owned();
+        assert!(write_local_geojson_file(config_path, new.into()).is_err());
+        assert_eq!(fs::read_to_string(&config).unwrap(), r#"{"theme":"dark"}"#);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_local_geojson_file_keeps_the_target_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("geolibre-perm-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("private.geojson");
+        fs::write(&target, r#"{"type":"FeatureCollection","features":[]}"#).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_local_geojson_file(
+            target.to_string_lossy().into_owned(),
+            r#"{"type":"FeatureCollection","features":[]}"#.into(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn rejects_non_vector_relative_or_traversal_paths() {
         // Non-vector extension.
         assert!(!is_allowed_local_vector_path("/etc/passwd"));
@@ -5161,6 +5831,76 @@ mod tests {
     fn child_failure_message_says_so_when_there_was_no_output() {
         let message = child_failure_message("Jupyter server exited.", &CapturedOutput::new());
         assert_eq!(message, "Jupyter server exited. It produced no output.");
+    }
+
+    // Regression for #2677. Martin writes one or more log lines per discovered
+    // table before it binds its port, so a large schema overflows the pipe
+    // buffer during startup. With the pipes left unread the child blocked on
+    // that write and never exited, and the waiter reported a bare timeout. A
+    // child that writes well past the buffer and then exits must be seen to
+    // exit, with its last line quoted.
+    #[cfg(all(unix, not(feature = "mas")))]
+    #[test]
+    fn martin_waiter_drains_a_log_larger_than_the_pipe_buffer() {
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(
+                "i=0; while [ $i -lt 2000 ]; do \
+                 echo \"INFO martin: source public.table_$i added, no spatial index\"; \
+                 i=$((i+1)); done; echo 'error: last line' >&2; exit 3",
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn a chatty child");
+        let output = CapturedOutput::attach(&mut child);
+        // Port 9 (discard) is never serving HTTP, so health never succeeds and
+        // the only way out before the timeout is the child exiting.
+        let error = wait_for_martin_health("http://127.0.0.1:9", &mut child, &output)
+            .expect_err("the child exits without becoming healthy");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(error.contains("exited before it was ready"), "got: {error}");
+        assert!(error.contains("error: last line"), "got: {error}");
+    }
+
+    // A Martin that died or was killed from outside must not keep blocking new
+    // starts with "already running"; a live one still must.
+    #[cfg(all(unix, not(feature = "mas")))]
+    #[test]
+    fn martin_slot_clears_an_exited_process_but_keeps_a_live_one() {
+        use std::process::{Command, Stdio};
+
+        let spawn = |script: &str| {
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn a child")
+        };
+
+        let mut exited = spawn("exit 0");
+        exited.wait().expect("wait for the child to exit");
+        let mut slot = Some(MartinProcess { child: exited });
+        assert!(!martin_slot_is_busy(&mut slot));
+        assert!(slot.is_none());
+
+        let mut slot = Some(MartinProcess {
+            child: spawn("sleep 30"),
+        });
+        assert!(martin_slot_is_busy(&mut slot));
+        assert!(slot.is_some());
+        // Dropping the MartinProcess kills and reaps the sleeper.
+        drop(slot);
+
+        let mut empty: Option<MartinProcess> = None;
+        assert!(!martin_slot_is_busy(&mut empty));
     }
 
     // The whole point of the capture is that the child's *last* lines — the

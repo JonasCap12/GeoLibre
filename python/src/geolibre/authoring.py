@@ -303,6 +303,9 @@ def describe_project(project: dict[str, Any]) -> dict[str, Any]:
             components = settings.get(_project.COMPONENTS_PLUGIN_ID)
             if isinstance(components, dict):
                 controls.extend(key for key in ("legend", "colorbar") if key in components)
+    map_legend = project.get("legend")
+    if isinstance(map_legend, dict) and map_legend.get("panelVisible") is True:
+        controls.append("map-legend")
     basemap_url = project.get("basemapStyleUrl")
     return {
         "name": project.get("name"),
@@ -562,6 +565,8 @@ def set_popup(
     title_expression: str | None = None,
     body_expression: str | None = None,
     show_feature_id: bool | None = None,
+    max_width: int | None = None,
+    image_height: int | None = None,
     tooltip: Any = None,
     merge: bool = False,
 ) -> dict[str, Any]:
@@ -583,6 +588,8 @@ def set_popup(
         title_expression: MapLibre expression source producing the title.
         body_expression: MapLibre expression source producing the popup body.
         show_feature_id: ``False`` drops the synthetic ``id`` row.
+        max_width: Widest the click popup may draw, in CSS pixels.
+        image_height: Tallest an ``"image"`` field may draw, in CSS pixels.
         tooltip: Hover shorthand -- a property name, a sequence of names,
             ``True`` to flag every configured field, or ``False`` to turn the
             tooltip off.
@@ -606,6 +613,8 @@ def set_popup(
         title_expression=title_expression,
         body_expression=body_expression,
         show_feature_id=show_feature_id,
+        max_width=max_width,
+        image_height=image_height,
     )
     if merge:
         current = layer.get("popup")
@@ -634,6 +643,91 @@ def clear_popup(project: dict[str, Any], ref: str) -> dict[str, Any]:
     """
     layer = find_layer(project, ref)
     layer.pop("popup", None)
+    return layer_summary(layer)
+
+
+def set_layer_metadata(
+    project: dict[str, Any],
+    ref: str,
+    *,
+    merge: bool = False,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    """Set a layer's descriptive (catalog) metadata.
+
+    This is what the app's layer Metadata dialog edits and exports as a STAC
+    Item: title, abstract, keywords, license, attribution, contact, lineage,
+    temporal extent and links. See :func:`geolibre.project.layer_metadata`.
+
+    Args:
+        project: The project dict (mutated in place).
+        ref: A layer id or display name.
+        merge: Keep the layer's existing fields that ``fields`` does not name,
+            instead of replacing the whole block.
+        **fields: Keyword arguments of :func:`geolibre.project.layer_metadata`
+            (``title``, ``abstract``, ``keywords``, ``license``,
+            ``attribution``, ``contact``, ``lineage``, ``temporal_extent``,
+            ``links``).
+
+    Returns:
+        The layer's metadata block after the change, or ``None`` when it ended
+        up empty (and was removed).
+
+    Raises:
+        ValueError: If the reference does not resolve to exactly one layer, a
+            field name is unknown, or a value fails validation.
+    """
+    unknown = sorted(set(fields) - set(_METADATA_FIELD_KEYS))
+    if unknown:
+        raise ValueError(f"unknown layer metadata field(s): {', '.join(unknown)}")
+    layer = find_layer(project, ref)
+    built = _project.layer_metadata(**fields) or {}
+    if merge:
+        current = _project.normalize_layer_metadata(layer.get("descriptiveMetadata")) or {}
+        # The keys the caller named replace the stored ones -- including a key
+        # passed as blank, which clears it.
+        named = {_METADATA_FIELD_KEYS[name] for name in fields}
+        built = {
+            **{key: value for key, value in current.items() if key not in named},
+            **built,
+        }
+    metadata = _project.normalize_layer_metadata(built)
+    if metadata is None:
+        layer.pop("descriptiveMetadata", None)
+    else:
+        layer["descriptiveMetadata"] = metadata
+    return copy.deepcopy(metadata)
+
+
+#: Keyword argument of :func:`set_layer_metadata` -> stored camelCase key.
+_METADATA_FIELD_KEYS = {
+    "title": "title",
+    "abstract": "abstract",
+    "keywords": "keywords",
+    "license": "license",
+    "attribution": "attribution",
+    "contact": "contact",
+    "lineage": "lineage",
+    "temporal_extent": "temporalExtent",
+    "links": "links",
+}
+
+
+def clear_layer_metadata(project: dict[str, Any], ref: str) -> dict[str, Any]:
+    """Drop a layer's descriptive metadata.
+
+    Args:
+        project: The project dict (mutated in place).
+        ref: A layer id or display name.
+
+    Returns:
+        A summary of the updated layer.
+
+    Raises:
+        ValueError: If the reference does not resolve to exactly one layer.
+    """
+    layer = find_layer(project, ref)
+    layer.pop("descriptiveMetadata", None)
     return layer_summary(layer)
 
 
@@ -999,6 +1093,125 @@ def color_ramp_names() -> list[str]:
 # -- map controls -------------------------------------------------------------
 
 
+def set_point_cloud_classes(
+    project: dict[str, Any], classes: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Set the point cloud annotator's custom classes (its label schema).
+
+    Replaces the custom classes and keeps the saved point labels, instance ids
+    and 3D boxes. The annotator applies them when the project opens, so the
+    LiDAR layer draws those codes in their colour and names them in its
+    legend, and the classes can be assigned from the annotator's panel.
+
+    Args:
+        project: The project dict (mutated in place).
+        classes: ``{"code", "name", "color"}`` dicts; see
+            :func:`geolibre.project.point_cloud_class_schema`. An empty list
+            clears them.
+
+    Returns:
+        The validated classes as saved.
+
+    Raises:
+        ValueError: For an invalid class.
+    """
+    schema = _project.point_cloud_class_schema(classes)
+    plugins = _project.ensure_plugins_block(project)
+    current = plugins["settings"].get(_project.POINT_CLOUD_ANNOTATION_PLUGIN_ID)
+    state = dict(current) if isinstance(current, dict) else {}
+    state.setdefault("version", 1)
+    state.setdefault("sources", [])
+    state.setdefault("cuboids", [])
+    state["customClasses"] = schema
+    # The annotator restores its state whether or not its panel is open, so
+    # the classes apply without opening the panel.
+    _project.set_plugin_state(
+        project, _project.POINT_CLOUD_ANNOTATION_PLUGIN_ID, state, activate=False
+    )
+    return schema
+
+
+def lidar_source_urls(project: dict[str, Any]) -> list[str]:
+    """The URLs of the project's LiDAR point cloud layers.
+
+    Args:
+        project: The project dict.
+
+    Returns:
+        Each LiDAR layer's source URL, in layer order.
+    """
+    urls: list[str] = []
+    for layer in layers_of(project):
+        source = layer.get("source")
+        if (
+            isinstance(source, dict)
+            and source.get("type") == "lidar"
+            and isinstance(source.get("url"), str)
+        ):
+            urls.append(source["url"])
+    return urls
+
+
+def merge_point_labels(
+    project: dict[str, Any],
+    url: str,
+    labels: dict[str, dict[int, int]],
+    instances: dict[str, dict[int, int]] | None = None,
+) -> int:
+    """Merge point labels into the annotator's saved state for one source.
+
+    New edits override any saved edit for the same point; other saved labels,
+    boxes, vectors and custom classes are kept.
+
+    Args:
+        project: The project dict (mutated in place).
+        url: The point cloud's source URL (its LiDAR layer's URL).
+        labels: Node key -> {index within node: class}.
+        instances: Node key -> {index within node: instance id}, optional.
+
+    Returns:
+        How many point edits were merged.
+    """
+    from . import pointcloud as _pointcloud
+
+    plugins = _project.ensure_plugins_block(project)
+    current = plugins["settings"].get(_project.POINT_CLOUD_ANNOTATION_PLUGIN_ID)
+    state = dict(current) if isinstance(current, dict) else {}
+    state.setdefault("version", 1)
+    state.setdefault("cuboids", [])
+
+    def merge(key: str, edits_by_node: dict[str, dict[int, int]], wide: bool) -> None:
+        entries = [entry for entry in state.get(key) or [] if isinstance(entry, dict)]
+        entry = next((item for item in entries if item.get("url") == url), None)
+        if entry is None:
+            entry = {"url": url, "nodes": {}}
+            entries.append(entry)
+        nodes = dict(entry.get("nodes") or {})
+        for node_key, edits in edits_by_node.items():
+            existing: dict[int, int] = {}
+            if isinstance(nodes.get(node_key), str):
+                try:
+                    existing = _project._decode_point_label_node_sized(
+                        nodes[node_key], _project.MAX_POINT_LABEL_NODE_BYTES, wide
+                    )[0]
+                except ValueError:
+                    existing = {}
+            existing.update(edits)
+            nodes[node_key] = _pointcloud.encode_point_label_node(existing, wide=wide)
+        entry["nodes"] = nodes
+        state[key] = entries
+
+    merge("sources", labels, wide=False)
+    if instances:
+        merge("instances", instances, wide=True)
+    _project.set_plugin_state(
+        project, _project.POINT_CLOUD_ANNOTATION_PLUGIN_ID, state, activate=False
+    )
+    return sum(len(edits) for edits in labels.values()) + sum(
+        len(edits) for edits in (instances or {}).values()
+    )
+
+
 def merge_components_state(
     project: dict[str, Any],
     key: str,
@@ -1111,6 +1324,71 @@ def add_legend(
         lambda existing: _project.legend_gui_state(entry, existing=existing),
     )
     return entry
+
+
+def set_map_legend(
+    project: dict[str, Any],
+    title: str | None = None,
+    *,
+    position: str | None = None,
+    group_by_layer: bool | None = None,
+    visible: bool | None = None,
+    collapsed: bool | None = None,
+) -> dict[str, Any]:
+    """Show the map legend, the panel behind the app's Controls -> Legend.
+
+    Unlike :func:`add_legend`, which draws hand-written entries, the map legend
+    derives its rows from each visible layer's symbology (graduated classes,
+    categories, heatmap ramps, ...), so it stays in step with the layers
+    without restating their colors. A project has one; calling this again
+    updates it and keeps any item order, label overrides, and custom entries
+    already saved on it.
+
+    Args:
+        project: The project dict (mutated in place).
+        title: Heading drawn above the entries. Keeps the current one (the
+            app default is ``"Legend"``) when omitted.
+        position: Map corner, one of :data:`CONTROL_POSITIONS`. Keeps the
+            current one (the app default is ``"top-left"``) when omitted.
+        group_by_layer: Group each layer's classes under a layer heading. Keeps
+            the current setting (the app default groups) when omitted.
+        visible: Whether the on-map panel is open. Keeps the current state
+            when omitted, and opens it when the project has no legend yet.
+        collapsed: Whether the open panel is collapsed to its header bar.
+            Keeps the current state when omitted.
+
+    Returns:
+        The project's legend config.
+
+    Raises:
+        ValueError: If ``position`` is not a map corner.
+    """
+    if position is not None and position not in CONTROL_POSITIONS:
+        raise ValueError(f"position must be one of {sorted(CONTROL_POSITIONS)}, got {position!r}")
+    existing = project.get("legend")
+    if visible is None and not isinstance(existing, dict):
+        visible = True
+    legend: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    legend.setdefault("title", "Legend")
+    legend.setdefault("groupByLayer", True)
+    legend.setdefault("order", [])
+    legend.setdefault("overrides", {})
+    if title is not None:
+        legend["title"] = str(title)
+    if group_by_layer is not None:
+        legend["groupByLayer"] = bool(group_by_layer)
+    if position is not None:
+        legend["panelPosition"] = position
+    # The app persists these two flags only when set (normalizeLegendConfig).
+    for key, flag in (("panelVisible", visible), ("panelCollapsed", collapsed)):
+        if flag is None:
+            continue
+        if flag:
+            legend[key] = True
+        else:
+            legend.pop(key, None)
+    project["legend"] = legend
+    return legend
 
 
 def add_colorbar(
@@ -1293,3 +1571,418 @@ def add_swipe(
         position=control_position,
     )
     return state
+
+
+# -- filters, labels, plugin state ---------------------------------------------
+
+
+def set_layer_filter(project: dict[str, Any], ref: str, expression: Any) -> dict[str, Any]:
+    """Set or clear a layer's persistent feature filter.
+
+    The filter is the project's ``filterExpression`` -- the same one the app's
+    **Select by Expression -> Filter layer** writes. It hides the features that
+    do not match without changing the data, and combines with quick filters
+    and the Time Slider window.
+
+    Args:
+        project: The project dict (mutated in place).
+        ref: A layer id or display name.
+        expression: A boolean MapLibre expression (list or JSON string), e.g.
+            ``[">=", ["get", "population"], 100000]``; ``None`` or ``[]``
+            clears the filter.
+
+    Returns:
+        A summary of the layer, with the filter that is now set (or ``None``).
+
+    Raises:
+        ValueError: If the reference does not resolve to exactly one layer, or
+            the expression is not a boolean expression array.
+    """
+    layer = find_layer(project, ref)
+    if expression is None or expression == [] or expression == "":
+        layer.pop("filterExpression", None)
+    else:
+        layer["filterExpression"] = _project.filter_expression(expression)
+    return {**layer_summary(layer), "filterExpression": layer.get("filterExpression")}
+
+
+def set_labels(
+    project: dict[str, Any],
+    ref: str,
+    field: str | None = None,
+    *,
+    expression: Any = None,
+    enabled: bool | None = None,
+    **options: Any,
+) -> dict[str, Any]:
+    """Label a vector layer's features from an attribute or an expression.
+
+    Unspecified options keep the layer's current label settings, so a call can
+    restyle labels without restating the field.
+
+    Args:
+        project: The project dict (mutated in place).
+        ref: A layer id or display name.
+        field: Property whose value becomes the label text.
+        expression: MapLibre expression (list or JSON string) for the label
+            text; overrides ``field``. ``""`` clears it.
+        enabled: ``False`` hides the labels but keeps their settings, ``True``
+            shows them; omitted, labels keep their current state (on for a
+            layer that had none).
+        **options: Label options; see :func:`geolibre.project.label_style`.
+
+    Returns:
+        The layer's labels object after the change.
+
+    Raises:
+        ValueError: If the reference does not resolve to exactly one layer, or
+            an option is invalid.
+    """
+    layer = find_layer(project, ref)
+    style = layer.get("style")
+    if not isinstance(style, dict):
+        style = copy.deepcopy(_project.DEFAULT_LAYER_STYLE)
+        layer["style"] = style
+    current = style.get("labels")
+    labels = _project.label_style(
+        field,
+        expression=expression,
+        enabled=enabled,
+        base=current if isinstance(current, dict) else None,
+        **options,
+    )
+    style["labels"] = labels
+    return copy.deepcopy(labels)
+
+
+def set_plugin_state(
+    project: dict[str, Any],
+    plugin_id: str,
+    state: Any = None,
+    *,
+    position: str | None = None,
+    activate: bool = True,
+    allow_unknown: bool = False,
+    clear: bool = False,
+) -> dict[str, Any]:
+    """Store a plugin's saved state in the project, the way the app saves it.
+
+    The blob is opaque to GeoLibre: each plugin reads its own shape in
+    ``applyProjectState`` (for example the Time Slider's timeline config). The
+    swipe, legend and colorbar have dedicated, validated builders --
+    :func:`add_swipe`, :func:`add_legend`, :func:`add_colorbar` -- and are the
+    better choice for those.
+
+    Args:
+        project: The project dict (mutated in place).
+        plugin_id: A built-in plugin id from
+            :data:`geolibre.project.PLUGIN_STATE_IDS`, or an external plugin's
+            id with ``allow_unknown=True``.
+        state: The plugin's settings blob; must be plain JSON. ``None``
+            keeps the stored settings, so ``position``/``activate`` can be
+            changed without resending them.
+        position: Optional control corner, one of :data:`CONTROL_POSITIONS`.
+        activate: Add the plugin to ``activePluginIds`` so it starts active.
+        allow_unknown: Accept an id that is not a built-in plugin with saved
+            state (an external plugin loaded from a manifest URL).
+        clear: Remove the stored settings and nothing else (``state``,
+            ``position`` and ``activate`` are then not applied, so clearing
+            cannot switch the plugin on).
+
+    Returns:
+        ``{"pluginId", "active", "position", "state"}`` as now stored.
+
+    Raises:
+        ValueError: If the id is unknown (and not allowed), the position is
+            invalid, the state is not plain JSON, or ``clear`` is combined
+            with a ``state``.
+    """
+    if clear and state is not None:
+        raise ValueError("pass either a state or clear=True, not both")
+    if not isinstance(plugin_id, str) or not plugin_id.strip():
+        raise ValueError("plugin_id must be a non-empty string")
+    plugin_id = plugin_id.strip()
+    if plugin_id not in _project.PLUGIN_STATE_IDS and not allow_unknown:
+        raise ValueError(
+            f"{plugin_id!r} is not a built-in plugin that saves project state. "
+            f"Known ids: {', '.join(sorted(_project.PLUGIN_STATE_IDS))}. "
+            "For an external plugin, pass allow_unknown=True."
+        )
+    if position is not None and position not in CONTROL_POSITIONS:
+        raise ValueError(f"position must be one of {sorted(CONTROL_POSITIONS)}, got {position!r}")
+    plugins = _project.ensure_plugins_block(project)
+    if clear:
+        # Clearing is only that: activation and the corner are left alone, so
+        # wiping a plugin's settings cannot switch it on as a side effect.
+        plugins["settings"].pop(plugin_id, None)
+    elif state is None:
+        # Reposition or (de)activate without touching the stored settings.
+        if activate and plugin_id not in plugins["activePluginIds"]:
+            plugins["activePluginIds"].append(plugin_id)
+        if position is not None:
+            plugins["mapControlPositions"][plugin_id] = position
+    else:
+        _project.set_plugin_state(
+            project,
+            plugin_id,
+            _project.json_compatible(state, "state"),
+            position=position,
+            activate=activate,
+        )
+    return {
+        "pluginId": plugin_id,
+        "active": plugin_id in plugins["activePluginIds"],
+        "position": plugins["mapControlPositions"].get(plugin_id),
+        "state": copy.deepcopy(plugins["settings"].get(plugin_id)),
+    }
+
+
+# -- story maps ----------------------------------------------------------------
+
+
+def _story_map(project: dict[str, Any]) -> dict[str, Any]:
+    """Return the project's story map, creating a default one when absent.
+
+    Args:
+        project: The project dict (mutated in place when a story is created).
+
+    Returns:
+        The live ``storymap`` dict, with every ``StoryMap`` key present.
+    """
+    story = project.get("storymap")
+    if not isinstance(story, dict):
+        story = copy.deepcopy(_project.DEFAULT_STORY_MAP)
+        project["storymap"] = story
+    for key, value in _project.DEFAULT_STORY_MAP.items():
+        story.setdefault(key, copy.deepcopy(value))
+    chapters = story["chapters"]
+    story["chapters"] = (
+        [chapter for chapter in chapters if isinstance(chapter, dict)]
+        if isinstance(chapters, list)
+        else []
+    )
+    return story
+
+
+def _story_summary(story: dict[str, Any]) -> dict[str, Any]:
+    """Summarize a story map: its settings plus one line per chapter.
+
+    Args:
+        story: A ``storymap`` dict.
+
+    Returns:
+        The settings with ``chapters`` reduced to ``{"id", "title"}`` entries.
+    """
+    return {
+        **{key: value for key, value in story.items() if key != "chapters"},
+        "chapters": [
+            {"id": chapter.get("id"), "title": chapter.get("title")}
+            for chapter in story["chapters"]
+            if isinstance(chapter, dict)
+        ],
+    }
+
+
+def find_story_chapter(project: dict[str, Any], ref: str | int) -> int:
+    """Resolve a story chapter by id, title, or 0-based position.
+
+    Args:
+        project: The project dict.
+        ref: A chapter id, a chapter title (exact, then case-insensitive), or
+            an integer index.
+
+    Returns:
+        The chapter's index in ``storymap.chapters``.
+
+    Raises:
+        ValueError: If nothing matches, or a title matches several chapters.
+    """
+    story = project.get("storymap")
+    chapters = story.get("chapters") if isinstance(story, dict) else None
+    chapters = [c for c in chapters if isinstance(c, dict)] if isinstance(chapters, list) else []
+    if isinstance(ref, int) and not isinstance(ref, bool):
+        if -len(chapters) <= ref < len(chapters):
+            return ref % len(chapters)
+        raise ValueError(f"No chapter at index {ref}; the story has {len(chapters)} chapter(s)")
+    for index, chapter in enumerate(chapters):
+        if chapter.get("id") == ref:
+            return index
+    for match in (
+        lambda chapter: chapter.get("title") == ref,
+        lambda chapter: str(chapter.get("title", "")).casefold() == str(ref).casefold(),
+    ):
+        hits = [index for index, chapter in enumerate(chapters) if match(chapter)]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            raise ValueError(f"{len(hits)} chapters are titled {ref!r}; reference one by id")
+    known = ", ".join(repr(chapter.get("title")) for chapter in chapters) or "none"
+    raise ValueError(f"No chapter matches {ref!r}. Chapters: {known}")
+
+
+def set_story_map(project: dict[str, Any], **settings: Any) -> dict[str, Any]:
+    """Set the story map's title block and presentation settings.
+
+    Args:
+        project: The project dict (mutated in place).
+        **settings: Any of :data:`geolibre.project.STORY_SETTING_NAMES` --
+            ``title``, ``subtitle``, ``byline``, ``footer``, ``theme``
+            (``"light"``/``"dark"``), ``show_markers``, ``marker_color``,
+            ``inset``, ``inset_position``, ``hide_chapter_nav``,
+            ``start_slide`` and ``end_slide`` (``"none"``, ``"blank"``,
+            ``"black"``, ``"global"``, ``"adjacent"``).
+
+    Returns:
+        A summary of the story map (settings plus chapter ids and titles).
+
+    Raises:
+        ValueError: If a setting is unknown or invalid.
+    """
+    updates = _project.story_map_settings(**settings)
+    story = _story_map(project)
+    story.update(updates)
+    return _story_summary(story)
+
+
+def _resolve_opacity_layers(project: dict[str, Any], entries: Any) -> Any:
+    """Resolve the layer references in chapter opacity changes to layer ids.
+
+    Args:
+        project: The project dict.
+        entries: ``None`` or a list of opacity-change mappings.
+
+    Returns:
+        The entries with ``layer`` replaced by the resolved ``layerId``.
+
+    Raises:
+        ValueError: If a layer reference does not resolve.
+    """
+    if not isinstance(entries, (list, tuple)):
+        return entries
+    resolved = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            ref = entry.get("layerId", entry.get("layer_id", entry.get("layer")))
+            if isinstance(ref, str) and ref:
+                entry = {
+                    **{k: v for k, v in entry.items() if k not in ("layer", "layer_id")},
+                    "layerId": str(find_layer(project, ref)["id"]),
+                }
+        resolved.append(entry)
+    return resolved
+
+
+def add_story_chapter(
+    project: dict[str, Any],
+    title: str,
+    *,
+    description: str = "",
+    center: Iterable[float] | None = None,
+    zoom: float | None = None,
+    pitch: float | None = None,
+    bearing: float | None = None,
+    image: str | None = None,
+    alignment: str = "left",
+    hidden: bool = False,
+    map_animation: str = "flyTo",
+    rotate_animation: bool = False,
+    on_enter: Any = None,
+    on_exit: Any = None,
+    index: int | None = None,
+    chapter_id: str | None = None,
+) -> dict[str, Any]:
+    """Add a chapter to the project's story map (Project -> Story Map).
+
+    A camera value left out is taken from the project's saved view, the way
+    the app's **Add chapter** button captures the current map.
+
+    Args:
+        project: The project dict (mutated in place).
+        title: Chapter heading.
+        description: Chapter body text.
+        center: Camera target ``[lng, lat]``.
+        zoom: Camera zoom, 0-24.
+        pitch: Camera tilt in degrees, 0-85.
+        bearing: Camera rotation in degrees.
+        image: Optional image URL shown in the chapter panel.
+        alignment: ``"left"``, ``"center"``, ``"right"``, or ``"full"``.
+        hidden: Hide the text panel while still moving the map.
+        map_animation: ``"flyTo"``, ``"easeTo"``, or ``"jumpTo"``.
+        rotate_animation: Slowly rotate the camera once the move settles.
+        on_enter: Layer opacity changes on entering, as ``{"layer": <id or
+            name>, "opacity": 0-1, "duration": ms}`` entries.
+        on_exit: Layer opacity changes on leaving, in the same form.
+        index: Position to insert at (clamped); appended when omitted.
+        chapter_id: Explicit chapter id; a UUID by default.
+
+    Returns:
+        The chapter that was added.
+
+    Raises:
+        ValueError: If a value is invalid, a layer reference does not resolve,
+            or ``chapter_id`` is already used.
+    """
+    view = project.get("mapView") if isinstance(project.get("mapView"), dict) else {}
+    view_center = view.get("center") or [0, 0]
+    chapter = _project.story_chapter(
+        title,
+        center=list(center) if center is not None else list(view_center),
+        zoom=zoom if zoom is not None else view.get("zoom", 2),
+        pitch=pitch if pitch is not None else view.get("pitch", 0),
+        bearing=bearing if bearing is not None else view.get("bearing", 0),
+        description=description,
+        image=image,
+        alignment=alignment,
+        hidden=hidden,
+        map_animation=map_animation,
+        rotate_animation=rotate_animation,
+        on_enter=_resolve_opacity_layers(project, on_enter),
+        on_exit=_resolve_opacity_layers(project, on_exit),
+        chapter_id=chapter_id,
+    )
+    story = _story_map(project)
+    chapters = story["chapters"]
+    if any(isinstance(c, dict) and c.get("id") == chapter["id"] for c in chapters):
+        raise ValueError(f"a chapter with id {chapter['id']!r} already exists")
+    position = len(chapters) if index is None else max(0, min(len(chapters), int(index)))
+    chapters.insert(position, chapter)
+    return copy.deepcopy(chapter)
+
+
+def remove_story_chapter(project: dict[str, Any], ref: str | int) -> dict[str, Any]:
+    """Remove a story chapter by id, title, or index.
+
+    Args:
+        project: The project dict (mutated in place).
+        ref: A chapter id, title, or 0-based index.
+
+    Returns:
+        A summary of the story map after the removal.
+
+    Raises:
+        ValueError: If the reference does not resolve to exactly one chapter.
+    """
+    story = _story_map(project)
+    story["chapters"].pop(find_story_chapter(project, ref))
+    return _story_summary(story)
+
+
+def move_story_chapter(project: dict[str, Any], ref: str | int, index: int) -> dict[str, Any]:
+    """Move a story chapter to a new position.
+
+    Args:
+        project: The project dict (mutated in place).
+        ref: A chapter id, title, or 0-based index.
+        index: The destination position (clamped to the chapter list).
+
+    Returns:
+        A summary of the story map after the move.
+
+    Raises:
+        ValueError: If the reference does not resolve to exactly one chapter.
+    """
+    story = _story_map(project)
+    chapter = story["chapters"].pop(find_story_chapter(project, ref))
+    destination = max(0, min(len(story["chapters"]), int(index)))
+    story["chapters"].insert(destination, chapter)
+    return _story_summary(story)
