@@ -1,4 +1,6 @@
 {
+  "apps/geolibre-desktop/src/components/auth/AccountSecurityDialog.tsx": 667,
+  "apps/geolibre-desktop/src/components/auth/SelfHostGate.tsx": 994,
   "apps/geolibre-desktop/src/components/comments/CommentsPanel.tsx": 508,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/ArcGISSource.tsx": 632,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/DeckVizSource.tsx": 866,
@@ -8,7 +10,8 @@
   "apps/geolibre-desktop/src/components/layout/add-data/sources/WmsSource.tsx": 565,
   "apps/geolibre-desktop/src/components/layout/AddNetcdfDialog.tsx": 896,
   "apps/geolibre-desktop/src/components/layout/BasemapExtractPanel.tsx": 1397,
-  "apps/geolibre-desktop/src/components/layout/CollaborateDialog.tsx": 549,
+  "apps/geolibre-desktop/src/components/layout/CollaborateDialog.tsx": 600,
+  "apps/geolibre-desktop/src/components/layout/CollaborationStatusBadge.tsx": 594,
   "apps/geolibre-desktop/src/components/layout/DesktopShell.tsx": 1284,
   "apps/geolibre-desktop/src/components/layout/FieldCollectionDialog.tsx": 1569,
   "apps/geolibre-desktop/src/components/layout/GeoreferencerDialog.tsx": 669,
@@ -48,9 +51,9 @@
   "apps/geolibre-desktop/src/components/storymap/StoryMapPresenter.tsx": 783,
   "apps/geolibre-desktop/src/hooks/desktop-shell/useFileDrop.ts": 544,
   "apps/geolibre-desktop/src/hooks/toolbar/usePluginLabelSync.ts": 1080,
-  "apps/geolibre-desktop/src/hooks/useCollaboration.ts": 601,
+  "apps/geolibre-desktop/src/hooks/useCollaboration.ts": 774,
   "apps/geolibre-desktop/src/lib/assistant/tools.ts": 1122,
-  "apps/geolibre-desktop/src/lib/duckdb-vector-loader.ts": 1278,
+  "apps/geolibre-desktop/src/lib/duckdb-vector-loader.ts": 1384,
   "apps/geolibre-desktop/src/lib/print-layout-export.ts": 526,
   "apps/geolibre-desktop/src/lib/scripting/scriptingApi.ts": 643,
   "apps/geolibre-desktop/src/lib/sql-workspace.ts": 702
