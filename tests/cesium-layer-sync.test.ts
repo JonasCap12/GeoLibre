@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import { DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "../packages/core/src/types";
+import { useAppStore } from "@geolibre/core";
+import {
+  DEFAULT_LAYER_STYLE,
+  type GeoLibreLayer,
+  type LayerStyle,
+} from "../packages/core/src/types";
 import { CesiumLayerSync, isCesiumSupportedLayerType } from "../packages/map/src/cesium-layer-sync";
 
 // Verifies the store → Cesium reconciler against a fake Cesium namespace + viewer
@@ -188,7 +193,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       polygon: polygonFor(features[0]),
                       show: true,
@@ -196,7 +201,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       polyline: { material: options.stroke },
                       show: true,
@@ -204,7 +209,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       billboard: { color: undefined },
                       show: true,
@@ -212,7 +217,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       label: {},
                       show: true,
@@ -285,7 +290,9 @@ function makeFakes() {
   return { calls, viewer, Cesium, flush };
 }
 
-function mkLayer(over: Partial<GeoLibreLayer>): GeoLibreLayer {
+type LayerPatch = Omit<Partial<GeoLibreLayer>, "style"> & { style?: Partial<LayerStyle> };
+
+function mkLayer(over: LayerPatch): GeoLibreLayer {
   return {
     id: "l1",
     name: "layer",
@@ -293,10 +300,10 @@ function mkLayer(over: Partial<GeoLibreLayer>): GeoLibreLayer {
     source: {},
     visible: true,
     opacity: 1,
-    style: {},
     metadata: {},
     ...over,
-  } as GeoLibreLayer;
+    style: { ...DEFAULT_LAYER_STYLE, ...over.style },
+  };
 }
 
 /** A one-polygon GeoJSON layer, the shape the render-status tests need. */
@@ -350,8 +357,8 @@ function newSync(
 ) {
   // The fakes stand in for the Cesium namespace + Viewer (cast through unknown).
   return new CesiumLayerSync(
-    f.Cesium as unknown as typeof import("cesium"),
-    f.viewer as unknown as import("cesium").Viewer,
+    f.Cesium as unknown as ConstructorParameters<typeof CesiumLayerSync>[0],
+    f.viewer as unknown as ConstructorParameters<typeof CesiumLayerSync>[1],
     readZoom,
     deps,
   );
@@ -824,6 +831,34 @@ describe("CesiumLayerSync", () => {
     assert.equal(resource.opts.headers["X-GOOG-API-KEY"], "test-key");
   });
 
+  it("refuses to send 3D Tiles request headers over plaintext, including child tiles", async () => {
+    const sync = newSync(f);
+    const tiles = (id: string, url: string) =>
+      mkLayer({
+        id,
+        type: "3d-tiles",
+        source: { url, requestHeaders: { Authorization: "Bearer t" } },
+      });
+    sync.sync([
+      tiles("plain", "http://tiles.example/tileset.json"),
+      tiles("secure", "https://tiles.example/tileset.json"),
+    ]);
+    await f.flush();
+    assert.equal(f.calls.tilesetUrls.length, 1);
+    const resource = f.calls.tilesetUrls[0] as {
+      opts: { url: string; proxy: { getURL(url: string): string } };
+    };
+    assert.equal(resource.opts.url, "https://tiles.example/tileset.json");
+    // Cesium applies the proxy to every derived request, child tiles included.
+    const { proxy } = resource.opts;
+    assert.equal(proxy.getURL("https://cdn.example/a.b3dm"), "https://cdn.example/a.b3dm");
+    assert.equal(
+      proxy.getURL("data:application/octet-stream;base64,AA=="),
+      "data:application/octet-stream;base64,AA==",
+    );
+    assert.throws(() => proxy.getURL("http://cdn.example/a.b3dm"));
+  });
+
   it("updates visibility in place without recreating the imagery layer", () => {
     const sync = newSync(f);
     const base = mkLayer({
@@ -927,6 +962,46 @@ describe("CesiumLayerSync", () => {
     };
     assert.equal(res.opts.url, "https://secure.arcgis/MapServer");
     assert.equal(res.opts.headers["Authorization"], "Bearer token123");
+  });
+
+  it("rebuilds a layer when a variable its header references changes", async () => {
+    const initial = useAppStore.getState().preferences;
+    const setToken = (value: string) =>
+      useAppStore.setState({
+        preferences: {
+          ...initial,
+          environmentVariables: [{ key: "ARC_TOKEN", value, enabled: true, secret: false }],
+        },
+      });
+    setToken("first");
+    const sync = newSync(f);
+    try {
+      sync.sync([
+        mkLayer({
+          id: "arc",
+          type: "raster",
+          sourcePath: "https://secure.arcgis/MapServer",
+          source: {
+            tiles: ["https://secure.arcgis/MapServer/export"],
+            requestHeaders: { Authorization: "Bearer ${ARC_TOKEN}" },
+          },
+          metadata: { sourceKind: "arcgis-map-service" },
+        }),
+      ]);
+      await f.flush();
+      setToken("second");
+      await f.flush();
+      const headers = f.calls.arcgisProviders.map(
+        (provider) =>
+          (provider.url as { opts: { headers: Record<string, string> } }).opts.headers[
+            "Authorization"
+          ],
+      );
+      assert.deepEqual(headers, ["Bearer first", "Bearer second"]);
+    } finally {
+      sync.destroy();
+      useAppStore.setState({ preferences: initial });
+    }
   });
 
   it("reads the arcgis token off the pre-built export tile url", async () => {
@@ -1383,17 +1458,19 @@ describe("CesiumLayerSync", () => {
   });
 
   it("classifies supported vs 2D-only layer kinds", () => {
-    for (const type of ["geojson", "xyz", "raster", "wms", "wmts", "image", "3d-tiles"] as const) {
+    for (const type of [
+      "geojson",
+      "xyz",
+      "raster",
+      "wms",
+      "wmts",
+      "image",
+      "3d-tiles",
+      "zarr",
+    ] as const) {
       assert.equal(isCesiumSupportedLayerType(mkLayer({ type })), true, type);
     }
-    for (const type of [
-      "pmtiles",
-      "mbtiles",
-      "zarr",
-      "lidar",
-      "gaussian-splat",
-      "deckgl-viz",
-    ] as const) {
+    for (const type of ["pmtiles", "mbtiles", "lidar", "gaussian-splat", "deckgl-viz"] as const) {
       assert.equal(isCesiumSupportedLayerType(mkLayer({ type })), false, type);
     }
   });
@@ -1403,16 +1480,18 @@ describe("CesiumLayerSync", () => {
     const layers = [
       // A PMTiles layer without a source to read is neither draped nor bridged.
       mkLayer({ id: "p", type: "pmtiles", source: {} }),
+      // A Zarr kind the globe draws, but with no store or variable to open.
       mkLayer({ id: "z", type: "zarr", source: {} }),
       mkLayer({ id: "a", type: "arcgis", source: { tiles: ["https://a/{z}/{x}/{y}.pbf"] } }),
     ];
     sync.sync(layers);
     assert.equal(f.calls.imageryAdded.length, 0);
     assert.equal(f.calls.primitivesAdded.length, 0);
-    // The kind-level predicate the UI uses to flag "2D only" layers agrees.
+    // The kind-level predicate the UI uses to flag "2D only" layers agrees,
+    // except for the Zarr kind, which is supported once it names a store.
     assert.deepEqual(
       layers.filter((l) => !isCesiumSupportedLayerType(l)).map((l) => l.id),
-      ["p", "z", "a"],
+      ["p", "a"],
     );
   });
 
@@ -1840,7 +1919,12 @@ describe("CesiumLayerSync", () => {
     // The extrusion path likewise skips height/heightReference on it and, since
     // Cesium reads extrudedHeight as an absolute altitude there, lifts the roof
     // above the ring's own height (100 m + 10 m) rather than extruding down to 10 m.
-    sync.sync([{ ...layer, style: { extrusionEnabled: true, extrusionHeightProperty: "height" } }]);
+    sync.sync([
+      {
+        ...layer,
+        style: { ...layer.style, extrusionEnabled: true, extrusionHeightProperty: "height" },
+      },
+    ]);
     await f.flush();
     const extruded = f.calls.dataSourcesAdded[1] as {
       entities: {

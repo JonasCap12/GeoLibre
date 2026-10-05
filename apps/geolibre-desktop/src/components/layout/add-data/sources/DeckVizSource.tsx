@@ -1,3 +1,4 @@
+import { shouldZoomToNewLayers } from "@geolibre/core";
 import {
   createDeckVizStoreLayer,
   DECK_VIZ_CATEGORY_LABELS,
@@ -95,6 +96,7 @@ export function DeckVizSource({ initialDeckVizKind }: DeckVizSourceProps) {
     const engine = source.shell.mapControllerRef.current;
     ensureMercatorProjection(
       engine?.getMap() ??
+        // eslint-disable-next-line local/no-renderer-kind-checks -- reaches the Mapbox engine's own map handle
         (engine?.kind === "mapbox" ? (engine as MapboxEngine).getMapboxMap() : null),
     );
     // Mount-only: switch the projection once when the dialog opens.
@@ -355,10 +357,12 @@ export function DeckVizSource({ initialDeckVizKind }: DeckVizSourceProps) {
     source.shell.addLayer(layer, source.beforeLayer);
     // GeoJSON fits from its geometry; row-based layers fit from the stored
     // bounds (also used by the layer panel's "Zoom to layer").
-    if (def.format === "geojson") {
-      source.shell.mapControllerRef.current?.fitLayer(layer);
-    } else if (bounds) {
-      source.shell.mapControllerRef.current?.fitBounds(bounds);
+    if (shouldZoomToNewLayers()) {
+      if (def.format === "geojson") {
+        source.shell.mapControllerRef.current?.fitLayer(layer);
+      } else if (bounds) {
+        source.shell.mapControllerRef.current?.fitBounds(bounds);
+      }
     }
     if (closeAfterDeckVizAdd) {
       source.shell.closeDialog();

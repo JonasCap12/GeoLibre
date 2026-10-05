@@ -1,6 +1,6 @@
 import type { IControl, Map as MapLibreMap } from "maplibre-gl";
 import type { GeoLibreAppAPI } from "../types";
-import { getStyleMap } from "./style-map";
+import { getControlMap } from "./style-map";
 
 const mountedControlCleanup = new WeakMap<IControl, () => void>();
 
@@ -17,17 +17,25 @@ export function unmountMapControlFromPanel(control: IControl): void {
  * Layout, resizing, and close/collapse chrome belong exclusively to GeoLibre.
  *
  * The bridge binds to whichever 2D engine is drawing the primary map
- * ({@link getStyleMap}): the docked controls only use the style API both
+ * ({@link getControlMap}): the docked controls only use the style API both
  * engines share, so a plugin that declares Mapbox support docks here on the
- * Mapbox renderer without a second mount path.
+ * Mapbox renderer without a second mount path. On ArcGIS the control gets the
+ * host's facade, whose style is recorded but not drawn: a plugin docked there
+ * must mirror what it draws into the store, as the Web Services catalogs do.
+ *
+ * @param onMapRemove - Called after the bridge unmounts because the map itself
+ *   was removed (not on a panel close). A renderer swap with no replacement
+ *   engine re-renders nothing, so a plugin that keeps state outside the control
+ *   releases it here.
  */
 export function mountMapControlInPanel(
   app: GeoLibreAppAPI,
   control: IControl,
   container: HTMLElement,
   onMountFailure?: () => void,
+  onMapRemove?: () => void,
 ): (() => void) | null {
-  const map = getStyleMap(app);
+  const map = getControlMap(app);
   if (!map) {
     console.warn("Could not mount docked map control: the map is not ready.");
     onMountFailure?.();
@@ -63,14 +71,23 @@ export function mountMapControlInPanel(
   container.replaceChildren(...contentElements);
 
   let removed = false;
-  const cleanup = () => {
+  const cleanup = (event?: unknown) => {
     if (removed) return;
     removed = true;
     if (mountedControlCleanup.get(control) === cleanup) mountedControlCleanup.delete(control);
     map.off("remove", cleanup);
-    control.onRemove(map as MapLibreMap);
+    try {
+      control.onRemove(map as MapLibreMap);
+    } catch (error) {
+      // A "remove" event fires after the engine has torn the map down (a
+      // renderer swap), so a control that touches the canvas in onRemove
+      // throws. That must not abort the map's own destroy; a panel close
+      // keeps the map alive, so there a throw is a real bug and propagates.
+      if (!event) throw error;
+    }
     container.replaceChildren();
     container.classList.remove("geolibre-docked-map-control");
+    if (event) onMapRemove?.();
   };
   // Unlike a floating control this bridge is not in MapLibre's internal
   // control list, so explicitly participate in map teardown as well as panel

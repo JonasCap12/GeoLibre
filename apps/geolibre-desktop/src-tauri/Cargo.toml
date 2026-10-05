@@ -1,6 +1,6 @@
 [package]
 name = "geolibre-desktop"
-version = "3.0.0"
+version = "3.2.0"
 description = "GeoLibre Desktop — lightweight cloud-native desktop GIS"
 authors = ["GeoLibre Contributors"]
 edition = "2021"
@@ -58,15 +58,21 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # the NDK.
 reqwest = { version = "0.12", default-features = false, features = [
   "blocking",
+  "cookies",
   "rustls-tls",
   "rustls-tls-native-roots",
 ] }
+# Base64 carries plugin HTTP bodies (plugin_http.rs) across the IPC boundary.
+base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
 # Pinned to 1.x on purpose: this must match the bincode version
 # `tauri-plugin-persisted-scope` uses to write its scope file, which
 # `PersistedScopeState` in src/lib.rs reads and rewrites. Dependabot is told to
@@ -86,7 +92,7 @@ reqwest = { version = "0.12", default-features = false, features = ["native-tls"
 # File-manager launches on Windows and Linux start a second process. Forward
 # its project path to the existing window instead of opening a second workspace.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 # Runtime WebKitGTK version check (already an indirect dep via tauri/wry).
 [target."cfg(target_os = \"linux\")".dependencies]
@@ -102,4 +108,17 @@ windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",
   "Win32_System_Threading",
+] }
+
+# OS credential store for tokens and API keys saved in Settings (issue #1667).
+# Desktop only: mobile keeps the webview's localStorage path. Pinned to 3.6.3:
+# 4.x moved to the keyring-core store API and needs Rust 1.88. `vendored`
+# builds libdbus from source, so Linux builds need no libdbus-1-dev.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+keyring = { version = "=3.6.3", features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "crypto-rust",
+  "vendored",
 ] }

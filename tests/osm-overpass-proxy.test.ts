@@ -5,12 +5,12 @@ import {
   MAX_ALL_QUERY_AREA_SQUARE_DEGREES,
   MAX_QUERY_AREA_SQUARE_DEGREES,
 } from "../packages/plugins/src/plugins/osm-downloader-api";
+import { tilesWorker } from "../workers/tiles/src/index";
 import {
   isAllowedOverpassQuery,
   OVERPASS_MAX_ALL_QUERY_AREA_SQUARE_DEGREES,
   OVERPASS_MAX_QUERY_AREA_SQUARE_DEGREES,
-  tilesWorker,
-} from "../workers/tiles/src/index";
+} from "../workers/tiles/src/overpass-query";
 
 const originalFetch = globalThis.fetch;
 
@@ -72,6 +72,29 @@ describe("Overpass edge proxy", () => {
     assert.equal(calls[0].input, "https://z.overpass-api.de/api/interpreter");
     assert.equal(calls[0].init?.method, "POST");
     assert.equal(calls[0].init?.body, body);
+    await response.text();
+  });
+
+  it("retries a transient primary failure on the fallback instance", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = async (input) => {
+      calls.push(String(input));
+      if (calls.length === 1) return new Response("Gateway Timeout", { status: 504 });
+      return new Response('{"elements":[]}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const body =
+      "data=" + encodeURIComponent(buildOsmDownloadQuery([0, 0, 1, 1], { preset: "roads" }));
+
+    const response = await tilesWorker.fetch(request(body), {}, {} as ExecutionContext);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [
+      "https://z.overpass-api.de/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter",
+    ]);
     await response.text();
   });
 

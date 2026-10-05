@@ -28,6 +28,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .conversion import router as conversion_router
 from .ml import router as ml_router
 from .ml import stop_child_server
+from .mssql import router as mssql_router
+from .pointcloud import router as pointcloud_router
 from .postgis import router as postgis_router
 from .raster import router as raster_router
 from .sql import router as sql_router
@@ -113,7 +115,9 @@ app.include_router(conversion_router)
 app.include_router(raster_router)
 app.include_router(vector_router)
 app.include_router(postgis_router)
+app.include_router(mssql_router)
 app.include_router(sql_router)
+app.include_router(pointcloud_router)
 app.include_router(ml_router)
 
 

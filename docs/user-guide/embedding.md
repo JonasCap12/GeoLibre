@@ -26,6 +26,7 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 | `loading`    | `loading=true` | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below. |
 | `data`       | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                           |
 | `style`      | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                            |
+| `stac`       | `stac=https://earth-search.aws.element84.com/v1/collections/naip` | Opens the STAC Catalogs browser connected to a STAC catalog, API, or API collection. A collection URL is searched on load, so its item footprints appear as a layer. See [Open a STAC catalog](#open-a-stac-catalog). |
 | `layout`     | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
 | `toolbar`    | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`. |
 | `panels`     | `panels=collapsed`                                         | Starts Layers and Style collapsed to their icon rails. Use `none` to hide all panels; `hidden`, `hide`, and `off` are aliases.         |
@@ -35,6 +36,7 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 | `theme`      | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.       |
 | `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`   | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. `settingUrl` is accepted as an alias. |
 | `tool`       | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool. |
+| `plugin`     | `plugin=swipe`                                             | Activates one or more built-in plugins, as if picked from the Plugins menu. See [Activate a plugin](#deep-linking-a-plugin). |
 
 !!! note "Private projects and data"
     `url=` and `data=` are fetched by the browser with same-origin credentials,
@@ -84,6 +86,46 @@ preselecting a tool or applying any parameters. A known id the current engine
 doesn't expose (WASM in the browser, the Python sidecar on desktop) likewise
 isn't preselected. Tool ids match the Processing menu — the same ids used across
 the [Whitebox toolbox](processing.md).
+
+### Deep-linking a plugin
+
+Use `plugin` to open the app with a built-in plugin already active, as if you
+had picked it from the **Plugins** menu:
+
+```text
+https://web.geolibre.app/?plugin=swipe
+```
+
+Name a plugin by its id (`maplibre-gl-time-slider`) or by its short name, the id
+without a `maplibre-gl-`, `maplibre-`, or `geolibre-` prefix (`time-slider`).
+Short names are case-insensitive. The
+[Plugins page](plugins.md#open-a-plugin-from-a-link) lists every link name. List
+several plugins with commas, or repeat the parameter:
+
+```text
+https://web.geolibre.app/?plugin=graticule,h3-grid
+```
+
+It combines with `url`: the plugin opens once the shared project has loaded, on
+top of the plugins the project itself turns on.
+
+```text
+https://web.geolibre.app/?url=https://share.geolibre.app/giswqs/3d-tiles.geolibre.json&plugin=swipe
+```
+
+A plugin from the official plugin registry works too, by its registry id
+(`?plugin=openrndt-geolibre`). An uninstalled compatible entry prompts for
+**Trust and load**; confirming trust does not bypass deployment plugin policy.
+A denied plugin will not load or activate. In read-only
+`layout=viewer` an installed registry plugin still opens, but the prompt is
+skipped and uninstalled ones are never installed. This is
+distinct from project manifest URL trust, whose prompt is suppressed when
+`sideload: false`. See [Plugin policy](../deployment-policy.md#plugin-precedence).
+
+Unknown names are ignored. A plugin that does not support the current renderer
+does not activate. Directions and reverse geocoding send what you click to a
+public server, so they only open from the menu, after their one-time notice. The
+drawing and editing plugins stay off in `layout=viewer`.
 
 ## Waiting for a screenshot
 
@@ -176,7 +218,7 @@ toolbar in a smaller space, or `maponly` for a pure map.
 
 ## Open remote data
 
-Use `data` to open public GeoJSON, GeoParquet, PMTiles, Cloud-Optimized GeoTIFF (COG), or a ZIP archive containing one or more `.geojson`/`.json` FeatureCollections. Each GeoJSON file in a ZIP becomes a separate layer. An optional `style` URL applies Mapbox/MapLibre style JSON to vector data:
+Use `data` to open public GeoJSON, GeoParquet, PMTiles, Cloud-Optimized GeoTIFF (COG), a LiDAR point cloud (LAS, LAZ, COPC, or an EPT `ept.json`), or a ZIP archive containing one or more `.geojson`/`.json` FeatureCollections. Each GeoJSON file in a ZIP becomes a separate layer. An optional `style` URL applies Mapbox/MapLibre style JSON to vector data:
 
 ```text
 https://web.geolibre.app/?data=https://assets.geolibre.app/data/places.geojson&style=https://assets.geolibre.app/data/sample.style.json
@@ -225,7 +267,19 @@ A public DEM COG can be tested directly:
 https://web.geolibre.app/?data=https://data.source.coop/giswqs/opengeos/dem.tif
 ```
 
-A plain `https://…` URL can be passed as-is, as above: `:` and `/` are legal in a query value and need no escaping. Encode the nested data and style URLs with `encodeURIComponent` only when they contain a character that would be read as GeoLibre's own query syntax — `&`, `+`, `%`, or `#`. A bare `=` inside the value is fine, since only the first `=` in each `&`-delimited pair separates the name from the value. Remote servers must permit browser cross-origin requests (CORS). COG, GeoParquet, and PMTiles servers should also support HTTP byte-range requests.
+A LiDAR point cloud opens in the LiDAR layer control. A COPC file (`.copc.laz`) or an EPT dataset (`ept.json`) streams the points in view on demand; a plain LAS or LAZ file is downloaded whole, and is refused if its server reports it larger than 250 MB (convert a larger file to COPC to stream it). A point cloud does not take a `style`:
+
+```text
+https://web.geolibre.app/?data=https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz
+```
+
+GeoLibre recognizes a point cloud from its URL path. An API endpoint whose path has no `.las`/`.laz` suffix, such as `https://api.example.com/download/42?token=…`, needs `dataType=lidar` to say what it returns. Like `style`, `dataType` pairs with `data` by position, so repeat it (leaving earlier values empty) in a batch. A hinted endpoint is downloaded whole, since COPC streaming is chosen only for a `.copc.` URL. An access token passed in the query string is kept on every request, including the byte-range reads of a streamed COPC file; encode the whole `data` value when the endpoint has more than one query parameter:
+
+```text
+https://web.geolibre.app/?data=https%3A%2F%2Fapi.example.com%2Fdownload%2F42%3Ftoken%3Dabc%26expires%3D3600&dataType=lidar
+```
+
+A plain `https://…` URL can be passed as-is, as above: `:` and `/` are legal in a query value and need no escaping. Encode the nested data and style URLs with `encodeURIComponent` only when they contain a character that would be read as GeoLibre's own query syntax — `&`, `+`, `%`, or `#`. A bare `=` inside the value is fine, since only the first `=` in each `&`-delimited pair separates the name from the value. Remote servers must permit browser cross-origin requests (CORS). COG, GeoParquet, PMTiles, and COPC servers should also support HTTP byte-range requests.
 
 For a COG, `style` may point to a raster style JSON object. Supported fields are `mode` (`single`, `rgb`, or `index`), 1-based `bands`, `rescale` ranges, `colormap`, `reversed`, `nodata`, `opacity`, `gamma`, `stretch` (`linear`, `log`, or `sqrt`), and the normalized-difference `index` preset. For example:
 
@@ -254,6 +308,18 @@ For a ZIP containing files of the same geometry type, assign different styles by
 You do not need to author that JSON by hand. Open the vector layer's **Layer actions → Styles → Export GeoLibre URL style** menu. The downloaded `.geolibre.style.json` contains only symbology—not feature data—and its render-layer `source` is already set to the original GeoJSON filename stem. Host the file on a CORS-enabled server and pass its URL as `style` alongside the corresponding `data` URL. For a multi-file ZIP, export each layer's GeoLibre URL style and combine their `layers` and `sources` into one style document; layers without `source` can be used for rules shared by every ZIP member.
 
 The same file can be applied interactively to an existing vector layer through **Layer actions → Styles → Import style from file (GeoLibre URL / Mapbox GL / SLD / QML)…**. Interactive import ignores the file's query-param `source` binding and applies its supported symbology to the layer you selected, so the data filename does not need to match.
+
+## Open a STAC catalog
+
+Use `stac` to open the **STAC Catalogs** browser already connected to a catalog. It accepts a static catalog, the root of a STAC API, or one collection of a STAC API:
+
+```text
+https://web.geolibre.app/?stac=https://earth-search.aws.element84.com/v1/collections/naip
+```
+
+A collection URL (`…/collections/{id}`) connects to the API it belongs to, found through the collection's `root` link, selects that collection, and runs a search on it. The map fits the collection's extent and the matching item footprints are added as a **STAC search footprints** layer. From the result list you can then add an item's assets (COG, GeoJSON, GeoParquet, PMTiles, or Zarr) as layers. A catalog or API root only connects, leaving the search to you.
+
+Percent-encode the value with `encodeURIComponent` when the STAC URL carries its own query string. The server must allow cross-origin browser requests (CORS). The browser is a side panel, so `stac` has no effect in `layout=viewer` (which cannot add layers), and its panel is hidden by `maponly` or `panels=none`.
 
 ### An "Open in GeoLibre" badge
 
@@ -323,24 +389,38 @@ map.on("selectionChanged", ({ featureIds }) => console.log(featureIds));
 
 ### Enabling it
 
-The API is **off by default**: a public deployment can never be driven by the
-page that frames it. Turn it on by naming the origins you trust. For the Docker
-image, that is one environment variable:
+The API is **off by default**. The primary configuration is
+`sharing.embedOrigins` in [`deployment.json`](../deployment-policy.md). For
+example:
+
+```json
+{
+  "version": 1,
+  "sharing": {
+    "embedOrigins": ["https://portal.example.com", "https://erp.example.com"]
+  }
+}
+```
+
+For Docker, `GEOLIBRE_EMBED_ORIGINS` overrides the policy at container startup:
 
 ```bash
 docker run --rm -p 8080:80 \
   -e GEOLIBRE_EMBED_ORIGINS="https://portal.example.com,https://erp.example.com" \
-  ghcr.io/opengeos/geolibre:latest
+  geolibre-policy:local
 ```
 
-For a static build, bake it in instead:
-`VITE_GEOLIBRE_EMBED_ORIGINS="https://portal.example.com" npm run build`.
+For a static build, the legacy `VITE_GEOLIBRE_EMBED_ORIGINS` build setting is
+still honoured as a fallback. Policy origins are exact `scheme://host[:port]`
+values; the JSON schema does not accept trailing paths. The environment inputs
+retain their existing trailing-path normalization.
 
-Entries are origins (`scheme://host[:port]`); a trailing path is ignored. `*`
-allows any origin and is only appropriate on a private network. The allowlist is
-enforced in both directions: a message from an unlisted origin is ignored, and
-every message the app sends is addressed to a listed origin. (With `*`
-configured, outbound messages are addressed to `*` until the host's first
+`sharing.embedOrigins` entries are exact origins (`scheme://host[:port]`) with
+no trailing path; `*` allows any origin and is only appropriate on a private
+network. The legacy environment inputs retain trailing-path normalization. The
+allowlist is enforced in both directions: a message from an unlisted origin is
+ignored, and every message the app sends is addressed to a listed origin. (With
+`*` configured, outbound messages are addressed to `*` until the host's first
 message identifies it, which is one more reason to name your origins.)
 
 Setting the allowlist also narrows the `?embed=1` project/scripting bridges (used
@@ -350,12 +430,12 @@ you can stop other sites from framing the app at all by adding
 
 The allowlist decides *who* may send commands. To narrow *which* commands exist
 at all — so a trusted host page still cannot turn the embed into a
-general-purpose data-fetching proxy — build with
-[deployment capabilities](../deployment-capabilities.md). A denied command
-rejects with `Missing <capability> capability` rather than silently doing
-nothing: `loadProject` needs `project:edit`, `addLayer` and `addData` need
-`data:add`, `openTool` needs `processing:run`, and `exportImage` needs
-`export:data`. The rest — `setView`, `highlight`, layer visibility — are
+general-purpose data-fetching proxy — configure
+[deployment capabilities](../deployment-capabilities.md) in the runtime
+policy. A denied command rejects with `Missing <capability> capability` rather
+than silently doing nothing: `loadProject` needs `project:edit`, `addLayer` and
+`addData` need `data:add`, `openTool` needs `processing:run`, and `exportImage`
+needs `export:data`. The rest — `setView`, `highlight`, layer visibility — are
 unprivileged and always available.
 
 ### The typed client
@@ -549,8 +629,9 @@ await client.setRenderer("cesium");
 const renderer = await client.getRenderer();
 ```
 
-Both methods accept or return `"maplibre"` or `"cesium"`. The change event reports
+Both methods accept or return `"maplibre"`, `"mapbox"`, `"cesium"`, or
+`"arcgis"`. The change event reports
 the selected renderer. `setRenderer` acknowledges the selection; the new canvas
 mounts asynchronously. Wait for the next `ready` event before issuing camera or
-capture commands. `exportImage()` supports either renderer and waits for its
+capture commands. `exportImage()` supports all four renderers and waits for the
 visible layers to settle before returning a PNG data URL.

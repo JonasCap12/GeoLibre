@@ -177,6 +177,8 @@ function renderDeckVizLayers(): void {
   // either engine's globe projection, so force Mercator while deck layers are
   // shown (same contract as the DuckDB deck overlay). `getMap` is MapLibre-only;
   // on the Mapbox renderer the overlay is bound to the Mapbox map instead.
+  // ArcGIS hosts deck.gl itself; a null map skips the projection switch.
+  // engine-audit-allow: arcgis-null-map
   const map = appRef.getMap?.() ?? appRef.getMapboxMap?.() ?? null;
   ensureMercatorProjection(map);
 
@@ -236,7 +238,11 @@ function renderDeckVizLayers(): void {
             currentTime,
           }),
         );
-      } else if (appRef.getMapRenderer?.() !== "arcgis" && isElevation3dLayer(layer)) {
+      } else if (
+        // eslint-disable-next-line local/no-renderer-kind-checks -- the ArcGIS deck bridge cannot draw elevation layers
+        appRef.getMapRenderer?.() !== "arcgis" &&
+        isElevation3dLayer(layer)
+      ) {
         deckLayers.push(...buildElevation3dLayers(deckGL, layer));
       }
     } catch (error) {

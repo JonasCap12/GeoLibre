@@ -365,6 +365,29 @@ def test_add_pmtiles(m):
     assert layer["metadata"]["sourceLayers"] == ["roads"]
 
 
+def test_add_lidar(m):
+    layer_id = m.add_lidar("https://example.com/data/autzen.copc.laz?token=1")
+    layer = next(item for item in m.project["layers"] if item["id"] == layer_id)
+    assert layer["type"] == "lidar"
+    # The default name is the file name, without the query string.
+    assert layer["name"] == "autzen.copc.laz"
+    assert layer["sourcePath"] == "https://example.com/data/autzen.copc.laz?token=1"
+    assert m.add_lidar("https://example.com/cloud/", name="Mine") != layer_id
+    assert m.project["layers"][-1]["name"] == "Mine"
+    trailing = m.add_lidar("https://example.com/ept/")
+    assert next(i for i in m.project["layers"] if i["id"] == trailing)["name"] == "ept"
+
+
+def test_point_cloud_annotations_empty_by_default(m):
+    assert m.point_cloud_annotations() == {
+        "labels": {},
+        "instances": {},
+        "boxes": [],
+        "vectors": [],
+        "classes": [],
+    }
+
+
 def test_add_3d_tiles(m):
     m.add_3d_tiles("https://e/tileset.json", altitude_offset=5)
     layer = _last_layer(m)
@@ -1153,6 +1176,15 @@ def test_add_legend_from_dict(m):
     ]
 
 
+def test_set_map_legend(m):
+    m.set_map_legend("Cases per 100k", position="bottom-right", collapsed=True)
+    legend = m.project["legend"]
+    assert legend["title"] == "Cases per 100k"
+    assert legend["panelPosition"] == "bottom-right"
+    assert legend["panelVisible"] is True
+    assert legend["panelCollapsed"] is True
+
+
 def test_add_legend_from_labels_and_colors(m):
     m.add_legend(labels=["a", "b"], colors=["#111", "#222"], shape="circle")
     items = _components(m)["legend"]["legends"][0]["items"]
@@ -1391,6 +1423,36 @@ def test_add_markers_popup_and_tooltip_land_on_the_layer(m):
 def test_add_geojson_also_accepts_a_popup(m):
     m.add_geojson({"type": "FeatureCollection", "features": []}, popup="name")
     assert _last_layer(m)["popup"] == {"fields": [{"field": "name"}]}
+
+
+def test_add_markers_accepts_the_popup_size_shorthands(m):
+    m.add_markers(
+        [{"lng": -122.9, "lat": 47.0, "name": "Olympia", "photo": "https://x.test/a.jpg"}],
+        popup=["name", {"field": "photo", "kind": "image"}],
+        popup_max_width=480,
+        popup_image_height=320,
+    )
+    layer = _last_layer(m)
+    assert layer["popup"]["maxWidth"] == 480
+    assert layer["popup"]["imageHeight"] == 320
+    # The sizes are popup keys, not style keys; left in the style the app would
+    # never read them.
+    assert "popup_max_width" not in layer["style"]
+    assert "popup_image_height" not in layer["style"]
+
+
+def test_popup_size_shorthand_works_without_a_popup_argument(m):
+    m.add_markers([(-100, 40)], popup_max_width=480)
+    assert _last_layer(m)["popup"] == {"maxWidth": 480}
+
+
+def test_set_popup_records_the_sizes(m):
+    layer_id = m.add_markers([(-100, 40)], popup=["a"])
+    m.set_popup(layer_id, max_width=600, image_height=400, merge=True)
+    popup = m.get_layer(layer_id).popup
+    assert popup["maxWidth"] == 600
+    assert popup["imageHeight"] == 400
+    assert popup["fields"] == [{"field": "a"}]
 
 
 def test_set_popup_replaces_the_config(m):

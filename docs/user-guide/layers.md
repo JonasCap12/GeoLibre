@@ -2,13 +2,19 @@
 
 The **Layers panel** on the left lists every layer in the project, from the topmost drawing layer down to the basemap. Selecting a layer here drives the [Style panel](styling.md) and the [Attribute table](attribute-table.md).
 
+The on-map **Layer Control** also lists project layers, including ones currently hidden or still loading, nested under the same [layer groups](#layer-groups) as the left panel. Its checkboxes, opacity sliders, and group folders mirror the same settings as the left panel, and dragging a layer or using its right-click **Move** actions reorders the project's layers.
+
 ![The Layers panel: a group, two vector layers with the selected one's action buttons expanded, and the basemap at the bottom](https://assets.geolibre.app/images/geolibre-layers-panel.webp)
 
 ## Layer order and visibility
 
 - **Visibility**: click the eye button to show or hide a layer. The **Hide all layers** button at the top of the panel hides every layer at once.
-- **Order**: drag a layer to reorder it, or use the move up and move down actions. Layers higher in the list draw on top. The basemap (**Background**) always stays at the bottom.
+- **Order**: drag the grip handle beside a layer's name onto another layer to reorder it, or use the move up and move down actions. Layers higher in the list draw on top. The basemap (**Background**) always stays at the bottom. Layer-handle drags stay inside the panel; dropping files from Finder into the desktop app remains a separate data-import action.
 - **Opacity**: each layer has an opacity slider from 0 to 100 percent.
+
+## Hover tooltips
+
+When at least one layer shows a [hover tooltip](styling.md#popups-and-hover-tooltips), the Layers panel (and the read-only viewer) shows a **Hover tooltips** checkbox. Untick it to pause every layer's hover tip while you explore the map or inspect attributes; tick it again to bring them back with the same per-layer choices and fields. This is a viewing switch only: it does not change or dirty the saved project, and it turns back on when a project opens.
 
 ## Blend modes
 
@@ -109,7 +115,7 @@ The **Layer actions** menu (the `…` button) holds everything else:
 | **Select features** | The interactive selection modes: by click, rectangle, polygon, freehand, or radius, plus **Clear Selection**. Hold `Shift` to add, `Alt` to remove, `Shift`+`Alt` to intersect, and `Esc` to cancel. |
 | **Select by Expression…** / **Select by Location…** | Build a selection from an attribute expression or a spatial relationship. Select by Expression can also apply the expression as a persistent layer filter, hiding non-matching features without creating a new layer. Both are also on the [Edit menu](interface.md#the-top-toolbar). |
 | **Bind to Time Slider…** | Drive the Time Slider from one of this layer's date or number fields. |
-| **Export** | Write the layer out as GeoJSON, GeoParquet, GeoPackage, KML, KMZ, zipped Shapefile, or CSV (attributes only). |
+| **Export** | Write the layer out as GeoJSON, GeoParquet, GeoPackage, KML, KMZ, zipped Shapefile, or CSV (attributes only). A polygon layer drawn as a 3D extrusion can also be exported as a 3D model (glTF `.glb`, OBJ, or STL) for Blender and other 3D tools. See [3D model export](#3d-model-export). |
 | **Styles** | Import and export symbology — see [below](#importing-and-exporting-styles). |
 | **Save to My Data** | Store the fully configured layer in your personal library, ready to re-add from the [Browser panel](adding-data.md#the-browser-panel) in any later project. |
 | **Copy style** / **Paste style** | Carry symbology from one layer to another. |
@@ -136,6 +142,16 @@ https://web.geolibre.app/?data=https://assets.geolibre.app/data/places.geojson&s
 
 See [Embedding & Sharing](embedding.md#open-remote-data) for GeoParquet and PMTiles deep links, ZIP source matching, REST API responses, raster-style JSON, and encoding nested URLs.
 
+### 3D model export
+
+When a polygon layer's **Visualization** is set to **3D extrusion** in the Style panel, **Layer actions → Export** also offers **3D model: glTF (.glb)**, **3D model: OBJ**, and **3D model: STL**. Each feature becomes a closed solid (floor, walls, and roof) with the height, base, and color the map draws. Categorized, graduated, and expression-based colors and heights come through as drawn.
+
+- **glTF (.glb)** keeps one named object per feature with its attributes as custom properties, and one material per color. Blender opens it with **File → Import → glTF 2.0**.
+- **OBJ** keeps one object per feature and stores colors on the vertices.
+- **STL** writes one uncolored mesh, for 3D printing and CAD tools.
+
+Coordinates are in meters around the center of the layer. glTF and OBJ use Y as the up axis, and STL uses Z. The glTF file stores the longitude and latitude of that center on its root object. Features whose height is not above the extrusion base, or that have no area, are skipped, and a notice says how many.
+
 ## Layer groups
 
 Groups are folders in the layer stack. They can nest, so a project can carry a real hierarchy rather than one flat list.
@@ -143,8 +159,10 @@ Groups are folders in the layer stack. They can nest, so a project can carry a r
 - **Create**: **New group** adds an empty folder. **New group from layer** wraps the layer you are on, and **New group from selected layers** wraps a multi-selection.
 - **Fill**: **Move to group** moves one layer, **Move selected layers to group** moves a whole selection in one step (keeping their relative order), and **Add data to group** opens Add Data with the new layer targeted at that group.
 - **Organize**: rename a group, collapse or expand it, move it up or down, and set a group-level opacity that applies to everything inside.
+- **Sort**: **Sort A to Z** and **Sort Z to A** order a group's contents by name, top of the list first. Numbers sort naturally (Parcel 2 before Parcel 10) and case is ignored. Subgroups are sorted among themselves and move with everything inside them, while the group's own layers stay together as one block. Undo restores the previous order.
 - **Visibility**: hiding a group hides its layers. A layer inside a hidden group is marked *Hidden because its group is not visible*, so you can tell it apart from a layer you turned off yourself.
 - **Remove**: **Ungroup (keep layers)** dissolves the folder and leaves its layers in place; **Delete group and layers** removes both.
+- **On-map Layer Control**: groups appear there as collapsible folders with their own checkbox and opacity slider, and toggling, fading, or collapsing a group in either place updates the other. A layer dragged or moved there stays inside its own group. A group's own layers always sit together, with its subgroups above or below them, so a move that would split them (one layer above a subgroup while its siblings stay below) is not applied and the layer returns to its place.
 
 Groups and their nesting are saved with the project, and [importing a QGIS project](projects.md#importing-a-qgis-project) brings that project's group tree across.
 

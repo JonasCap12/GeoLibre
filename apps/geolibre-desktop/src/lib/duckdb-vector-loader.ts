@@ -1,5 +1,6 @@
-import * as duckdb from "@duckdb/duckdb-wasm";
-import type { Feature, FeatureCollection, Geometry } from "geojson";
+import type * as duckdb from "@duckdb/duckdb-wasm";
+import type { FeatureCollection, Geometry, Position } from "geojson";
+import { rowsFromResult } from "./arrow-decimal";
 import { isGeographicCrs } from "./crs-utils";
 import {
   detectGeometryColumn,
@@ -8,7 +9,6 @@ import {
   isGenericUnsupportedWkbError,
   isGeometryColumnType,
   isUnsupportedSurfaceWkbError,
-  normalizePropertyValue,
   quoteIdentifier,
   quoteSqlString,
   stripAutoFidColumn,
@@ -23,12 +23,14 @@ import {
   readGeoParquetGeoMetadata,
 } from "./geoparquet-crs";
 import { parseGeoParquetMetadata } from "./geoparquet-metadata";
+import { parquetKeyValueMetadataOption } from "./parquet-kv-metadata";
 import {
   confirmLargeDataset,
   shouldUseDxfFallback,
   type DuckDbVectorLoadOptions,
 } from "./duckdb-vector-guard";
 import { readDxfCodepage, recodeCadFeatureCollection } from "./cad-encoding";
+import { featureCollectionFromBatches } from "./duckdb-feature-batches";
 import { dwgReleaseLabel, readDwgSupport } from "./dwg-version";
 import { ensureGpkgFeatureCount } from "./gpkg-ogr-contents";
 import { isLikelyGeoPackage, loadGeoPackageVectorFile } from "./gpkg-reader";
@@ -57,11 +59,6 @@ const EXPORT_GEOPARQUET_EXTENSION = "parquet";
 const FEATURE_COUNT_COLUMN = "__geolibre_feature_count";
 
 let dbPromise: Promise<duckdb.AsyncDuckDB> | null = null;
-
-interface DuckDbRow {
-  toJSON?: () => Record<string, unknown>;
-  [key: string]: unknown;
-}
 
 export interface DuckDbVectorFile {
   name: string;
@@ -338,12 +335,14 @@ export async function ensureIcebergExtension(
 }
 
 async function createDatabase(): Promise<duckdb.AsyncDuckDB> {
+  // The DuckDB-WASM JS (~0.4 MB) loads with the first database, not at startup.
+  const { AsyncDuckDB, ConsoleLogger, LogLevel } = await import("@duckdb/duckdb-wasm");
   const bundle = await selectDuckDbBundle();
   // Not `new Worker(bundle.mainWorker)`: a CDN-loaded bundle needs a same-origin
   // blob shim, so each bundles variant supplies its own worker factory.
   const worker = createDuckDbWorker(bundle);
-  const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
-  const db = new duckdb.AsyncDuckDB(logger, worker);
+  const logger = new ConsoleLogger(LogLevel.WARNING);
+  const db = new AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   // Open the database so its runtime/filesystem config is initialised. Without
   // this, locally registered buffers still read, but remote HTTP reads fail
@@ -358,11 +357,12 @@ function exportBaseName(): string {
   return `__geolibre_export_${Date.now()}_${suffix}`;
 }
 
-export function rowsFromResult(result: { toArray: () => DuckDbRow[] }) {
-  return result
-    .toArray()
-    .map((row) => (typeof row.toJSON === "function" ? row.toJSON() : { ...row }));
-}
+/**
+ * Read a DuckDB-WASM Arrow result into plain row objects keyed by column name.
+ * Lives in `arrow-decimal.ts` (re-exported here) so it can be tested without
+ * loading DuckDB-WASM.
+ */
+export { rowsFromResult };
 
 function isParquetExtension(extension: string): boolean {
   return extension === "parquet" || extension === "geoparquet";
@@ -571,35 +571,40 @@ async function readSourceCrs(
   return wkt || prjCrs;
 }
 
-function toFeatureCollection(
-  rows: Record<string, unknown>[],
+/**
+ * Run a `SELECT *, ST_AsGeoJSON(...) AS <GEOMETRY_JSON_COLUMN>` query and build
+ * its FeatureCollection batch by batch, so a large result does not hold the
+ * main thread in one task (#2858).
+ *
+ * The result is streamed (`send(sql, true)`): DuckDB produces one ~2048-row
+ * chunk per fetch, and each fetch is a round trip to its worker that lets the
+ * event loop run, while duckdb-feature-batches.ts slices any chunk that still
+ * runs long. Measured on 200k GeoParquet points this took the longest
+ * main-thread task from ~0.7 s to under the 50 ms long-task threshold in most
+ * runs. A fully materialized `query()` converted batch by batch still left
+ * 0.2-0.4 s tasks, and the non-streaming `send()` rejected with an empty error
+ * on a registered Parquet file in the pinned duckdb-wasm build.
+ */
+async function queryFeatureCollection(
+  connection: duckdb.AsyncDuckDBConnection,
+  sql: string,
   geometryColumn?: string,
-): FeatureCollection<Geometry | null> {
-  const features = rows.map((row) => {
-    const rawGeometry = row[GEOMETRY_JSON_COLUMN];
-    // ST_AsGeoJSON returns SQL NULL for rows with missing/NULL geometries.
-    // GeoJSON Features may legally have a null geometry, so keep the row.
-    const geometry = typeof rawGeometry === "string" ? (JSON.parse(rawGeometry) as Geometry) : null;
-    const properties: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(row)) {
-      if (key === GEOMETRY_JSON_COLUMN || key === geometryColumn || value instanceof Uint8Array) {
-        continue;
-      }
-      properties[key] = normalizePropertyValue(value);
-    }
-
-    return {
-      type: "Feature",
-      geometry,
-      properties,
-    } satisfies Feature<Geometry | null>;
-  });
-
-  return {
-    type: "FeatureCollection",
-    features,
-  };
+): Promise<FeatureCollection<Geometry | null>> {
+  try {
+    const reader = await connection.send(sql, true);
+    return await featureCollectionFromBatches(reader, {
+      geometryJsonColumn: GEOMETRY_JSON_COLUMN,
+      geometryColumn,
+    });
+  } catch (error) {
+    // A stream that failed part-way may still be pending on the connection;
+    // cancel it so the caller's fallback (or close) starts from a clean slate.
+    // Best-effort and not awaited, so a cancel that never settles cannot hold
+    // back the original error; the worker handles requests in order, so it
+    // still lands before the caller's close.
+    void connection.cancelSent().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function validateDetectedGeometry(
@@ -865,17 +870,16 @@ async function readVectorFileWithGdal(
       }
 
       const geometryJsonSql = geometryGeoJsonSql(geometryExpr(detected), sourceCrs);
-      const result = await connection.query(
+      const collection = await queryFeatureCollection(
+        connection,
         `SELECT *, ${geometryJsonSql} AS ${quoteIdentifier(
           GEOMETRY_JSON_COLUMN,
         )} FROM (${sql}) AS data`,
+        detected.column,
       );
       // Features may carry a null geometry; the app's layer model treats them
       // as a regular FeatureCollection and the map ignores null geometries.
-      return recodeCadFeatureCollection(
-        toFeatureCollection(rowsFromResult(result), detected.column) as FeatureCollection,
-        dxfCodepage,
-      );
+      return recodeCadFeatureCollection(collection as FeatureCollection, dxfCodepage);
     } catch (error) {
       // DuckDB Spatial's WKB reader rejects surface geometries (TIN /
       // PolyhedralSurface), which its bundled GDAL emits for ESRI MultiPatch
@@ -1140,16 +1144,69 @@ export async function reprojectFeatureCollectionToWgs84(
     // Pass the CRS parsed from the `crs` member explicitly rather than relying
     // on ST_Read_Meta, which does not surface a legacy GeoJSON CRS member.
     const geometryJsonSql = geometryGeoJsonSql(geometryExpr(detected), sourceCrs);
-    const result = await connection.query(
+    return (await queryFeatureCollection(
+      connection,
       `SELECT *, ${geometryJsonSql} AS ${quoteIdentifier(
         GEOMETRY_JSON_COLUMN,
       )} FROM (${sql}) AS data`,
-    );
-    return toFeatureCollection(rowsFromResult(result), detected.column) as FeatureCollection;
+      detected.column,
+    )) as FeatureCollection;
   } finally {
     await connection.close();
     await dropFilesIfPresent(db, [sourceFile]);
   }
+}
+
+/**
+ * Reproject a bare coordinate list to WGS84 (EPSG:4326), preserving order,
+ * length, and any Z value.
+ *
+ * The positions travel as the parts of a single `MultiPoint` so the engine pays
+ * the per-row cost of its GeoJSON round-trip once instead of once per feature.
+ * Callers that hold geometry which reuses the same vertex many times (a TIN
+ * surface, where each point belongs to ~6 triangles) should deduplicate first
+ * and rebuild from the result, so the transform scales with the real vertex
+ * count rather than the coordinate count.
+ *
+ * Every position must have the same number of ordinates. GDAL's GeoJSON reader
+ * gives one `MultiPoint` a single dimension and pads the short parts, so mixing
+ * `[x, y]` with `[x, y, z]` would hand back a fabricated `z` of 0 for the 2D
+ * ones. Batch each dimension separately rather than relaxing this.
+ *
+ * @param positions Coordinates in `sourceCrs`, all `[x, y]` or all `[x, y, z]`.
+ * @param sourceCrs Source CRS as `AUTHORITY:CODE` or WKT, as ST_Transform accepts.
+ * @returns The same coordinates, in the same order, as WGS84 lon/lat.
+ * @throws If the positions do not all have the same dimension.
+ */
+export async function reprojectPositionsToWgs84(
+  positions: Position[],
+  sourceCrs: string,
+): Promise<Position[]> {
+  if (positions.length === 0) return [];
+  const dimension = positions[0].length;
+  if (positions.some((position) => position.length !== dimension)) {
+    throw new Error(
+      "reprojectPositionsToWgs84 requires every position to have the same dimension.",
+    );
+  }
+  const reprojected = await reprojectFeatureCollectionToWgs84(
+    {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: { type: "MultiPoint", coordinates: positions },
+        },
+      ],
+    },
+    sourceCrs,
+  );
+  const geometry = reprojected.features[0]?.geometry;
+  if (!geometry || geometry.type !== "MultiPoint") {
+    throw new Error("Reprojection did not return the expected coordinate list.");
+  }
+  return geometry.coordinates;
 }
 
 async function dropFilesIfPresent(db: duckdb.AsyncDuckDB, fileNames: string[]): Promise<void> {
@@ -1289,7 +1346,19 @@ export async function convertDuckDbVectorToGeoParquet(
   }
 }
 
-export async function exportDuckDbGeoParquet(geojson: FeatureCollection): Promise<Uint8Array> {
+/**
+ * Write a FeatureCollection to GeoParquet with DuckDB Spatial.
+ *
+ * @param geojson - The features to write.
+ * @param keyValueMetadata - Extra Parquet key-value metadata for the file
+ *   footer (e.g. the layer's descriptive metadata), written beside the `geo`
+ *   key the GeoParquet writer adds.
+ * @returns The Parquet file bytes.
+ */
+export async function exportDuckDbGeoParquet(
+  geojson: FeatureCollection,
+  keyValueMetadata?: Record<string, string>,
+): Promise<Uint8Array> {
   const db = await getDatabase();
   const connection = await db.connect();
   const baseName = exportBaseName();
@@ -1302,7 +1371,9 @@ export async function exportDuckDbGeoParquet(geojson: FeatureCollection): Promis
     await connection.query(
       `COPY (SELECT * FROM ST_Read(${quoteSqlString(
         sourceFile,
-      )})) TO ${quoteSqlString(outputFile)} (FORMAT PARQUET)`,
+      )})) TO ${quoteSqlString(outputFile)} (FORMAT PARQUET${parquetKeyValueMetadataOption(
+        keyValueMetadata,
+      )})`,
     );
     await db.flushFiles();
     return await db.copyFileToBuffer(outputFile);

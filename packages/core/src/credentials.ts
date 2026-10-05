@@ -1,3 +1,4 @@
+import { isHeaderReferenceOnly } from "./header-references";
 import type { GeoLibreProject, LayerConnection } from "./types";
 
 /**
@@ -57,6 +58,16 @@ export const PUBLISHABLE_PLUGIN_SETTINGS: Readonly<Record<string, readonly strin
   // the COG/mosaic/tiles for a recipient. The retained blob is still passed
   // through redactConfigurationValue below, including every source URL.
   "maplibre-gl-time-slider": null,
+  // Feed toggles (one boolean per feed) plus a numeric clock speed — no URLs,
+  // no keys, nothing user-authored. Listed as a whole blob rather than by key
+  // because the feed set grows with every new feed; an enumerated list would
+  // silently start counting each new toggle as a credential, which is the bug
+  // this entry fixes. Still swept by redactConfigurationValue below.
+  "gods-eye-view": null,
+  // Point class edits keyed by (node key, index): compressed numbers, no
+  // user text. Source URLs are values, so the sweep below still scrubs a
+  // credentialed one.
+  "geolibre-point-cloud-annotation": null,
 };
 
 export interface CredentialRedactionResult {
@@ -204,6 +215,17 @@ function isCredentialParam(name: string): boolean {
   );
 }
 
+/**
+ * Whether a URL query-parameter name carries a credential. This is the wider of
+ * the two registries (see `URL_CREDENTIAL_PARAMS`). Exported so a caller that
+ * must leave the parameter in place — the native diagnostics log rewrites its
+ * value to `[redacted]` rather than dropping the pair — shares this registry
+ * instead of keeping a second, narrower list that can drift from it.
+ */
+export function isCredentialUrlParam(name: string): boolean {
+  return isCredentialParam(name);
+}
+
 function redactParameterString(value: string): string {
   return value
     .split("&")
@@ -286,6 +308,27 @@ function redactConfigurationValue(
   const result: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
     const nestedPath = path ? `${path}.${key}` : key;
+    const normalizedKey = normalizeCredentialName(key);
+    if (
+      (normalizedKey === "requestheaders" || normalizedKey === "headers") &&
+      isPlainObject(nested)
+    ) {
+      // `Bearer ${TOKEN}` names a variable instead of carrying a secret, so it
+      // survives; any other header value is dropped. Mirrors `_redact_config`
+      // in python/src/geolibre/project.py.
+      const kept: Record<string, string> = {};
+      const removed: Record<string, unknown> = {};
+      for (const [name, headerValue] of Object.entries(nested)) {
+        if (typeof headerValue === "string" && isHeaderReferenceOnly(headerValue)) {
+          kept[name] = headerValue;
+        } else {
+          removed[name] = headerValue;
+        }
+      }
+      if (Object.keys(removed).length > 0) recordRedaction(accumulator, nestedPath, removed);
+      if (Object.keys(kept).length > 0) result[key] = kept;
+      continue;
+    }
     if (isCredentialFieldName(key)) {
       recordRedaction(accumulator, nestedPath, nested);
       continue;
@@ -307,6 +350,49 @@ function countLeafValues(value: unknown): number {
 }
 
 /**
+ * Settings keys that registry-listed external plugins declared publishable,
+ * keyed by plugin id. `null` keeps the whole blob. Populated at runtime by the
+ * host from the curated plugin registry, never from the project file itself,
+ * so a project cannot vouch for its own state. The Python mirror in
+ * `python/src/geolibre/project.py` only knows the static built-in list, so a
+ * project redacted there still drops these plugins' state.
+ */
+const registryPublishableSettings = new Map<string, readonly string[] | null>();
+
+/**
+ * Replace the registry-declared publishable plugin settings.
+ *
+ * Built-in ids in {@link PUBLISHABLE_PLUGIN_SETTINGS} always win, so a registry
+ * entry cannot widen a first-party plugin's allowlist.
+ *
+ * @param entries Plugin ids mapped to the settings keys to keep, or `null` to
+ *   keep the whole blob. Ids that declare nothing should be omitted.
+ */
+export function setRegistryPublishableSettings(
+  entries: Iterable<readonly [string, readonly string[] | null]>,
+): void {
+  registryPublishableSettings.clear();
+  for (const [id, keys] of entries) {
+    if (Object.prototype.hasOwnProperty.call(PUBLISHABLE_PLUGIN_SETTINGS, id)) continue;
+    registryPublishableSettings.set(id, keys);
+  }
+}
+
+/**
+ * Look up the publishable settings for a plugin id.
+ *
+ * @param id Plugin id.
+ * @returns `undefined` when nothing is publishable, `null` to keep the whole
+ *   blob, otherwise the list of keys to keep.
+ */
+function publishableSettingsFor(id: string): readonly string[] | null | undefined {
+  if (Object.prototype.hasOwnProperty.call(PUBLISHABLE_PLUGIN_SETTINGS, id)) {
+    return PUBLISHABLE_PLUGIN_SETTINGS[id];
+  }
+  return registryPublishableSettings.get(id);
+}
+
+/**
  * Return a detached project safe for any external egress.
  *
  * Environment variables and geocoder keys are always removed. Layer
@@ -318,7 +404,9 @@ function countLeafValues(value: unknown): number {
  * and carries no credentials, and dropping it stripped the legend, colorbar,
  * and swipe from the exported map. Manifest URLs, activation, and control
  * positions stay intact so recipients can still load and configure the plugin
- * themselves.
+ * themselves. A registry-listed external plugin can opt in through the
+ * `publishableSettings` field of its registry entry (see
+ * {@link setRegistryPublishableSettings}); what it keeps is still swept below.
  */
 export function redactProjectCredentials(project: GeoLibreProject): CredentialRedactionResult {
   const accumulator: RedactionAccumulator = {
@@ -360,15 +448,24 @@ export function redactProjectCredentials(project: GeoLibreProject): CredentialRe
   const preferences = project.preferences
     ? {
         ...project.preferences,
-        environmentVariables: [],
+        // Only rows explicitly marked non-secret travel; everything else is
+        // treated as a credential.
+        environmentVariables: (project.preferences.environmentVariables ?? []).filter(
+          (variable) => variable.secret === false,
+        ),
         geocoding,
         ...(redactedMapboxStyleUrl !== mapboxStyleUrl
           ? { map: { ...project.preferences.map, mapboxStyleUrl: redactedMapboxStyleUrl } }
           : {}),
       }
     : project.preferences;
+  // A secret row with an empty value carries nothing (desktop keeps the value
+  // in the keychain), so it must not count toward the save prompt. A populated
+  // row with no name still needs an explicit keep/strip choice.
   const populatedEnvironmentVariables =
-    project.preferences?.environmentVariables?.filter((variable) => variable.key.trim()) ?? [];
+    project.preferences?.environmentVariables?.filter(
+      (variable) => variable.secret !== false && variable.value !== "",
+    ) ?? [];
   if (populatedEnvironmentVariables.length > 0) {
     recordRedaction(
       accumulator,
@@ -451,9 +548,7 @@ export function redactProjectCredentials(project: GeoLibreProject): CredentialRe
     const kept: Record<string, unknown> = {};
     const dropped: Record<string, unknown> = {};
     for (const [id, value] of Object.entries(settings)) {
-      const allowed = Object.prototype.hasOwnProperty.call(PUBLISHABLE_PLUGIN_SETTINGS, id)
-        ? PUBLISHABLE_PLUGIN_SETTINGS[id]
-        : undefined;
+      const allowed = publishableSettingsFor(id);
       if (allowed === undefined) {
         dropped[id] = value;
         continue;
@@ -515,6 +610,26 @@ export function redactProjectCredentials(project: GeoLibreProject): CredentialRe
     hasUnfingerprintableCredential: accumulator.unfingerprintable,
     redactedCount: accumulator.count,
   };
+}
+
+/**
+ * Remove credentials from a single configuration value (a layer `source`,
+ * `metadata`, or `sourcePath`) with the same rules the project redaction pass
+ * applies to layer configuration: credential-named fields and non-reference
+ * header values are dropped, and credential URL parameters are stripped from
+ * every URL-shaped string.
+ *
+ * @param value - The configuration value to scrub. Not mutated.
+ * @returns A detached, redacted copy.
+ */
+export function redactConfigurationCredentials<T>(value: T): T {
+  const accumulator: RedactionAccumulator = {
+    paths: [],
+    fingerprints: [],
+    count: 0,
+    unfingerprintable: false,
+  };
+  return redactConfigurationValue(value, "", accumulator) as T;
 }
 
 /** Convenience wrapper for callers that only need the safe project. */

@@ -1,4 +1,9 @@
-import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import {
+  shouldZoomToNewLayers,
+  useAppStore,
+  useLayersWhen,
+  type GeoLibreLayer,
+} from "@geolibre/core";
 import { getLayerBounds, type MapEngine } from "@geolibre/map";
 import {
   clearRemoteWhiteboxCatalogSnapshotCache,
@@ -14,7 +19,6 @@ import {
   runWhiteboxToolWasm,
   outputBaseName,
   fileOutputTargetExtension,
-  outputTextFormatHint,
   type WhiteboxJob,
   type WhiteboxLayerInput,
   type WhiteboxTool,
@@ -45,7 +49,6 @@ import {
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 import {
   isTauri,
   openLocalDataFileWithFallback,
@@ -53,7 +56,6 @@ import {
   pickLocalPathWithFallback,
   pickLocalPathsWithFallback,
   pickSavePathWithFallback,
-  type FileDialogFilter,
 } from "../../lib/tauri-io";
 import { clamp } from "../../lib/clamp";
 import {
@@ -62,18 +64,22 @@ import {
   subsetUrlToolKind,
 } from "../../lib/subset-tool-url";
 import { buildWhiteboxToolShareUrl, whiteboxToolShareBase } from "../../lib/whitebox-tool-url";
-import { fieldSourceInputName, isFieldParameterName } from "../../lib/whitebox-field-params";
+import { searchWhiteboxTools } from "../../lib/whitebox-tool-search";
+import { useWhiteboxSemanticSearch } from "../../hooks/useWhiteboxSemanticSearch";
+import { fieldSourceInputName } from "../../lib/whitebox-field-params";
 import {
   DISTANCE_UNITS,
   degreesToUnit,
   formatDistanceValue,
-  isDistanceParameterName,
   parseDistanceInput,
   unitToDegrees,
-  wgs84VectorLayerIds,
   type DistanceUnit,
 } from "../../lib/whitebox-distance-params";
-import { isMultipleDatasetParameter, parameterKind } from "../../lib/whitebox-param-kind";
+import {
+  isDirectoryParameter,
+  isMultipleDatasetParameter,
+  parameterKind,
+} from "../../lib/whitebox-param-kind";
 import { isTiff } from "../../lib/scripting/binary-output";
 import {
   canUseLayerForParameter,
@@ -106,13 +112,36 @@ import { SidecarHelpBanner } from "./SidecarHelpBanner";
 import {
   whiteboxParameterLabel,
   translateToolDescription,
-  translateToolName,
   translateWhiteboxParameterLabel,
-  humanizeIdentifier,
   humanizeParameterName,
   translateWhiteboxParameterDescription,
   translateWhiteboxCategory,
 } from "../../lib/processing-tool-i18n";
+import {
+  LAYER_TOKEN_PREFIX,
+  acceptForParameter,
+  createDefaultValues,
+  defaultOutputName,
+  fileOutputExtension,
+  humanize,
+  isCrsParameter,
+  isDataInputParameter,
+  isDistanceParameter,
+  isFeatureCollection,
+  isFieldParameter,
+  isJsonOutputPath,
+  isOutputParameter,
+  isPathParameter,
+  isSubsetUrlParameter,
+  jobStatusTone,
+  mergeCatalogParameterFallbacks,
+  outputEntries,
+  outputPath,
+  pathFiltersForParameter,
+  toolLabel,
+  wgs84ToolLayerIds,
+  type ParameterValues,
+} from "../../lib/processing-params";
 
 interface ProcessingDialogProps {
   mapControllerRef: React.RefObject<MapEngine | null>;
@@ -122,10 +151,6 @@ interface ProcessingDialogProps {
   onAddRaster?: (bytes: Uint8Array, name: string, fileName?: string) => Promise<void> | void;
 }
 
-type ParameterValues = Record<string, unknown>;
-
-const LAYER_TOKEN_PREFIX = "layer:";
-
 /** A layer's `[west, south, east, north]` extent, or null when it has none. */
 type LayerBounds = [number, number, number, number] | null;
 const RUNNING_JOB_STATUSES = new Set(["pending", "running"]);
@@ -134,40 +159,6 @@ const RUNNING_JOB_STATUSES = new Set(["pending", "running"]);
 // stays usable (left list + a readable parameter form).
 const PANEL_MIN_W = 560;
 const PANEL_MIN_H = 400;
-
-function toolLabel(t: TFunction, tool: WhiteboxTool): string {
-  return translateToolName(t, "whitebox", {
-    id: tool.id,
-    name: tool.display_name || humanize(tool.id),
-  });
-}
-
-function humanize(value: string): string {
-  return humanizeIdentifier(value, "Tool");
-}
-
-function isOutputParameter(param: WhiteboxToolParameter): boolean {
-  return parameterKind(param).endsWith("_out");
-}
-
-/**
- * Best-effort extension for a binary tool output, sniffed from its magic bytes.
- * Covers the formats GeoLibre `file_out` and (CRS-preserving) `vector_out` tools
- * emit today (GeoTIFF, GeoParquet, FlatGeobuf, zipped Shapefile, PNG, PMTiles); a
- * genuinely opaque output falls back to `.bin`. Extend the sniff here if a
- * future tool writes a recognizable format.
- */
-function fileOutputExtension(bytes: Uint8Array): string {
-  const matches = (sig: number[]) => sig.every((b, i) => bytes[i] === b);
-  if (isTiff(bytes)) return "tif";
-  if (matches([0x50, 0x41, 0x52, 0x31])) return "parquet"; // "PAR1"
-  if (matches([0x66, 0x67, 0x62, 0x03])) return "fgb"; // FlatGeobuf "fgb\x03"
-  if (matches([0x50, 0x4b, 0x03, 0x04])) return "zip"; // Shapefile bundle "PK\x03\x04"
-  if (matches([0x89, 0x50, 0x4e, 0x47])) return "png";
-  // "PMTiles"
-  if (matches([0x50, 0x4d, 0x54, 0x69, 0x6c, 0x65, 0x73])) return "pmtiles";
-  return "bin";
-}
 
 /** Save bytes to the user's downloads via a transient object URL. */
 function downloadBytes(bytes: Uint8Array, filename: string): void {
@@ -185,242 +176,16 @@ function downloadBytes(bytes: Uint8Array, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function isDataInputParameter(param: WhiteboxToolParameter): boolean {
-  return ["raster_in", "vector_in", "lidar_in", "file_in"].includes(parameterKind(param));
-}
-
-// The `url` string param of a COG/WMS/XYZ subset extractor, whose value can be
-// filled from a compatible layer already loaded in the map (GeoLibre#1271). The
-// tool-kind lookup keeps this to the subset extractors without hard-coding each
-// id here; layer eligibility and the derived field values live in
-// `subset-tool-url.ts`.
-function isSubsetUrlParameter(tool: WhiteboxTool, param: WhiteboxToolParameter): boolean {
-  return (
-    param.name === "url" && parameterKind(param) === "string" && subsetUrlToolKind(tool.id) !== null
-  );
-}
-
-// A `*_field` / `*_attribute` string param names a column of one of the tool's
-// vector inputs (points_to_line's `line_field`/`sort_field`, and ~170 other
-// tools), so the dialog can offer the selected layer's attribute names instead
-// of asking the user to recall a column name (GeoLibre#1459). The kind check is
-// what keeps a same-named *dataset* param out (the catalog types
-// classify_objects_svm's `class_field` as a LiDAR input): only a scalar string
-// names a column.
-function isFieldParameter(param: WhiteboxToolParameter): boolean {
-  return parameterKind(param) === "string" && isFieldParameterName(param.name);
-}
-
-// A numeric `epsg` parameter names a coordinate reference system, so the field
-// can offer a searchable CRS list instead of asking for a code from memory
-// (GeoLibre#1538). Matching the name suffix covers `epsg`
-// (assign_projection_vector), `dst_epsg` (reproject_vector/raster/lidar),
-// `epsg_code`, `output_epsg` and the rest without hard-coding tool ids. The kind
-// check keeps a *string* CRS override out (`sidewalks_epsg` takes an authority
-// string, not a bare code), since the picker fills in a plain numeric code.
-function isCrsParameter(param: WhiteboxToolParameter): boolean {
-  const kind = parameterKind(param);
-  return (kind === "int" || kind === "double") && /(^|_)epsg(_code)?$/i.test(param.name);
-}
-
-// A `*_dist` / `*_radius` / `spacing` / `tolerance` (and friends) parameter is a
-// ground distance in the input's coordinate units, so the field can offer
-// metres/km/feet/miles alongside the degrees a WGS84 map layer forces on it
-// (GeoLibre#1540). The name rule lives in `whitebox-distance-params.ts`. Only
-// `double` qualifies: a metric distance almost always converts to a fractional
-// number of degrees, which an integer parameter cannot carry, and the kind check
-// also keeps a same-named enum or dataset parameter out.
-function isDistanceParameter(param: WhiteboxToolParameter): boolean {
-  return parameterKind(param) === "double" && isDistanceParameterName(param.name);
-}
-
-/**
- * The map layers supplying a tool's coordinates when those coordinates are known
- * to be WGS84, or `null` when they are not.
- *
- * The distance unit picker is only safe when every dataset input is a map
- * layer's in-memory GeoJSON, which `runSelectedTool` hands over verbatim and RFC
- * 7946 fixes to WGS84. A raster or LiDAR input keeps its own CRS (GeoLibre never
- * reprojects those), so a tool with one is left alone entirely; the per-input
- * rule (a path leaves the units unknowable) lives in `wgs84VectorLayerIds`,
- * where it is unit-tested.
- *
- * Returns ids rather than latitudes so the caller can measure only the one or
- * two layers actually wired to the tool, instead of every layer in the project.
- *
- * @param tool - The selected tool.
- * @param values - The current form values.
- * @returns The chosen layers' ids, or `null` when the units are unknown.
- */
-function wgs84ToolLayerIds(tool: WhiteboxTool | null, values: ParameterValues): string[] | null {
-  const params = tool?.params ?? [];
-  if (!params.length) return null;
-  const kinds = params.map((param) => parameterKind(param));
-  if (kinds.some((kind) => kind === "raster_in" || kind === "lidar_in" || kind === "file_in")) {
-    return null;
-  }
-  const vectorInputs = params.filter((_, index) => kinds[index] === "vector_in");
-  if (!vectorInputs.length) return null;
-  return wgs84VectorLayerIds(
-    vectorInputs.map((param) => ({
-      required: param.required,
-      value: values[param.name],
-    })),
-    LAYER_TOKEN_PREFIX,
-  );
-}
-
-function isPathParameter(param: WhiteboxToolParameter): boolean {
-  const kind = parameterKind(param);
-  if (isDataInputParameter(param) || isOutputParameter(param)) return true;
-  const text = `${param.name} ${param.description ?? ""} ${param.type ?? ""}`.toLowerCase();
-  return /\b(path|file|folder|directory)\b/.test(text);
-}
-
-function isDirectoryParameter(param: WhiteboxToolParameter): boolean {
-  const text = `${param.name} ${param.description ?? ""} ${param.type ?? ""}`.toLowerCase();
-  return /\b(folder|directory|dir)\b/.test(text);
-}
-
-function pathFiltersForParameter(param: WhiteboxToolParameter): FileDialogFilter[] {
-  const kind = parameterKind(param);
-  if (kind.startsWith("raster")) {
-    return [
-      {
-        name: "Raster",
-        extensions: ["tif", "tiff", "img", "bil", "flt", "sdat", "rdc", "asc"],
-      },
-    ];
-  }
-  if (kind.startsWith("vector")) {
-    return [
-      {
-        name: "Vector",
-        extensions: ["geojson", "json", "shp", "gpkg", "fgb", "sqlite", "gml", "kml"],
-      },
-    ];
-  }
-  if (kind.startsWith("lidar")) {
-    return [
-      {
-        name: "LiDAR",
-        extensions: ["las", "laz", "zlidar", "copc", "e57", "ply"],
-      },
-    ];
-  }
-  if (/\b(csv|json|html|txt|xml)\b/i.test(`${param.name} ${param.type ?? ""}`)) {
-    return [
-      {
-        name: "Files",
-        extensions: ["csv", "json", "geojson", "html", "txt", "xml"],
-      },
-    ];
-  }
-  return [];
-}
-
-function acceptForParameter(param: WhiteboxToolParameter): string {
-  return pathFiltersForParameter(param)
-    .flatMap((filter) => filter.extensions)
-    .map((extension) => `.${extension}`)
-    .join(",");
-}
-
-function outputExtensionForParameter(param: WhiteboxToolParameter): string {
-  const kind = parameterKind(param);
-  if (kind === "raster_out") return ".tif";
-  if (kind === "vector_out") return ".shp";
-  if (kind === "lidar_out") return ".laz";
-  // Sniff the intended text format from the parameter's name/description/type
-  // via the same shared helper the WASM runner uses (e.g.
-  // vector_summary_statistics' output is an "Output CSV path"). Only the
-  // fallback differs: a friendly `.txt` here for a default filename suggestion,
-  // vs the opaque `.dat` the runner writes.
-  const hint = outputTextFormatHint(param);
-  return hint ? `.${hint}` : ".txt";
-}
-
-function defaultOutputName(toolId: string, param: WhiteboxToolParameter): string {
-  const stem = `${toolId || "whitebox"}_${param.name || "output"}`
-    .replace(/[^A-Za-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return `${stem || "whitebox_output"}${outputExtensionForParameter(param)}`;
-}
-
-function isFeatureCollection(value: unknown): value is FeatureCollection {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    (value as { type?: unknown }).type === "FeatureCollection" &&
-    Array.isArray((value as { features?: unknown }).features)
-  );
-}
-
-function defaultParameterValue(param: WhiteboxToolParameter): unknown {
-  if (isOutputParameter(param)) return "";
-  if (param.default !== undefined && param.default !== null) return param.default;
-  if (parameterKind(param) === "bool") return false;
-  return "";
-}
-
-function createDefaultValues(tool: WhiteboxTool | null): ParameterValues {
-  const values: ParameterValues = {};
-  for (const param of tool?.params ?? []) {
-    values[param.name] = defaultParameterValue(param);
-  }
-  return values;
-}
-
-function mergeCatalogParameterFallbacks(
-  liveTools: WhiteboxTool[],
-  snapshotTools: WhiteboxTool[],
-): WhiteboxTool[] {
-  const snapshotById = new Map(snapshotTools.map((tool) => [tool.id, tool] as const));
-  return liveTools.map((tool) => {
-    if (tool.params?.length) return tool;
-    const snapshot = snapshotById.get(tool.id);
-    if (!snapshot?.params?.length) return tool;
-    return {
-      ...tool,
-      params: snapshot.params,
-      return_type: tool.return_type ?? snapshot.return_type,
-    };
-  });
-}
-
-function outputPath(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) return value.trim();
-  if (value && typeof value === "object") {
-    const path = (value as { path?: unknown }).path;
-    if (typeof path === "string" && path.trim()) return path.trim();
-  }
-  return null;
-}
-
-function outputEntries(outputs: Record<string, unknown>): [string, string][] {
-  return Object.entries(outputs)
-    .map(([name, value]) => [name, outputPath(value)] as const)
-    .filter((entry): entry is [string, string] => Boolean(entry[1]));
-}
-
-function isJsonOutputPath(path: string): boolean {
-  return /\.(geojson|json)$/i.test(path);
-}
-
-function jobStatusTone(job: WhiteboxJob | null): string {
-  if (!job) return "text-muted-foreground";
-  if (job.status === "succeeded") return "text-emerald-700";
-  if (job.status === "failed") return "text-destructive";
-  return "text-primary";
-}
-
 export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDialogProps) {
   const { t, i18n } = useTranslation();
   const open = useAppStore((s) => s.ui.processingOpen);
   const setProcessingOpen = useAppStore((s) => s.setProcessingOpen);
   const processingInitialTool = useAppStore((s) => s.ui.processingInitialTool);
   const setProcessingInitialTool = useAppStore((s) => s.setProcessingInitialTool);
-  const layers = useAppStore((s) => s.layers);
+  // Layers are only read while the dialog is open; closed, it stays mounted (to
+  // keep its form, window position and job polling) without re-rendering on
+  // layer edits.
+  const layers = useLayersWhen(open);
   const addGeoJsonLayer = useAppStore((s) => s.addGeoJsonLayer);
   const rerun = useAppStore((s) => s.ui.processingRerun);
   const setProcessingRerun = useAppStore((s) => s.setProcessingRerun);
@@ -915,26 +680,83 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
     ];
   }, [tools, matchesSource, t, i18n.language]);
 
+  // Everything the category and source filters allow, before the search text.
+  // Memoized apart from the search so the semantic lookup below sees a stable
+  // list across keystrokes, and so it searches the same scope the list shows.
+  const scopedTools = useMemo(
+    () =>
+      tools.filter(
+        (tool) => (category === "All" || (tool.category ?? "") === category) && matchesSource(tool),
+      ),
+    [category, matchesSource, tools],
+  );
+
   const filteredTools = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return tools.filter((tool) => {
-      if (category !== "All" && (tool.category ?? "") !== category) {
-        return false;
-      }
-      if (!matchesSource(tool)) return false;
-      if (!normalizedQuery) return true;
-      return [
+    return searchWhiteboxTools(scopedTools, normalizedQuery, (tool) => ({
+      name: [
         tool.id,
         toolLabel(t, tool),
         tool.category ?? "",
         translateWhiteboxCategory(t, tool.category),
-        tool.summary || "",
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery);
-    });
-  }, [category, matchesSource, query, t, tools]);
+      ].join(" "),
+      // The tool's own names, which is what exact/prefix ranking measures. The
+      // categories stay out: they are shared by dozens of tools, so ranking
+      // them would let "terrain" promote everything filed under Terrain ahead
+      // of the tools actually named after it.
+      identifiers: [tool.id, toolLabel(t, tool)],
+      summary: tool.summary || "",
+    }));
+  }, [query, scopedTools, t]);
+
+  // A second, optional search that understands a description of an operation
+  // rather than a word from the catalog ("remove sinks so water drains off the
+  // edge" -> fill_depressions). Off entirely unless the deployment configured a
+  // System One endpoint, and never a substitute for the filter above: its hits
+  // are shown as their own group in front of it, so the substring list someone
+  // is already reading keeps its order. #2566
+  const semantic = useWhiteboxSemanticSearch(query, scopedTools, filteredTools, !loadingTools);
+
+  const semanticTools = useMemo(() => {
+    if (!semantic.matches?.length) return [];
+    const byId = new Map(scopedTools.map((tool) => [tool.id, tool]));
+    return semantic.matches
+      .map((match) => byId.get(match.id))
+      .filter((tool): tool is WhiteboxTool => tool !== undefined);
+  }, [semantic.matches, scopedTools]);
+
+  // The substring hits the ranked group does not already show. Listing a tool
+  // twice under two headings reads as two different tools.
+  const keywordTools = useMemo(() => {
+    if (semanticTools.length === 0) return filteredTools;
+    const ranked = new Set(semanticTools.map((tool) => tool.id));
+    return filteredTools.filter((tool) => !ranked.has(tool.id));
+  }, [filteredTools, semanticTools]);
+
+  const renderToolRow = useCallback(
+    (tool: WhiteboxTool) => (
+      <button
+        key={tool.id}
+        type="button"
+        ref={selectedTool?.id === tool.id ? selectedButtonRef : undefined}
+        className={cn(
+          "block w-full px-3 py-2 text-start text-sm transition-colors hover:bg-accent",
+          selectedTool?.id === tool.id && "bg-accent",
+          tool.locked && "opacity-60",
+        )}
+        onClick={() => setSelectedToolId(tool.id)}
+      >
+        <span className="block truncate font-medium">
+          {tool.locked ? t("processing.whitebox.lockedPrefix") : ""}
+          {toolLabel(t, tool)}
+        </span>
+        <span className="block truncate text-xs text-muted-foreground">
+          {translateWhiteboxCategory(t, tool.category)}
+        </span>
+      </button>
+    ),
+    [selectedTool?.id, t],
+  );
 
   const loadWhitebox = useCallback(async () => {
     setLoadingTools(true);
@@ -1300,11 +1122,12 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
   // raster instead of being occluded by it. Toggling the button (or closing the
   // panel) aborts an in-flight draw.
   const handleDrawBbox = async () => {
-    const map = mapControllerRef.current?.getMap();
-    if (!map) {
+    const engine = mapControllerRef.current;
+    if (!engine) {
       setError(t("processing.whitebox.mapExtentUnavailable"));
       return;
     }
+    const map = engine.getMap();
     if (drawing) {
       drawAbortRef.current?.abort();
       return;
@@ -1313,38 +1136,74 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
     const controller = new AbortController();
     drawAbortRef.current = controller;
     setDrawing(true);
+    let enginePreview: (() => void) | undefined;
+    // The engine keeps each draw's disposer until teardown, so release it on
+    // every exit (done, cancel, abort), once.
+    let engineDrawDispose: (() => void) | undefined;
+    const disposeEngineDraw = () => {
+      const dispose = engineDrawDispose;
+      engineDrawDispose = undefined;
+      dispose?.();
+    };
     try {
-      const extent = await drawPrintExtent(map, {
-        signal: controller.signal,
-        drawBox: false,
-        // Project the box corners to viewport space (map.project is canvas-
-        // relative, so add the canvas offset). The map is pan/zoom-locked during
-        // the draw, so corners only move as the box is dragged.
-        onPreview: (box) => {
-          if (!box) {
-            setDrawPoints(null);
-            return;
-          }
-          const rect = map.getCanvas().getBoundingClientRect();
-          const [w, s, e, n] = box;
-          const corners: [number, number][] = [
-            [w, n],
-            [e, n],
-            [e, s],
-            [w, s],
-          ];
-          setDrawPoints(
-            corners.map(([lng, lat]) => {
-              const p = map.project([lng, lat]);
-              return { x: p.x + rect.left, y: p.y + rect.top };
-            }),
-          );
-        },
-      });
+      const extent = map
+        ? await drawPrintExtent(map, {
+            signal: controller.signal,
+            drawBox: false,
+            // Project the box corners to viewport space (map.project is canvas-
+            // relative, so add the canvas offset). The map is pan/zoom-locked during
+            // the draw, so corners only move as the box is dragged.
+            onPreview: (box) => {
+              if (!box) {
+                setDrawPoints(null);
+                return;
+              }
+              const rect = map.getCanvas().getBoundingClientRect();
+              const [w, s, e, n] = box;
+              const corners: [number, number][] = [
+                [w, n],
+                [e, n],
+                [e, s],
+                [w, s],
+              ];
+              setDrawPoints(
+                corners.map(([lng, lat]) => {
+                  const p = map.project([lng, lat]);
+                  return { x: p.x + rect.left, y: p.y + rect.top };
+                }),
+              );
+            },
+          })
+        : await new Promise<[number, number, number, number] | null>((resolve) => {
+            let settled = false;
+            const finish = (value: [number, number, number, number] | null) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+            };
+            engineDrawDispose = engine.drawExtent({
+              onChange: (box) => {
+                enginePreview?.();
+                enginePreview = engine.showExtent(box);
+              },
+              onDone: (box) => finish(box),
+              onCancel: () => finish(null),
+            });
+            controller.signal.addEventListener(
+              "abort",
+              () => {
+                disposeEngineDraw();
+                finish(null);
+              },
+              { once: true },
+            );
+          });
       if (controller.signal.aborted) return;
       if (extent) applyMapExtent(extent);
     } finally {
-      clearPrintExtent(map);
+      disposeEngineDraw();
+      if (map) clearPrintExtent(map);
+      enginePreview?.();
       setDrawPoints(null);
       if (drawAbortRef.current === controller) {
         drawAbortRef.current = null;
@@ -1434,7 +1293,10 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
         return { name: fileName, bytes, geojson };
       });
       browsedInputsRef.current.set(paramName, inputs);
-      setValues((prev) => ({ ...prev, [paramName]: inputs.map((input) => input.name).join(", ") }));
+      setValues((prev) => ({
+        ...prev,
+        [paramName]: inputs.map((input) => input.name).join(", "),
+      }));
     },
     [],
   );
@@ -1468,7 +1330,7 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
         const layerId = addGeoJsonLayer(layerName, data, path || undefined);
         historyTrackersRef.current.get(nextJob.id)?.addOutputLayer(layerName);
         const layer = useAppStore.getState().layers.find((item) => item.id === layerId);
-        if (layer) mapControllerRef.current?.fitLayer(layer);
+        if (layer && shouldZoomToNewLayers()) mapControllerRef.current?.fitLayer(layer);
       }
 
       // Binary outputs come back from the WASM runner inline. Raster (COG) bytes
@@ -1485,7 +1347,10 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
         // output only as "Optional output path" — so sniff the bytes rather
         // than trust the declared kind, the way the scripting/assistant path
         // does, and put a raster on the map instead of downloading it.
-        const declaredFile = outKind === "file_out" || outKind === "vector_out";
+        // A `lidar_out` (a classified/filtered LAS from the WASM runner) is
+        // downloaded too; it never belongs on the raster path.
+        const declaredFile =
+          outKind === "file_out" || outKind === "vector_out" || outKind === "lidar_out";
         if (declaredFile && (!isTiff(value) || !onAddRaster)) {
           const label = `${jobToolLabel} ${humanize(name)}`.replace(/\s+/g, "_");
           // Prefer the content signature: a `vector_out` and most binary
@@ -1959,9 +1824,23 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="ps-9"
-                placeholder={t("processing.searchTools")}
+                // The end padding is reserved whenever the lookup could run, not
+                // only while it is running: letting it appear with the spinner
+                // would reflow the text under the cursor mid-typing.
+                className={cn("ps-9", semantic.available && "pe-9")}
+                placeholder={
+                  semantic.available
+                    ? t("processing.whitebox.searchToolsByMeaning")
+                    : t("processing.searchTools")
+                }
               />
+              {semantic.pending && (
+                <Loader2
+                  role="status"
+                  aria-label={t("processing.whitebox.searchingByMeaning")}
+                  className="absolute end-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground"
+                />
+              )}
             </div>
             <Button
               type="button"
@@ -2017,6 +1896,7 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
               className="min-w-0 flex-1"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
+              aria-label={t("processing.whitebox.filterByCategory")}
             >
               {categories.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -2070,32 +1950,37 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {t("processing.whitebox.loadingTools")}
                 </div>
-              ) : filteredTools.length === 0 ? (
-                <div className="p-3 text-sm text-muted-foreground">
-                  {t("processing.whitebox.noToolsFound")}
-                </div>
+              ) : filteredTools.length === 0 && semanticTools.length === 0 ? (
+                // A phrase with no substring hits is exactly the case the
+                // lookup exists for, so saying "no tools found" while still
+                // asking would have the dialog contradict itself for ~900ms.
+                semantic.pending ? (
+                  <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {t("processing.whitebox.searchingByMeaning")}
+                  </div>
+                ) : (
+                  <div className="p-3 text-sm text-muted-foreground">
+                    {t("processing.whitebox.noToolsFound")}
+                  </div>
+                )
               ) : (
-                filteredTools.map((tool) => (
-                  <button
-                    key={tool.id}
-                    type="button"
-                    ref={selectedTool?.id === tool.id ? selectedButtonRef : undefined}
-                    className={cn(
-                      "block w-full px-3 py-2 text-start text-sm transition-colors hover:bg-accent",
-                      selectedTool?.id === tool.id && "bg-accent",
-                      tool.locked && "opacity-60",
-                    )}
-                    onClick={() => setSelectedToolId(tool.id)}
-                  >
-                    <span className="block truncate font-medium">
-                      {tool.locked ? t("processing.whitebox.lockedPrefix") : ""}
-                      {toolLabel(t, tool)}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {translateWhiteboxCategory(t, tool.category)}
-                    </span>
-                  </button>
-                ))
+                <>
+                  {/* Headings appear only once the lookup has answered, so with
+                      it off or unanswered this is the flat list it always was. */}
+                  {semanticTools.length > 0 && (
+                    <div className="bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                      {t("processing.whitebox.bestMatches")}
+                    </div>
+                  )}
+                  {semanticTools.map(renderToolRow)}
+                  {semanticTools.length > 0 && keywordTools.length > 0 && (
+                    <div className="bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                      {t("processing.whitebox.otherMatches")}
+                    </div>
+                  )}
+                  {keywordTools.map(renderToolRow)}
+                </>
               )}
             </div>
           </ScrollArea>
@@ -2176,7 +2061,14 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
               </Button>
             </div>
             {selectedTool?.summary && (
-              <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              // Height-bounded and scrollable, not clamped. Catalog summaries
+              // run from one line to ~2,400 characters (`lee_filter`), and the
+              // long ones rendered 340px tall in a 624px dialog — pushing the
+              // parameter form and the Run button below the fold on the tools
+              // whose parameters most need explaining. Scrolling keeps the full
+              // text, which is the useful half of it, without letting it take
+              // the dialog over.
+              <p className="mt-2 max-h-24 max-w-3xl overflow-y-auto text-sm text-muted-foreground">
                 {translateToolDescription(t, "whitebox", {
                   id: selectedTool.id,
                   name: toolLabel(t, selectedTool),
@@ -2687,6 +2579,7 @@ function ParameterField({
       ) : isDataInputParameter(param) && availableLayers.length > 0 ? (
         <LayerOrPathInput
           id={`whitebox-${param.name}`}
+          label={label}
           layers={availableLayers}
           param={param}
           value={valueText}
@@ -3007,6 +2900,8 @@ function DistanceInput({ id, latitude, onChange, value }: DistanceInputProps) {
 
 interface LayerOrPathInputProps {
   id: string;
+  /** The parameter's visible label, which also names the layer picker. */
+  label: string;
   layers: GeoLibreLayer[];
   onChange: (value: unknown) => void;
   onPickFile?: (fileName: string, bytes: Uint8Array) => void;
@@ -3093,6 +2988,7 @@ function MultiLayerOrPathInput({
 
 function LayerOrPathInput({
   id,
+  label,
   layers,
   onChange,
   onPickFile,
@@ -3111,6 +3007,7 @@ function LayerOrPathInput({
           child count is fine; this is the one that needs saying. */}
       <Select
         className="col-span-2 @sm/params:col-span-1"
+        aria-label={t("processing.whitebox.layerFor", { name: label })}
         value={usingLayer ? value : ""}
         onChange={(event) => onChange(event.target.value)}
       >
@@ -3225,7 +3122,10 @@ function PathBrowseButton({
         });
         if (picked.length > 0) {
           onPickFiles(
-            picked.map((file) => ({ fileName: file.path, bytes: new Uint8Array(file.data) })),
+            picked.map((file) => ({
+              fileName: file.path,
+              bytes: new Uint8Array(file.data),
+            })),
           );
         }
       }

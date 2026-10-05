@@ -271,7 +271,12 @@ describe("tiles origin list", async () => {
   });
 
   it("keeps the upstream hosts when nothing is set", () => {
-    assert.ok(isAllowedProxyOriginFor("https://anything.workers.dev", new Set()));
+    assert.ok(isAllowedProxyOriginFor("https://web.geolibre.app", new Set()));
+    // Upstream dropped the blanket `*.workers.dev` allowance (#2518), which is
+    // the permissiveness ALLOWED_PROXY_ORIGINS exists to close. This
+    // deployment names its own Worker origin in that list, so nothing here
+    // depends on the fallback.
+    assert.ok(!isAllowedProxyOriginFor("https://anything.workers.dev", new Set()));
   });
 });
 

@@ -54,9 +54,17 @@ m.add_ee_layer(ee_object, vis_params=None, name="Earth Engine", shown=True,
                opacity=1.0)
 m.add_pmtiles(url, name, tile_type="vector", source_layers=None)
 m.add_vector_tiles(url, name, source_layers=None)
-m.add_wms(endpoint, layers, name, version="1.1.1", bounds=None)
+m.add_wms(endpoint, layers, name, version="1.1.1", crs=None, bounds=None)
+# crs: EPSG:3857 by default; for a server without it, EPSG:4326/4258/6706,
+# CRS:84 with version="1.3.0", or a projected EPSG:<code> such as EPSG:25832;
+# drawn only by the desktop app (blank on the web)
 m.add_wmts(endpoint, name, bounds=None)
 m.add_wfs(endpoint, type_name, max_features=1000)
+m.add_lidar(url, name=None)                          # LAS/LAZ/COPC/EPT point cloud by URL
+m.point_cloud_annotations()                           # labels, instances, classes + 3D boxes saved by the annotator
+m.set_point_cloud_classes([{"code": 64, "name": "Car", "color": "#e11d48"}])  # custom classes
+m.prelabel_point_cloud(url, "local.copc.laz", tool="ground")  # Whitebox pre-labels -> project labels
+m.write_labeled_point_cloud(url, "local.copc.laz", "labeled.laz")  # full file with labels applied
 m.add_3d_tiles(url, name, altitude_offset=0)          # or ion_asset_id=96188 (3D globe only)
 m.add_cesium_ion(asset_id, name, kind="3d-tiles")     # kind="imagery" for an imagery asset
 m.add_czml(url, name)                                  # or data=[...packets] (3D globe only)
@@ -106,6 +114,14 @@ Every `add_*` that takes style overrides accepts `popup=` and `tooltip=`
 (`add_ee_layer` does not). To change a layer's popup after it was added, use
 `m.set_popup(...)` / `m.set_tooltip(...)` / `m.clear_popup(...)`. Without a config a
 layer shows its name plus every visible property on click, and no hover tip.
+Click popups open only while Identify is armed: `m.set_identify()` arms it on
+every visible layer, `m.set_identify("Sites")` on one, `m.set_identify(["Sites",
+"Roads"])` on only those, `m.set_identify(None)` turns it off. Hover tips pause
+while it is armed. `m.show_control("bookmark")`,
+`m.show_control("search")` and `m.hide_control("globe")` toggle panels and map
+controls, and `m.set_projection("mercator")` draws a flat map instead of a globe.
+`save_project`, `to_project` and `to_html` keep the Identify and control choices
+(the project's `interaction` block).
 
 ```python
 m.add_markers(
@@ -123,14 +139,45 @@ m.set_popup(layer, click=False)                        # no popup on click
 ```
 
 A field `kind` is `auto`, `text`, `number`, `date`, `link`, or `image`. Raw HTML
-in a property is **not** rendered as markup (an untrusted GeoJSON must not be
-able to inject it); use `kind="image"`/`"link"` for pictures and links, or
-`body_expression` for composed text.
+in a property is **not** rendered as markup, and neither is Markdown (an
+untrusted GeoJSON must not be able to inject it); use `kind="image"`/`"link"`
+for pictures and links, or `body_expression` for composed text.
+
+`popup_max_width=` (288-1200) and `popup_image_height=` (40-1200), both in CSS
+pixels, size the click popup and the pictures inside it. They work as top-level
+arguments on any `add_*`, as `max_width`/`image_height` inside a `popup=`
+mapping, and as arguments to `set_popup`. A thumbnail keeps its aspect ratio,
+so raise the width alongside the height for a landscape photo:
+
+```python
+m.add_markers(points, popup=["name", "photo"], popup_max_width=640, popup_image_height=420)
+m.set_popup(layer, max_width=640, image_height=420, merge=True)
+```
 
 The tooltip and the click popup share one field list, and the click popup only
 falls back to "all properties" while that list is empty — so `tooltip="name"`
 on its own narrows the click popup to `name`. Pass `popup=` with the fields you
 want on click whenever you pass `tooltip=`.
+
+### Layer metadata
+
+`m.set_layer_metadata(layer, ...)` records the catalog description the app's
+Metadata dialog shows, exports as a STAC Item, and writes into GeoParquet
+exports. Emails, ISO 8601 dates and link URLs are validated; `merge=True` keeps
+fields you do not pass, and `m.clear_layer_metadata(layer)` drops the block.
+
+```python
+m.set_layer_metadata(
+    "Rivers",
+    title="Rivers of Tennessee",
+    abstract="Major rivers digitized from 1:24k topographic maps.",
+    keywords=["hydrology", "rivers"],
+    license="CC-BY-4.0",
+    contact={"name": "Ada", "email": "ada@example.org", "organization": "TN GIS"},
+    temporal_extent=("2019-01-01", "2019-12-31"),
+    links=[{"href": "https://example.org/rivers", "rel": "about"}],
+)
+```
 
 ### In-memory xarray rasters
 
@@ -214,11 +261,35 @@ A `Layer` object mirrors the same operations as attributes:
 ## Map controls
 
 ```python
+m.set_map_legend("Population", position="bottom-right")  # built from layer styles
 m.add_legend(title="Land cover", builtin="nlcd")
 m.add_legend(title="Population", legend_dict={"Low": "#eff6ff", "High": "#1e3a8a"})
 m.add_colorbar(colormap="terrain", vmin=0, vmax=3000, label="Elevation", units="m")
 m.split_map(left_layers=["Before"], right_layers=["After"], orientation="vertical")
 ```
+
+## Labels, filters, plugin state, story maps
+
+These write the project, so they work headless too:
+
+```python
+m.set_labels("Cities", "name", size=14, halo_width=2, anchor="top")
+m.set_layer_filter("Cities", [">=", ["get", "pop"], 100000])   # None clears
+m.set_plugin_state("maplibre-gl-graticule", {...})  # a plugin's own saved state
+
+m.set_story_map(title="A tour", theme="light", start_slide="global")
+m.set_center(-84, 36, zoom=5)
+m.add_story_chapter("Overview", description="...")   # captures the saved view
+m.add_story_chapter("Downtown", center=(-83.92, 35.96), zoom=14,
+                    on_enter=[{"layer": "Cities", "opacity": 1}])
+m.move_story_chapter("Downtown", 0); m.remove_story_chapter("Overview")
+```
+
+`set_plugin_state` accepts the built-in ids in
+`geolibre.project.PLUGIN_STATE_IDS` (`allow_unknown=True` for an external
+plugin); the blob's shape is the plugin's own. Bookmarks are not part of a
+project (the app keeps them in browser storage), so there is no API for them;
+story chapters are the saved equivalent.
 
 ## Live interaction (notebook only)
 

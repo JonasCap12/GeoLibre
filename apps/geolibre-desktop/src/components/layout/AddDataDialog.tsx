@@ -1,5 +1,5 @@
-import { useAppStore } from "@geolibre/core";
-import type { MapEngine } from "@geolibre/map";
+import { useAppStore, useLayersWhen } from "@geolibre/core";
+import { rendererCapabilities, type MapEngine } from "@geolibre/map";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@geolibre/ui";
 import { Database } from "lucide-react";
 import { useCallback, useMemo, useState, type RefObject } from "react";
@@ -11,6 +11,7 @@ import { CadSource } from "./add-data/sources/CadSource";
 import { CesiumIonSource } from "./add-data/sources/CesiumIonSource";
 import { CzmlSource } from "./add-data/sources/CzmlSource";
 import { KmlSource } from "./add-data/sources/KmlSource";
+import { LandXmlSource } from "./add-data/sources/LandXmlSource";
 import { DeckVizSource } from "./add-data/sources/DeckVizSource";
 import { DelimitedTextSource } from "./add-data/sources/DelimitedTextSource";
 import { GdbSource } from "./add-data/sources/GdbSource";
@@ -27,6 +28,7 @@ import { OgcVectorTilesSource } from "./add-data/sources/OgcVectorTilesSource";
 import { PhotosSource } from "./add-data/sources/PhotosSource";
 import { PolylineSource } from "./add-data/sources/PolylineSource";
 import { PostgresSource } from "./add-data/sources/PostgresSource";
+import { MssqlSource } from "./add-data/sources/MssqlSource";
 import { VideoSource } from "./add-data/sources/VideoSource";
 import { WfsSource } from "./add-data/sources/WfsSource";
 import { WcsSource } from "./add-data/sources/WcsSource";
@@ -36,6 +38,7 @@ import { WmtsSource } from "./add-data/sources/WmtsSource";
 import { XyzSource } from "./add-data/sources/XyzSource";
 import type { AddDataKind } from "./add-data/types";
 import type { OpenAddDataPostgres } from "./add-data/open-add-data";
+import type { OpenAddDataMssql } from "./add-data/open-add-data";
 import { useMartinConnection } from "./add-data/useMartinConnection";
 
 export type { AddDataKind } from "./add-data/types";
@@ -55,6 +58,8 @@ interface AddDataDialogProps {
    * clicked PostGIS table.
    */
   initialPostgres?: OpenAddDataPostgres;
+  /** Saved SQL Server connection and table to pre-select when opening from Browser. */
+  initialMssql?: OpenAddDataMssql;
   /** Service URL supplied by a browser-extension deep link. */
   initialUrl?: string;
   /**
@@ -81,6 +86,7 @@ function renderSource(
   kind: AddDataKind,
   initialDeckVizKind: string | undefined,
   initialPostgres: OpenAddDataPostgres | undefined,
+  initialMssql: OpenAddDataMssql | undefined,
   initialUrl: string | undefined,
   initialLayer: string | undefined,
   initialStyleUrl: string | undefined,
@@ -119,6 +125,8 @@ function renderSource(
       );
     case "gpx":
       return <GpxSource />;
+    case "landxml":
+      return <LandXmlSource />;
     case "georss":
       return <GeoRssSource />;
     case "delimited-text":
@@ -143,6 +151,8 @@ function renderSource(
       return <ArcGISSource initialUrl={initialUrl} />;
     case "postgres":
       return <PostgresSource initialPostgres={initialPostgres} />;
+    case "mssql":
+      return <MssqlSource initialMssql={initialMssql} />;
     case "iceberg":
       return <IcebergSource />;
     case "video":
@@ -165,6 +175,7 @@ export function AddDataDialog({
   onOpenChange,
   initialDeckVizKind,
   initialPostgres,
+  initialMssql,
   initialUrl,
   initialLayer,
   initialStyleUrl,
@@ -174,11 +185,13 @@ export function AddDataDialog({
   const { t } = useTranslation();
   const open = kind !== null;
   const addLayer = useAppStore((s) => s.addLayer);
-  const existingLayers = useAppStore((s) => s.layers);
+  // Layers are only read while the dialog is open; closed, it stays mounted
+  // without re-rendering on layer edits.
+  const existingLayers = useLayersWhen(open);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const martin = useMartinConnection();
 
-  const nativeGlobe = useAppStore((s) => s.primaryRenderer === "cesium");
+  const nativeGlobe = useAppStore((s) => rendererCapabilities(s.primaryRenderer).nativeDataSources);
 
   const title =
     kind === "raster"
@@ -244,6 +257,7 @@ export function AddDataDialog({
               kind,
               initialDeckVizKind,
               initialPostgres,
+              initialMssql,
               initialUrl,
               initialLayer,
               initialStyleUrl,

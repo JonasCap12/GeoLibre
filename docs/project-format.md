@@ -42,6 +42,7 @@ file contents do not change.
 | `dashboardColumns`| number  | Optional Dashboard widget-grid column count (1-6, default 2); omitted when default                          |
 | `styleLibrary`    | array   | Optional project-scoped Style Manager entries (name, tags, kind, `LayerStyle` subset); omitted when empty    |
 | `primaryRenderer` | string  | Optional engine for the primary map area: `"maplibre"` (2D, the default), `"mapbox"` (Mapbox GL JS), `"arcgis"` (ArcGIS Maps SDK for JavaScript) or `"cesium"` (3D globe); omitted when default |
+| `interaction`     | object  | Optional startup Identify target and control visibility (see below); omitted by default                      |
 | `metadata`        | object  | Free-form project metadata                                                                                   |
 
 ## Plugin state
@@ -206,6 +207,29 @@ widget-grid column count (1-6, default 2), at the top level of the project.
 Charts read from GeoJSON-backed vector layers and DuckDB query layers; widgets
 bound to a missing or non-attribute layer are shown as empty.
 
+## Interaction
+
+```json
+{
+  "interaction": {
+    "identify": ["layer-a", "layer-b"],
+    "controls": { "search": true, "globe": false }
+  }
+}
+```
+
+Applied when the project opens, so a map shared from a notebook starts the way
+it was set up there. The Python package writes it from `Map.set_identify` and
+`Map.show_control` / `Map.hide_control` in `save_project`, `to_project` and
+`to_html`. `identify` is a layer id, `"all"` for every visible queryable layer,
+a list of layer ids to identify only those, or `null` for off; ids that name no
+layer are skipped. `controls` maps a toolbar panel (`bookmark`, `search`,
+`measure`, `minimap`, `print`) or built-in map control (`navigation`,
+`fullscreen`, `compass`, `geolocate`, `globe`, `scale`, `attribution`, `logo`)
+to whether it starts shown; other names are ignored. The app writes the block
+back unchanged when it saves the project; turning Identify or a control on or
+off in the app does not edit it.
+
 ## Layer object
 
 ```json
@@ -312,6 +336,14 @@ manual synchronization only. `lastSyncedAt` records the most recent successful
 synchronization and `lastError` the most recent failure (cleared on the next
 success). `onFailure` decides whether a failed synchronization retains the last
 good data (`"keep-last"`, the default) or discards it (`"clear"`).
+
+SQL Server layers may also carry top-level `mssqlWritebackPending: true` when
+a write committed but its reread failed, or the write outcome could not be
+confirmed. This flag survives project save/load and blocks another Save Edits
+until a successful manual Refresh restores generated keys and the read baseline.
+Recovery failure preserves the layer's features even with `onFailure: "clear"`.
+Successful recovery removes the flag; the prior baseline metadata remains
+unchanged until that read succeeds.
 
 For local-file vector layers on the desktop app, `metadata.watch` can persist a
 "watch this file for changes" toggle. When enabled, the desktop app registers a
@@ -455,6 +487,8 @@ popup, and whether a hover tooltip follows the pointer:
     "hover": true,
     "titleField": "name",
     "showFeatureId": false,
+    "maxWidth": 640,
+    "imageHeight": 420,
     "fields": [
       {
         "field": "pop_max",
@@ -484,6 +518,14 @@ inline `data:image/*;base64` values as thumbnails), `text`, `number`, `date`,
 tooltip with no flagged field shows the title alone, or nothing when the title
 is just the layer name.
 
+`maxWidth` (288-1200) is how wide the click popup may draw and `imageHeight`
+(40-1200) how tall an `image` field's thumbnail may draw inside it, both in CSS
+pixels; each is clamped to its range and `maxWidth` is capped by the viewport
+besides, so neither can produce a popup that blankets the map. Absent, the
+popup keeps its default width and image height. A thumbnail keeps its aspect
+ratio, so `imageHeight` alone does little for a landscape photo without
+`maxWidth` to match.
+
 `titleField` leads the popup with a feature's own value instead of the layer
 name; `titleExpression` (a MapLibre expression source) wins over it, and both
 fall back to the layer name when they produce nothing. `bodyExpression`
@@ -497,6 +539,55 @@ popup design selects from what is visible, it cannot re-expose what the author
 hid. That holds for the expressions too: `titleExpression` and `bodyExpression`
 are evaluated against the visible properties only, so a `["get", …]` cannot
 pull back a hidden column or one of GeoLibre's internal ones. Raster pixel identify goes through a different path and ignores `popup`.
+
+### Descriptive metadata
+
+A layer may carry a `descriptiveMetadata` block: the catalog description edited
+in the layer's **Metadata** dialog (layer menu → Metadata). It documents the
+data and changes nothing about how the layer renders. It is separate from the
+layer's `metadata` record, which holds internal state the renderers and plugins
+key off.
+
+```json
+{
+  "descriptiveMetadata": {
+    "title": "Rivers of Tennessee",
+    "abstract": "Major rivers digitized from 1:24k topographic maps.",
+    "keywords": ["hydrology", "rivers"],
+    "license": "CC-BY-4.0",
+    "attribution": "© Tennessee GIS",
+    "contact": { "name": "Ada Lovelace", "email": "ada@example.org", "organization": "TN GIS" },
+    "lineage": "Digitized in 2019; generalized with Douglas-Peucker (10 m).",
+    "temporalExtent": { "start": "2019-01-01", "end": "2019-12-31" },
+    "links": [{ "href": "https://example.org/rivers", "rel": "about", "title": "Project page" }]
+  }
+}
+```
+
+Every member is optional and every value is a string (or a list of them).
+`license` is an [SPDX identifier](https://spdx.org/licenses/) or free text.
+`temporalExtent` bounds are ISO 8601 dates (`YYYY-MM-DD`) or date-times;
+either may be left out for an open interval. A link needs an absolute `href`;
+`rel` is a link relation (`related` when omitted) and `title` a label. On load,
+blank members, blank or duplicate (case-insensitive) keywords, and links with no
+`href` are dropped, and a block left with nothing in it is removed — an empty
+`descriptiveMetadata` is never written. Malformed values (an email without a
+domain, an impossible date) are kept so the dialog can show and fix them; the
+dialog refuses to save them.
+
+The dialog's **Export as STAC Item** writes the block as a
+[STAC 1.0](https://github.com/radiantearth/stac-spec/tree/v1.0.0) Item: the
+layer id as `id`, the layer's WGS84 extent as `geometry`/`bbox`, `title` (the
+layer name when unset), `abstract` as `description`, `keywords`, `license`, the
+contact as a `producer` provider, `lineage` as `processing:lineage` (with the
+processing extension declared), the temporal extent as `datetime` or
+`start_datetime`/`end_datetime`, the links, and a `data` asset for a remote
+source URL (a `tiles` asset when it is a `{z}/{x}/{y}` tile template). A
+license that is not an SPDX-style identifier is exported as `proprietary` with
+the text in `geolibre:license`; the attribution goes to `geolibre:attribution`. A layer with no temporal extent is stamped with the
+export time, since STAC requires a `datetime`. Exporting a vector layer to
+GeoParquet writes the block as JSON into the file's Parquet key-value metadata
+under `geolibre:metadata`, beside the `geo` key.
 
 ## Layer types
 
@@ -536,9 +627,26 @@ A local project may contain credentials needed to restore authenticated data,
 including layer request headers, geocoding API keys, environment variables, and
 plugin settings. Any project leaving the local workspace must pass through
 `redactCredentials(project)` first. GeoLibre applies this invariant to Share,
-standalone HTML export, embed snapshots, and collaboration snapshots. Local
-Save and Save As ask whether credentials should be stripped or deliberately
-kept.
+standalone HTML export, embed snapshots, and collaboration snapshots. On the
+desktop app, geocoding API keys and uniquely named secret environment
+variables move to the OS keychain rather than the file; see
+[Credential storage](architecture.md#credential-storage). Duplicate or
+nameless secret environment rows cannot be stored under a unique account, so
+Local Save and Save As offer the same keep/strip prompt used when the keychain
+is unavailable or the web build contains project credentials.
+
+A layer `source.requestHeaders` value may reference an environment variable as
+`${NAME}`, e.g. `"Authorization": "Bearer ${TILES_TOKEN}"`. The reference is
+saved as written and resolved from the enabled `environmentVariables` rows when
+the request is made; a header whose variable is unset or empty is not sent. A
+value that is only an optional scheme word followed by one reference survives
+redaction; any other header value is removed.
+
+Each `preferences.environmentVariables` row may carry `"secret": false`. Rows
+without it are secrets: redaction removes them, and the desktop app stores
+their values in the keychain when they have a unique, nonempty name. Rows
+marked `"secret": false` are ordinary values: they stay in the file and survive
+Share and export.
 
 Saved model and processing-history parameter bags do not currently accept
 credentials and are treated as structural project content. If a future

@@ -11,16 +11,21 @@ import {
   serializeProject,
   useAppStore,
 } from "@geolibre/core";
-import { compileMapboxLayer, styleUsesUnsupportedSource } from "../packages/map/src/mapbox-layers";
+import {
+  compileMapboxLayer,
+  styleUsesUnsupportedSource,
+} from "../packages/map/src/gl-style-compiler";
 import { proxyWmsTiles } from "../packages/map/src/wms-proxy";
 import { resolveTextFontFromStyleLayers } from "../packages/map/src/text-font";
 import { MAPBOX_CAPABILITIES, redactMapboxError } from "../packages/map/src/mapbox-engine";
 import { MAPLIBRE_CAPABILITIES } from "../packages/map/src/map-engine";
 import { CESIUM_CAPABILITIES } from "../packages/map/src/cesium-engine";
+import { MAPBOX_BASEMAP_STYLES } from "../packages/map/src/mapbox-style";
 import { isPluginEngineSupported } from "../packages/plugins/src/types";
 import { maplibreLayerControlPlugin } from "../packages/plugins/src/plugins/layer-control";
 import { maplibreDeckGlVizPlugin } from "../packages/plugins/src/plugins/maplibre-deckgl-viz";
 import { geojsonLayer } from "./helpers/layer-fixtures";
+import { NULL_GEOMETRY } from "./helpers/null-geometry";
 
 describe("Mapbox project and plugin boundaries", () => {
   it("round trips the primary renderer independently of the grid", () => {
@@ -75,7 +80,7 @@ describe("Mapbox project and plugin boundaries", () => {
     );
     assert.ok(!result.includes("private"));
     assert.ok(!result.includes("secret"));
-    assert.ok(result.includes("&x=1"));
+    assert.ok(result.includes("?x=1"));
   });
 });
 
@@ -165,7 +170,7 @@ describe("Mapbox native layer compilation", () => {
       id: "table",
       geojson: {
         type: "FeatureCollection",
-        features: [{ type: "Feature", properties: { name: "a" }, geometry: null }],
+        features: [{ type: "Feature", properties: { name: "a" }, geometry: NULL_GEOMETRY }],
       },
     });
     assert.deepEqual(types(table), []);
@@ -294,6 +299,20 @@ describe("Mapbox native layer compilation", () => {
 });
 
 describe("Mapbox-specific basemap preference", () => {
+  it("offers the maintained Mapbox basemap catalog with stable unique choices", () => {
+    assert.deepEqual(
+      MAPBOX_BASEMAP_STYLES.slice(0, 2).map((style) => style.styleUrl),
+      ["mapbox://styles/mapbox/standard", "mapbox://styles/mapbox/standard-satellite"],
+    );
+    assert.equal(
+      new Set(MAPBOX_BASEMAP_STYLES.map((style) => style.id)).size,
+      MAPBOX_BASEMAP_STYLES.length,
+    );
+    for (const style of MAPBOX_BASEMAP_STYLES) {
+      assert.match(style.styleUrl, /^mapbox:\/\/styles\/mapbox\/[a-z0-9-]+$/);
+    }
+  });
+
   it("defaults new projects to Mapbox Standard while retaining the shared basemap", () => {
     const project = createEmptyProject();
     assert.equal(project.preferences.map.mapboxStyleUrl, "mapbox://styles/mapbox/standard");

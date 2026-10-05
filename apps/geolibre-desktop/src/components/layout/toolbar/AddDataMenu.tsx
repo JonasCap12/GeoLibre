@@ -24,14 +24,13 @@ import {
   isDataSourceVisible,
 } from "../../../lib/ui-profile";
 import type { AddLayerHandlers, ToolbarChrome } from "./constants";
+import { PluginMenuContributions } from "./PluginMenuContributions";
 
 interface AddDataMenuProps {
   chrome: ToolbarChrome;
   addLayer: AddLayerHandlers;
   osmPbfBusy: boolean;
   disabled?: boolean;
-  /** Whether the 3D globe is the primary renderer (gates the Cesium-only sources). */
-  cesiumPrimary?: boolean;
   onSetAddDataKind: (kind: AddDataKind) => void;
   onAddGltfModel: () => void;
   onOpenOsmPbfDialog: () => void;
@@ -43,6 +42,7 @@ interface AddDataItem {
 }
 
 function unsupportedTitleKey(renderer: MapRendererKind, id: string) {
+  // eslint-disable-next-line local/no-renderer-kind-checks -- the message names the engine
   if (renderer !== "arcgis") return "renderer.layerMapboxUnsupported";
   return requiresArcgisDeckOverlay(id)
     ? "renderer.layerArcgisViewUnsupported"
@@ -55,7 +55,6 @@ export function AddDataMenu({
   addLayer,
   osmPbfBusy,
   disabled = false,
-  cesiumPrimary = false,
   onSetAddDataKind,
   onAddGltfModel,
   onOpenOsmPbfDialog,
@@ -80,6 +79,7 @@ export function AddDataMenu({
     gdb: { onSelect: () => onSetAddDataKind("gdb") },
     photos: { onSelect: () => onSetAddDataKind("photos") },
     gpx: { onSelect: () => onSetAddDataKind("gpx") },
+    landxml: { onSelect: () => onSetAddDataKind("landxml") },
     polyline: { onSelect: () => onSetAddDataKind("polyline") },
     mbtiles: { onSelect: () => onSetAddDataKind("mbtiles") },
     "osm-pbf": { onSelect: onOpenOsmPbfDialog, disabled: osmPbfBusy },
@@ -110,20 +110,19 @@ export function AddDataMenu({
     pmtiles: { onSelect: addLayer.pmtiles },
     zarr: { onSelect: addLayer.zarr },
     netcdf: { onSelect: addLayer.netcdf },
-    lidar: {
-      onSelect: addLayer.lidar,
-      disabled: renderer === "arcgis" && !capabilities.deckOverlay,
-    },
+    // On an ArcGIS view without the deck.gl overlay, LiDAR and 3D Tiles are
+    // disabled by `supportsAddDataRenderer` below (`requiresArcgisDeckOverlay`).
+    lidar: { onSelect: addLayer.lidar },
     splatting: { onSelect: addLayer.splatting },
-    "3d-tiles": {
-      onSelect: addLayer.threeDTiles,
-      disabled: renderer === "arcgis" && !capabilities.deckOverlay,
-    },
+    "3d-tiles": { onSelect: addLayer.threeDTiles },
     // Ion assets load through Cesium only (issue #2290); on the 2D map the
     // entry stays visible but disabled so the capability is discoverable.
-    "cesium-ion": { onSelect: () => onSetAddDataKind("cesium-ion"), disabled: !cesiumPrimary },
+    "cesium-ion": {
+      onSelect: () => onSetAddDataKind("cesium-ion"),
+      disabled: !capabilities.nativeDataSources,
+    },
     // CZML dynamic 3D scenes load through Cesium only (issue #2290).
-    czml: { onSelect: () => onSetAddDataKind("czml"), disabled: !cesiumPrimary },
+    czml: { onSelect: () => onSetAddDataKind("czml"), disabled: !capabilities.nativeDataSources },
     // KML/KMZ loads natively on the globe and through the host KML importer
     // (the drag-and-drop path) on the 2D renderers, so it is never gated.
     kml: { onSelect: () => onSetAddDataKind("kml") },
@@ -134,11 +133,12 @@ export function AddDataMenu({
     // entry follows the same gate as the Deck.gl builder.
     duckdb: { onSelect: addLayer.duckdb, disabled: !capabilities.deckOverlay },
     postgres: { onSelect: () => onSetAddDataKind("postgres") },
+    mssql: { onSelect: () => onSetAddDataKind("mssql") },
     iceberg: { onSelect: () => onSetAddDataKind("iceberg") },
   };
 
   // Each rendered section is the catalog entries it owns, filtered by the UI
-  // profile (and the mobile rule for postgres, and the Mac App Store rule for
+  // profile (and the mobile rule for the database sources, and the Mac App Store rule for
   // the sidecar/martin-only sources). Sections with no visible items are
   // dropped along with their header/separator.
   const sections = DATA_SOURCE_SECTION_ORDER.map((section) => ({
@@ -147,7 +147,7 @@ export function AddDataMenu({
       (entry) =>
         entry.section === section &&
         isDataSourceVisible(uiProfile, entry.id) &&
-        !(entry.id === "postgres" && mobile) &&
+        !((entry.id === "postgres" || entry.id === "mssql") && mobile) &&
         !masHidesDataSource(entry.id),
     ),
   })).filter((group) => group.entries.length > 0);
@@ -201,6 +201,7 @@ export function AddDataMenu({
             })}
           </Fragment>
         ))}
+        <PluginMenuContributions target="addData" />
       </DropdownMenuContent>
     </DropdownMenu>
   );

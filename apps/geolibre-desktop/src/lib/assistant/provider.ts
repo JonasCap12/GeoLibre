@@ -1,4 +1,5 @@
 import type { Model } from "@strands-agents/sdk";
+import { getDeploymentPolicy, readDeploymentEnv } from "../deployment-env";
 
 /**
  * Supported LLM providers for the natural-language assistant. The boundary is
@@ -11,6 +12,7 @@ export type AssistantProviderId =
   | "google"
   | "anthropic"
   | "openai"
+  | "openrouter"
   | "ollama"
   | "bedrock"
   | "custom";
@@ -20,6 +22,7 @@ export const ASSISTANT_PROVIDER_IDS: readonly AssistantProviderId[] = [
   "google",
   "anthropic",
   "openai",
+  "openrouter",
   "ollama",
   "bedrock",
   "custom",
@@ -35,7 +38,8 @@ export interface BedrockCredentials {
 /**
  * A named, saved profile that bundles a provider, model, and credential values
  * together so users can define multiple LLM configurations and switch between
- * them. Profiles are stored in DesktopSettings (localStorage), never in the
+ * them. Profiles are stored in DesktopSettings (secret fields in the OS
+ * credential store on desktop, localStorage on the web), never in the
  * shared project file.
  */
 export interface AssistantProfile {
@@ -80,6 +84,7 @@ const PROVIDER_KEY_NAMES: Partial<Record<AssistantProviderId, readonly string[]>
   google: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
 };
 
 /**
@@ -113,6 +118,9 @@ export const OS_ENV_VAR_NAMES: readonly string[] = [
   "ANTHROPIC_API_KEY",
   // OpenAI.
   "OPENAI_API_KEY",
+  // OpenRouter.
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_MODEL",
   // Ollama (local). `OLLAMA_HOST` is intentionally omitted — it is the ambient
   // Ollama variable; `OLLAMA_BASE_URL` is GeoLibre's own documented setting.
   "OLLAMA_BASE_URL",
@@ -123,6 +131,9 @@ export const OS_ENV_VAR_NAMES: readonly string[] = [
   "OPENAI_COMPATIBLE_MODEL",
   // Web-search tool (Tavily).
   "TAVILY_API_KEY",
+  // TypeSafe fast path (assistant/fast-path.ts). Optional: without it the
+  // assistant simply routes every request through the model as before.
+  "JEV_API_KEY",
 ];
 
 /**
@@ -215,9 +226,12 @@ export function mergeRuntimeEnv({
 /**
  * Selectable models per provider, recommended/newest first. The first entry is
  * the provider default. Users can pin any other id via `GEOLIBRE_ASSISTANT_MODEL`
- * (or the per-provider env var) or the model picker. The hosted-model ids were
- * verified against the providers' docs as of 2026-07; the `ollama`/`bedrock`
- * lists are common examples (use your own via the env vars). `custom` has no
+ * (or the per-provider env var) or the model picker. For Google, Anthropic,
+ * OpenAI, OpenRouter and Bedrock the picker replaces these with the provider's
+ * live catalog once it loads (see `model-discovery.ts`), so the lists here are
+ * only the default and the offline fallback. The hosted-model ids were
+ * verified against the providers' docs as of 2026-07; the `ollama` list is
+ * common examples (Ollama discovers the installed models separately). `custom` has no
  * preset — supply the model with `OPENAI_COMPATIBLE_MODEL`.
  */
 export const PROVIDER_MODELS: Record<AssistantProviderId, readonly string[]> = {
@@ -229,6 +243,7 @@ export const PROVIDER_MODELS: Record<AssistantProviderId, readonly string[]> = {
   ],
   anthropic: ["claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5"],
   openai: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+  openrouter: ["openai/gpt-5.6-luna"],
   ollama: ["gemma4", "qwen3.6", "qwen3.5", "llama4", "gpt-oss"],
   bedrock: [
     "global.anthropic.claude-opus-5",
@@ -246,6 +261,7 @@ const DEFAULT_MODEL: Record<AssistantProviderId, string> = {
   google: PROVIDER_MODELS.google[0],
   anthropic: PROVIDER_MODELS.anthropic[0],
   openai: PROVIDER_MODELS.openai[0],
+  openrouter: PROVIDER_MODELS.openrouter[0],
   ollama: PROVIDER_MODELS.ollama[0],
   bedrock: PROVIDER_MODELS.bedrock[0],
   custom: "",
@@ -256,6 +272,7 @@ export const PROVIDER_LABELS: Record<AssistantProviderId, string> = {
   google: "Google Gemini",
   anthropic: "Anthropic",
   openai: "OpenAI",
+  openrouter: "OpenRouter",
   ollama: "Ollama (local)",
   bedrock: "Amazon Bedrock",
   custom: "Custom (OpenAI-compatible)",
@@ -275,11 +292,23 @@ function browserOrigin(): string | undefined {
   return origin && origin !== "null" ? origin : undefined;
 }
 
-function managedProxyBaseUrl(proxyUrl: string, baseOrigin?: string): string {
-  let normalized = proxyUrl.trim().replace(/\/+$/, "");
+/**
+ * Absolutize a configured proxy path against the page origin.
+ *
+ * A same-origin `/path` form is what a reverse proxy in front of the app
+ * configures, and Tauri's native HTTP client cannot resolve a relative URL, so
+ * it has to become absolute before it reaches either transport.
+ */
+function managedProxyPath(proxyUrl: string, baseOrigin?: string): string {
+  const normalized = proxyUrl.trim().replace(/\/+$/, "");
   if (baseOrigin && normalized.startsWith("/")) {
-    normalized = new URL(normalized, baseOrigin).toString().replace(/\/+$/, "");
+    return new URL(normalized, baseOrigin).toString().replace(/\/+$/, "");
   }
+  return normalized;
+}
+
+function managedProxyBaseUrl(proxyUrl: string, baseOrigin?: string): string {
+  const normalized = managedProxyPath(proxyUrl, baseOrigin);
   return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 
@@ -292,10 +321,24 @@ export function readBuildTimeAssistantEnv(
 ): RuntimeEnv {
   if (!viteEnv) return {};
   const result: RuntimeEnv = {};
-  const proxyUrl = viteEnv.VITE_GEOLIBRE_AI_URL?.trim().replace(/\/+$/, "");
+  // Routing endpoint for the assistant's fast path. Separate from the chat
+  // proxy because the two need not be the same service: the dev server proxies
+  // only routing, and a deployment may add routing without moving chat.
+  const fastPathUrl = viteEnv.VITE_GEOLIBRE_FAST_PATH_URL?.trim().replace(/\/+$/, "");
+  if (fastPathUrl) {
+    result.GEOLIBRE_FAST_PATH_URL = managedProxyPath(fastPathUrl, baseOrigin);
+  }
+  // deployment.json `ai`: `enabled: false` removes the managed proxy whichever
+  // env supplied it; `model` outranks the env's model.
+  const aiPolicy = getDeploymentPolicy()?.ai;
+  const proxyUrl =
+    aiPolicy?.enabled === false
+      ? undefined
+      : viteEnv.VITE_GEOLIBRE_AI_URL?.trim().replace(/\/+$/, "");
   if (proxyUrl) {
     result.OPENAI_COMPATIBLE_BASE_URL = managedProxyBaseUrl(proxyUrl, baseOrigin);
     result.OPENAI_COMPATIBLE_MODEL =
+      aiPolicy?.model?.trim() ||
       viteEnv.VITE_GEOLIBRE_AI_MODEL?.trim() ||
       result.OPENAI_COMPATIBLE_MODEL ||
       "openai/gpt-5.6-luna";
@@ -306,11 +349,7 @@ export function readBuildTimeAssistantEnv(
 /** Public proxy configuration injected by the Docker entrypoint at container startup. */
 export function readDeploymentAssistantEnv(): RuntimeEnv {
   if (typeof window === "undefined") return {};
-  const deploymentEnv = (
-    window as unknown as {
-      __GEOLIBRE_DEPLOYMENT_ENV__?: Record<string, string | undefined>;
-    }
-  ).__GEOLIBRE_DEPLOYMENT_ENV__;
+  const deploymentEnv = readDeploymentEnv();
   const result = readBuildTimeAssistantEnv(deploymentEnv, browserOrigin());
   if (result.OPENAI_COMPATIBLE_BASE_URL) {
     result.GEOLIBRE_AI_PROXY_BASE_URL = result.OPENAI_COMPATIBLE_BASE_URL;
@@ -372,9 +411,13 @@ export function getApiKey(
   return names ? firstValue(env, ...names) : null;
 }
 
-/** The default model id for a provider. */
-export function defaultModelFor(provider: AssistantProviderId): string {
-  return DEFAULT_MODEL[provider];
+/** The default model id for a provider, honoring OpenRouter's model override. */
+export function defaultModelFor(
+  provider: AssistantProviderId,
+  env: RuntimeEnv = readRuntimeEnv(),
+): string {
+  const openrouterModel = provider === "openrouter" ? env.OPENROUTER_MODEL?.trim() : undefined;
+  return openrouterModel || DEFAULT_MODEL[provider];
 }
 
 /** Resolve the model id for a provider: explicit → env → provider default. */
@@ -390,7 +433,9 @@ function resolveModelId(
         ? env.BEDROCK_MODEL
         : provider === "custom"
           ? env.OPENAI_COMPATIBLE_MODEL
-          : undefined;
+          : provider === "openrouter"
+            ? env.OPENROUTER_MODEL
+            : undefined;
   return (
     model?.trim() ||
     env.GEOLIBRE_ASSISTANT_MODEL?.trim() ||
@@ -404,7 +449,7 @@ function resolveModelId(
  * or null when that provider is not configured. Each provider type reads its own
  * Settings → Environment variables:
  *
- * - google / anthropic / openai — an API key (see {@link PROVIDER_KEY_NAMES}).
+ * - google / anthropic / openai / openrouter — an API key (see {@link PROVIDER_KEY_NAMES}).
  * - ollama — `OLLAMA_BASE_URL` (or `OLLAMA_HOST`); keyless, local.
  * - bedrock — `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_REGION`,
  *   `AWS_SESSION_TOKEN`).
@@ -425,6 +470,16 @@ export function configForProvider(
       const apiKey = getApiKey(provider, env);
       if (!apiKey) return null;
       return { provider, apiKey, modelId };
+    }
+    case "openrouter": {
+      const apiKey = getApiKey(provider, env);
+      if (!apiKey) return null;
+      return {
+        provider,
+        apiKey,
+        baseURL: "https://openrouter.ai/api/v1",
+        modelId,
+      };
     }
     case "ollama": {
       const baseURL = ollamaBaseUrl(env);
@@ -600,10 +655,11 @@ export async function createModel(config: AssistantProviderConfig): Promise<Mode
         clientConfig: { dangerouslyAllowBrowser: true },
       }) as unknown as Model;
     }
+    case "openrouter":
     case "ollama":
     case "custom": {
-      // Ollama and custom endpoints speak the OpenAI Chat Completions API; the
-      // Responses API (OpenAI's default) is not generally supported there.
+      // Ollama, OpenRouter, and custom endpoints speak OpenAI Chat Completions;
+      // the Responses API (OpenAI's default) is not generally supported there.
       const { OpenAIModel } = await import("@strands-agents/sdk/models/openai");
       return new OpenAIModel({
         api: "chat",

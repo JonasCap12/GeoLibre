@@ -9,6 +9,15 @@ import {
   HALO_EXTENT_MIN,
   HALO_OPACITY_MAX,
   HALO_OPACITY_MIN,
+  flightSimulatorPlugin,
+  isPluginEngineSupported,
+  maplibreDirectionsPlugin,
+  maplibreLayerControlPlugin,
+  maplibreEffectsPlugin,
+  maplibreGraticulePlugin,
+  maplibreReverseGeocodePlugin,
+  maplibreRouteAnimationPlugin,
+  maplibreSunPlugin,
   setCloudsFrame,
   setPrecipitationFrame,
   subscribeClouds,
@@ -51,6 +60,7 @@ import {
   type ToolbarMapControl,
 } from "./constants";
 import { useMapCapabilities } from "../../../hooks/useMapCapabilities";
+import { PluginMenuContributions } from "./PluginMenuContributions";
 
 /**
  * Controls-menu entries that write to the project rather than only changing
@@ -67,12 +77,14 @@ interface ControlsMenuProps {
   controlsVisible: Record<ToolbarMapControl, boolean>;
   panels: ToolbarPanels;
   effectsActive: boolean;
+  layerControlActive: boolean;
   directionsActive: boolean;
   reverseGeocodeActive: boolean;
   graticuleActive: boolean;
   cloudsActive: boolean;
   precipitationActive: boolean;
   onToggleMapControl: (control: ToolbarMapControl) => void;
+  onToggleLayerControl: () => void;
   onToggleEffects: () => void;
   getEffectsSettings: () => EffectsSettings;
   onPreviewEffectsSettings: (next: Partial<EffectsSettings>) => void;
@@ -89,6 +101,13 @@ interface ControlsMenuProps {
   onOpenRecordVideo: () => void;
 }
 
+/**
+ * A disabled menu item ignores the pointer by default, which also hides its
+ * `title` explaining why; keep pointer events so the reason shows on hover.
+ * Radix still refuses to select a disabled item.
+ */
+const REASON_ON_HOVER = "data-[disabled]:pointer-events-auto";
+
 /** The Controls menu: built-in map controls, atmosphere/routing toggles, and panels. */
 export function ControlsMenu({
   chrome,
@@ -96,12 +115,14 @@ export function ControlsMenu({
   controlsVisible,
   panels,
   effectsActive,
+  layerControlActive,
   directionsActive,
   reverseGeocodeActive,
   graticuleActive,
   cloudsActive,
   precipitationActive,
   onToggleMapControl,
+  onToggleLayerControl,
   onToggleEffects,
   getEffectsSettings,
   onPreviewEffectsSettings,
@@ -119,17 +140,49 @@ export function ControlsMenu({
 }: ControlsMenuProps) {
   const { t } = useTranslation();
   const capabilities = useMapCapabilities();
+  const primaryRenderer = useAppStore((s) => s.primaryRenderer);
+  const directionsSupported = isPluginEngineSupported(maplibreDirectionsPlugin, primaryRenderer);
+  const reverseGeocodeSupported = isPluginEngineSupported(
+    maplibreReverseGeocodePlugin,
+    primaryRenderer,
+  );
+  const directionsDisabled = !directionsSupported && !directionsActive;
+  // A plugin the live renderer does not support cannot activate, so its entry
+  // is greyed with the reason rather than toggling nothing (or opening a panel
+  // that stays empty). One already on stays reachable so it can be turned off.
+  const unsupported = (plugin: Parameters<typeof isPluginEngineSupported>[0], active: boolean) =>
+    !isPluginEngineSupported(plugin, primaryRenderer) && !active;
+  const layerControlDisabled = unsupported(maplibreLayerControlPlugin, layerControlActive);
+  const sunDisabled = unsupported(maplibreSunPlugin, panels.sun.visible);
+  const routeAnimationDisabled = unsupported(
+    maplibreRouteAnimationPlugin,
+    panels.routeAnimation.visible,
+  );
+  const flightSimulatorDisabled = unsupported(
+    flightSimulatorPlugin,
+    panels.flightSimulator.visible,
+  );
+  const graticuleDisabled = unsupported(maplibreGraticulePlugin, graticuleActive);
+  // The measure control draws its sketch through the MapLibre/Mapbox style
+  // API, which the ArcGIS view has no equivalent of.
+  const measureDisabled = !capabilities.measureTool && !panels.measure.visible;
+  const effectsSupported = isPluginEngineSupported(maplibreEffectsPlugin, primaryRenderer);
+  const reverseGeocodeDisabled = !reverseGeocodeSupported && !reverseGeocodeActive;
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
   const show = (id: string) =>
     viewer && AUTHORING_CONTROL_ITEMS.includes(id) ? false : isMenuItemVisible(uiProfile, id);
   // Atmospheric effects only render on the globe (the engine idles in Mercator),
   // so the submenu is disabled while the map is in a flat projection (#783). The
-  // GlobeControl toggle syncs this preference via the map "projectiontransition"
-  // event, so the menu reacts the moment the user switches projections. The
-  // Cesium renderer is a globe whatever the 2D projection preference says, and
-  // its effects branch drives the native sky box and atmosphere (#2287).
+  // globe control syncs this preference on every engine that has one — MapLibre
+  // through "projectiontransition", Mapbox and ArcGIS through their own toggles
+  // — so the menu reacts the moment the user switches projections. Cesium has no
+  // flat mode the preference maps onto (`flatProjection`), it is a globe
+  // whatever the preference says, and its effects branch drives the native sky
+  // box and atmosphere (#2287). Gating on "not a MapLibre map" instead left the
+  // submenu enabled on Mapbox in Mercator, where the effects draw nothing
+  // (#2475).
   const globeProjection = useAppStore((s) => s.preferences.map.projection === "globe");
-  const globeActive = globeProjection || !capabilities.nativeMapInstance;
+  const globeActive = globeProjection || !capabilities.flatProjection;
   const restrictBounds = useAppStore((s) => s.preferences.map.restrictBounds);
   const setPreferences = useAppStore((s) => s.setPreferences);
   // Ground elevation under the pointer in the status bar (#1813). Off by
@@ -162,6 +215,7 @@ export function ControlsMenu({
   // Whether the first group (built-in controls + atmosphere/routing toggles) has
   // any visible item, so the separator below it isn't left orphaned.
   const anyTopControls =
+    show("controls.layerControl") ||
     MAP_CONTROL_ITEMS.some((control) => show(`controls.mapControl.${control.id}`)) ||
     show("controls.atmosphereEffects") ||
     show("controls.clouds") ||
@@ -204,6 +258,17 @@ export function ControlsMenu({
         <DropdownMenuContent align="start">
           <DropdownMenuLabel>{t("toolbar.item.mapControls")}</DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {show("controls.layerControl") && (
+            <DropdownMenuItem
+              disabled={layerControlDisabled}
+              className={REASON_ON_HOVER}
+              title={layerControlDisabled ? t("renderer.pluginUnsupported") : undefined}
+              onClick={onToggleLayerControl}
+            >
+              {t("toolbar.plugin.maplibre-layer-control")}
+              {layerControlActive ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
           {MAP_CONTROL_ITEMS.filter(
             (control) =>
               !LOGO_CONTROL_IDS.has(control.id) && show(`controls.mapControl.${control.id}`),
@@ -230,7 +295,12 @@ export function ControlsMenu({
           {show("controls.atmosphereEffects") && (
             <AtmosphereEffectsSubmenu
               active={effectsActive}
-              disabled={!globeActive}
+              disabled={!globeActive || (!effectsSupported && !effectsActive)}
+              disabledReason={
+                effectsSupported
+                  ? t("toolbar.atmosphere.globeOnly")
+                  : t("renderer.pluginUnsupported")
+              }
               onToggle={onToggleEffects}
               getSettings={getEffectsSettings}
               onPreview={onPreviewEffectsSettings}
@@ -246,14 +316,25 @@ export function ControlsMenu({
             />
           )}
           {show("controls.sun") && (
-            <DropdownMenuItem title={t("toolbar.item.sunTooltip")} onSelect={panels.sun.toggle}>
+            <DropdownMenuItem
+              disabled={sunDisabled}
+              className={REASON_ON_HOVER}
+              title={sunDisabled ? t("renderer.pluginUnsupported") : t("toolbar.item.sunTooltip")}
+              onSelect={panels.sun.toggle}
+            >
               {t("toolbar.item.sun")}
               {panels.sun.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.routeAnimation") && (
             <DropdownMenuItem
-              title={t("toolbar.item.routeAnimationTooltip")}
+              disabled={routeAnimationDisabled}
+              className={REASON_ON_HOVER}
+              title={
+                routeAnimationDisabled
+                  ? t("renderer.pluginUnsupported")
+                  : t("toolbar.item.routeAnimationTooltip")
+              }
               onSelect={panels.routeAnimation.toggle}
             >
               {t("toolbar.item.routeAnimation")}
@@ -262,7 +343,13 @@ export function ControlsMenu({
           )}
           {show("controls.flightSimulator") && (
             <DropdownMenuItem
-              title={t("toolbar.item.flightSimulatorTooltip")}
+              disabled={flightSimulatorDisabled}
+              className={REASON_ON_HOVER}
+              title={
+                flightSimulatorDisabled
+                  ? t("renderer.pluginUnsupported")
+                  : t("toolbar.item.flightSimulatorTooltip")
+              }
               onSelect={panels.flightSimulator.toggle}
             >
               {t("toolbar.item.flightSimulator")}
@@ -276,7 +363,12 @@ export function ControlsMenu({
             </DropdownMenuItem>
           )}
           {show("controls.graticule") && (
-            <DropdownMenuItem onClick={onToggleGraticule}>
+            <DropdownMenuItem
+              disabled={graticuleDisabled}
+              className={REASON_ON_HOVER}
+              title={graticuleDisabled ? t("renderer.pluginUnsupported") : undefined}
+              onClick={onToggleGraticule}
+            >
               {t("toolbar.item.graticule")}
               {graticuleActive ? " ✓" : ""}
             </DropdownMenuItem>
@@ -292,7 +384,13 @@ export function ControlsMenu({
           )}
           {show("controls.directions") && (
             <DropdownMenuItem
-              title={t("toolbar.item.directionsTooltip")}
+              disabled={directionsDisabled}
+              className={REASON_ON_HOVER}
+              title={
+                directionsDisabled
+                  ? t("renderer.pluginUnsupported")
+                  : t("toolbar.item.directionsTooltip")
+              }
               onClick={onToggleDirections}
             >
               {t("toolbar.item.directions")}
@@ -301,7 +399,13 @@ export function ControlsMenu({
           )}
           {show("controls.reverseGeocode") && (
             <DropdownMenuItem
-              title={t("toolbar.item.reverseGeocodeTooltip")}
+              disabled={reverseGeocodeDisabled}
+              className={REASON_ON_HOVER}
+              title={
+                reverseGeocodeDisabled
+                  ? t("renderer.pluginUnsupported")
+                  : t("toolbar.item.reverseGeocodeTooltip")
+              }
               onClick={onToggleReverseGeocode}
             >
               {t("toolbar.item.reverseGeocode")}
@@ -334,7 +438,12 @@ export function ControlsMenu({
             </DropdownMenuItem>
           )}
           {show("controls.measure") && (
-            <DropdownMenuItem onSelect={panels.measure.toggle}>
+            <DropdownMenuItem
+              disabled={measureDisabled}
+              className={REASON_ON_HOVER}
+              title={measureDisabled ? t("renderer.pluginUnsupported") : undefined}
+              onSelect={panels.measure.toggle}
+            >
               {t("toolbar.item.measure")}
               {panels.measure.visible ? " ✓" : ""}
             </DropdownMenuItem>
@@ -386,6 +495,9 @@ export function ControlsMenu({
               {t("toolbar.item.recordVideo")}
             </DropdownMenuItem>
           )}
+          {/* Plugins are authoring chrome, hidden from the read-only viewer
+              like plugin-registered toolbar menus. */}
+          {!viewer && <PluginMenuContributions target="controls" />}
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog
@@ -493,8 +605,13 @@ function LogosSubmenu({ controlsVisible, onToggleMapControl, show }: LogosSubmen
 
 interface AtmosphereEffectsSubmenuProps {
   active: boolean;
-  /** Greyed out and non-interactive while the map is not in globe projection. */
+  /**
+   * Greyed out and non-interactive while the map is not in globe projection,
+   * or on a renderer the effects plugin does not support.
+   */
   disabled: boolean;
+  /** Tooltip explaining why the submenu is disabled. */
+  disabledReason: string;
   onToggle: () => void;
   getSettings: () => EffectsSettings;
   onPreview: (next: Partial<EffectsSettings>) => void;
@@ -516,6 +633,7 @@ interface AtmosphereEffectsSubmenuProps {
 function AtmosphereEffectsSubmenu({
   active,
   disabled,
+  disabledReason,
   onToggle,
   getSettings,
   onPreview,
@@ -548,7 +666,7 @@ function AtmosphereEffectsSubmenu({
         // explain why on hover. The trigger keeps pointer-events active (see
         // dropdown-menu.tsx) so the native title tooltip still fires (#783).
         disabled={disabled}
-        title={disabled ? t("toolbar.atmosphere.globeOnly") : undefined}
+        title={disabled ? disabledReason : undefined}
       >
         {t("toolbar.item.atmosphereEffects")}
         {/* Suppress the check on a disabled (Mercator) row: a ✓ on a greyed,

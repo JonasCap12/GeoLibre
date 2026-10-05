@@ -1,5 +1,3 @@
-import { config } from "maplibre-gl";
-import type { AddProtocolAction, RequestParameters } from "maplibre-gl";
 import type {
   Credit,
   Event,
@@ -9,6 +7,7 @@ import type {
   TileDiscardPolicy,
   WebMercatorTilingScheme,
 } from "@cesium/engine";
+import { requestProtocolTile } from "./protocol-tiles";
 
 // A Cesium `ImageryProvider` fed by MapLibre custom protocols (issue #2283).
 //
@@ -113,59 +112,6 @@ export function webMercatorRectangle(
 }
 
 /**
- * The URL scheme of a tile template that names a custom protocol, or `null`
- * for a plain web (`http`, `https`, `blob`, `data`) or relative URL that
- * Cesium can fetch itself.
- */
-export function protocolScheme(url: string): string | null {
-  const match = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url);
-  if (!match) return null;
-  const scheme = match[1].toLowerCase();
-  return scheme === "http" || scheme === "https" || scheme === "blob" || scheme === "data"
-    ? null
-    : scheme;
-}
-
-/** The MapLibre protocol registry — process-wide, so no map has to be mounted. */
-function registeredProtocols(): Record<string, AddProtocolAction> {
-  return (
-    (config as { REGISTERED_PROTOCOLS?: Record<string, AddProtocolAction> }).REGISTERED_PROTOCOLS ??
-    {}
-  );
-}
-
-/** Whether a handler for `scheme` is registered with `maplibregl.addProtocol`. */
-export function hasRegisteredProtocol(scheme: string): boolean {
-  return typeof registeredProtocols()[scheme] === "function";
-}
-
-/**
- * Fetch a tile through the MapLibre protocol handler registered for its
- * scheme. Resolves `null` when the handler returns no bytes (the empty
- * `ArrayBuffer` every GeoLibre handler uses for "no tile here").
- */
-export async function requestProtocolTile(
-  url: string,
-  signal: AbortSignal,
-): Promise<ArrayBuffer | Uint8Array | null> {
-  const scheme = protocolScheme(url);
-  const handler = scheme ? registeredProtocols()[scheme] : undefined;
-  if (!handler) throw new Error(`no MapLibre protocol handler for "${scheme ?? url}"`);
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    const params: RequestParameters = { url, type: "image" };
-    const response = await handler(params, controller);
-    const data = response?.data as ArrayBuffer | Uint8Array | null | undefined;
-    if (!data) return null;
-    return data.byteLength > 0 ? data : null;
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
-}
-
-/**
  * Expand a MapLibre tile template for one tile, the way MapLibre does:
  * `{z}`, `{x}`, `{y}` (and `{-y}` for TMS), plus `{quadkey}`, `{bbox-epsg-3857}`,
  * and `{ratio}` (always empty here — the globe requests device-independent
@@ -191,7 +137,7 @@ export function expandTileTemplate(
     .replace(/\{ratio\}/g, "");
 }
 
-function quadkey(z: number, x: number, y: number): string {
+export function quadkey(z: number, x: number, y: number): string {
   let key = "";
   for (let i = z; i > 0; i--) {
     const mask = 1 << (i - 1);
@@ -203,7 +149,7 @@ function quadkey(z: number, x: number, y: number): string {
   return key;
 }
 
-function mercatorBbox(z: number, x: number, y: number): string {
+export function mercatorBbox(z: number, x: number, y: number): string {
   const half = 20037508.342789244;
   const size = (2 * half) / 2 ** z;
   const west = -half + x * size;

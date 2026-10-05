@@ -35,6 +35,8 @@ const RESERVED_PARAMS: ReadonlySet<string> = new Set([
   "locale",
   "lang",
   "collab",
+  // Plugin deep link (`plugin-deep-link.ts`).
+  "plugin",
 ]);
 
 /**

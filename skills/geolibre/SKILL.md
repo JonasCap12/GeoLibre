@@ -57,7 +57,11 @@ Six steps. Most maps use four of them.
 3. **Frame it** — `set_view` with a `center`+`zoom`, or a `bbox` to fit an area.
 4. **Style it** — `style_layer` to merge style keys, or `classify_layer` to
    build a graduated choropleth from a numeric column.
-5. **Decorate** — `add_legend`, `add_colorbar`, `add_swipe` for before/after.
+5. **Decorate** — `set_map_legend` for a legend built from the layers' own
+   styles, `add_legend` for hand-written entries, `add_colorbar`, `add_swipe`
+   for before/after. `set_labels` labels features, `set_layer_filter` hides
+   the ones you do not want, and `add_story_chapter` turns the project into a
+   scroll-driven story.
 6. **`export_html`** — a single self-contained page the recipient opens with no
    install.
 
@@ -76,8 +80,7 @@ add_geojson_layer(path=..., name="Counties",
 list_layer_properties(path=..., layer="Counties")     # find the real column name
 classify_layer(path=..., layer="Counties", column="pop_2020",
                class_count=5, colormap="blues", scheme="quantile")
-add_legend(path=..., title="Population",
-           legend_dict={"Low": "#eff6ff", "High": "#1e3a8a"})
+set_map_legend(path=..., title="Population")         # lists the classes above
 export_html(path=..., out_path="counties.html", title="Population by county")
 ```
 
@@ -119,9 +122,15 @@ export_html(path=..., out_path="counties.html", title="Population by county")
 - **Remote URLs are checked.** A host resolving to a private, loopback, or
   link-local address is refused, on every redirect hop. Don't try to work around
   it — it is protecting the machine you are running on.
-- **The MCP server authors projects; it does not drive a live map.** There is no
-  "pan the map that's open on my screen" tool. That is the embed API or the
-  Python widget.
+- **File tools and `live_*` tools are different.** `create_project` and
+  `add_*_layer` write a `.geolibre.json` on disk. `live_status()`,
+  `live_fly_to()`, `live_add_geojson()`, and the other `live_*` tools move the
+  map already open in GeoLibre Desktop, through the Notebook-panel relay on
+  `127.0.0.1:8766`. Call `live_status()` first. If it reports no relay, ask
+  the user to open Processing → Jupyter Notebook once. A live edit is not on
+  disk until the user saves in the app. Web and JupyterLite have no relay.
+  Processing (`live_list_algorithms()`, `live_run_algorithm()`) runs in the
+  app, so it is live-only.
 
 ## Verify before you claim it works
 

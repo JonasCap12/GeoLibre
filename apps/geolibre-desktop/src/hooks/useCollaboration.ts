@@ -12,6 +12,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { RefObject } from "react";
 import type { MapEngine } from "@geolibre/map";
+// `bindFollowGestures` listens on the MapLibre map itself: only it reports the
+// drag/zoom/rotate/pitch starts that stop following, which `MapEngine` does not
+// surface.
 import type { Map as MapLibreMap, MapLibreEvent } from "maplibre-gl";
 import i18n from "../i18n";
 import {
@@ -110,12 +113,16 @@ export interface CollaborationApi {
   sendCommentMutation: (action: CommentMutationAction) => boolean;
 }
 
-export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>): CollaborationApi {
+export function useCollaboration(
+  mapControllerRef: RefObject<MapEngine | null>,
+  mapReadyGeneration: number,
+): CollaborationApi {
   const baseUrl = useMemo(() => resolveCollabBaseUrl(), []);
   const enabled = baseUrl !== null;
 
   const connRef = useRef<CollabConnection | null>(null);
   const teardownRef = useRef<(() => void) | null>(null);
+  const presenceTeardownRef = useRef<(() => void) | null>(null);
   const lastContentRef = useRef<string | null>(null);
   const revRef = useRef(0);
   const snapshotRequestRef = useRef(0);
@@ -135,6 +142,8 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     resolve: () => void;
     reject: (error: Error) => void;
   } | null>(null);
+  const collaborationActive = useAppStore((state) => state.collaboration.isActive);
+  const primaryRenderer = useAppStore((state) => state.primaryRenderer);
 
   useEffect(
     () => () => {
@@ -152,6 +161,45 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   useEffect(() => {
     void rehydrateSharedLayersInStore(shareToken);
   }, [shareToken]);
+
+  // A welcome snapshot can swap the renderer after the socket connects. Bind
+  // presence after that commit, and rebind whenever a live session changes
+  // engines, instead of holding listeners on the destroyed initial canvas.
+  useEffect(() => {
+    if (!collaborationActive) {
+      presenceTeardownRef.current?.();
+      presenceTeardownRef.current = null;
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      presenceTeardownRef.current?.();
+      const engine = mapControllerRef.current;
+      const conn = connRef.current;
+      if (!engine || !conn) {
+        presenceTeardownRef.current = null;
+        return;
+      }
+      const detachPresence = bindPresence(engine, conn);
+      // Cesium and ArcGIS do not expose a MapLibre map, so they cannot emit
+      // drag/zoom/rotate/pitch starts. Follow stays on until the person stops
+      // it or the target leaves; only MapLibre (and Mapbox) auto-stop on a
+      // gesture. Bound here so it rebinds with presence when the engine swaps.
+      const map = engine.getMap();
+      const detachGestures = map ? bindFollowGestures(map) : null;
+      presenceTeardownRef.current = () => {
+        detachPresence();
+        detachGestures?.();
+      };
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      presenceTeardownRef.current?.();
+      presenceTeardownRef.current = null;
+    };
+    // bindPresence is deliberately local to this hook; renderer/session state
+    // is the lifecycle boundary for its DOM and camera listeners.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collaborationActive, primaryRenderer, mapReadyGeneration, mapControllerRef]);
 
   const canEdit = (): boolean => {
     const c = useAppStore.getState().collaboration;
@@ -213,7 +261,9 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     if (restoreTimerRef.current) clearTimeout(restoreTimerRef.current);
     restoreTimerRef.current = setTimeout(() => {
       restoreTimerRef.current = null;
-      useAppStore.setState((s) => ({ projectGeneration: s.projectGeneration + 1 }));
+      useAppStore.setState((s) => ({
+        projectGeneration: s.projectGeneration + 1,
+      }));
     }, 200);
   };
 
@@ -222,9 +272,10 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
     const localView = mapControllerRef.current?.readView() ?? state.mapView;
     const merged = mergeInboundCollaborationProject(project, localView, state.projectPlugins);
     if (initial) {
-      useAppStore
-        .getState()
-        .loadProject(merged, null, { rememberRecent: false, presenting: false });
+      useAppStore.getState().loadProject(merged, null, {
+        rememberRecent: false,
+        presenting: false,
+      });
     } else {
       const applied = applyProjectToStore(merged);
       useAppStore.setState({ ...applied });
@@ -352,7 +403,9 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       }
       case "invite-revoked": {
         const current = useAppStore.getState().collaboration.invites;
-        store.setCollaboration({ invites: current.filter((i) => i.token !== message.token) });
+        store.setCollaboration({
+          invites: current.filter((i) => i.token !== message.token),
+        });
         break;
       }
       case "session-config": {
@@ -368,9 +421,9 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       case "kicked": {
         disconnect();
         useAppStore.getState().resetCollaboration();
-        useAppStore
-          .getState()
-          .setCollaboration({ error: message.reason ?? "Removed from session." });
+        useAppStore.getState().setCollaboration({
+          error: message.reason ?? "Removed from session.",
+        });
         break;
       }
       case "error": {
@@ -426,45 +479,47 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
       identityToken,
     });
 
-    const map = mapControllerRef.current?.getMap() ?? null;
-    const detachMap = map ? bindPresence(map, conn) : () => {};
-    // Cesium and ArcGIS do not expose a MapLibre map, so they cannot emit
-    // drag/zoom/rotate/pitch starts. Follow stays on until the person stops it
-    // or the target leaves; only MapLibre (and Mapbox) auto-stop on a gesture.
-    const detachGestures = map ? bindFollowGestures(map) : () => {};
-
+    // Presence and the follow gestures are bound by the renderer-aware effect
+    // above, which rebinds them when a live session swaps engines; both are
+    // torn down through `presenceTeardownRef`, not from here.
     teardownRef.current = () => {
       if (debounce) clearTimeout(debounce);
       unsubscribe();
-      detachMap();
-      detachGestures();
     };
   };
 
-  const bindPresence = (map: MapLibreMap, conn: CollabConnection): (() => void) => {
+  const bindPresence = (engine: MapEngine, conn: CollabConnection): (() => void) => {
+    const surface = engine.getRenderSurface();
+    if (!surface) return () => {};
+    const container = surface.getContainer();
     let lastCursor = 0;
-    const onMouseMove = (e: { lngLat: { lng: number; lat: number } }) => {
+    const onPointerMove = (event: PointerEvent) => {
       const now = Date.now();
       if (now - lastCursor < CURSOR_THROTTLE_MS) return;
       lastCursor = now;
-      conn.send({ type: "presence", cursor: { lng: e.lngLat.lng, lat: e.lngLat.lat } });
+      const bounds = container.getBoundingClientRect();
+      const lngLat = surface.unproject([event.clientX - bounds.left, event.clientY - bounds.top]);
+      if (lngLat)
+        conn.send({
+          type: "presence",
+          cursor: lngLat,
+          view: engine.readView(),
+        });
     };
-    const onMouseOut = () => conn.send({ type: "presence", cursor: null });
-    // The token rides along as `eventData` on the flight simulator's camera
-    // calls, so it is an extra field on a real `moveend` event rather than a
-    // standalone shape — v6's listener types reject the latter.
-    const onMoveEnd = (event?: MapLibreEvent & { flightCameraToken?: number }) => {
-      if (event?.flightCameraToken !== undefined) return;
-      conn.send({ type: "presence", view: mapControllerRef.current?.readView() ?? null });
+    const onPointerLeave = () =>
+      conn.send({ type: "presence", cursor: null, view: engine.readView() });
+    const onCameraIdle = (event?: { storyCamera: boolean }) => {
+      if (event?.storyCamera) return;
+      conn.send({ type: "presence", view: engine.readView() });
     };
-    map.on("mousemove", onMouseMove);
-    map.on("mouseout", onMouseOut);
-    map.on("moveend", onMoveEnd);
-    onMoveEnd();
+    container.addEventListener("pointermove", onPointerMove);
+    container.addEventListener("pointerleave", onPointerLeave);
+    const detachCameraIdle = engine.onCameraIdle(onCameraIdle);
+    onCameraIdle();
     return () => {
-      map.off("mousemove", onMouseMove);
-      map.off("mouseout", onMouseOut);
-      map.off("moveend", onMoveEnd);
+      container.removeEventListener("pointermove", onPointerMove);
+      container.removeEventListener("pointerleave", onPointerLeave);
+      detachCameraIdle();
     };
   };
 
@@ -544,9 +599,10 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
             const p = pendingConnectRef.current;
             pendingConnectRef.current = null;
             conn.close();
-            useAppStore
-              .getState()
-              .setCollaboration({ connecting: false, error: "Could not connect to the session." });
+            useAppStore.getState().setCollaboration({
+              connecting: false,
+              error: "Could not connect to the session.",
+            });
             p.reject(new Error("Could not connect to the session."));
           }
         },
@@ -558,6 +614,8 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
 
   const disconnect = (): void => {
     snapshotRequestRef.current += 1;
+    presenceTeardownRef.current?.();
+    presenceTeardownRef.current = null;
     teardownRef.current?.();
     teardownRef.current = null;
     if (pendingConnectRef.current) {
@@ -631,7 +689,11 @@ export function useCollaboration(mapControllerRef: RefObject<MapEngine | null>):
   }, []);
 
   const setParticipantMode = useCallback((clientId: string, canEditFlag: boolean) => {
-    connRef.current?.send({ type: "set-participant-mode", clientId, canEdit: canEditFlag });
+    connRef.current?.send({
+      type: "set-participant-mode",
+      clientId,
+      canEdit: canEditFlag,
+    });
   }, []);
 
   const mintInvite = useCallback((role: CollaborationMode, maxUses?: number) => {

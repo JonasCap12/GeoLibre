@@ -9,14 +9,29 @@ import {
   Input,
   Label,
 } from "@geolibre/ui";
-import { useCallback, useRef } from "react";
+import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
   LARGE_EMBED_WARNING_BYTES,
+  type RemoteSharedProjectTarget,
   type ProjectFileActions,
 } from "../../../hooks/useProjectFileActions";
 import type { ArcgisProjectImportWarning } from "../../../lib/arcgis-project-import";
 import type { QgisProjectImportWarning } from "../../../lib/qgis-project-import";
+import {
+  fetchSharedProjectVersions,
+  shareHostLabel,
+  ShareUploadError,
+  type SharedProjectVersion,
+} from "../../../lib/share-geolibre";
+import {
+  resolveShareRequestToken,
+  ShareOAuthError,
+  shareOAuthErrorKey,
+  supportsShareOAuth,
+} from "../../../lib/share-oauth";
 import { SaveTemplateDialog } from "../SaveTemplateDialog";
 import { ImportWarningList } from "./ImportWarningList";
 
@@ -24,7 +39,7 @@ interface ProjectFileDialogsProps {
   projectFiles: ProjectFileActions;
 }
 
-/** The project-file dialogs: Open-from-URL, the error dialog, the save-name prompt, and the env-var strip prompt. */
+/** The project-file dialogs: the save-before-close prompt, Open-from-URL, the error dialog, the save-name prompt, and the env-var strip prompt. */
 export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
   const { t } = useTranslation();
 
@@ -85,6 +100,41 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
             <Button
               disabled={projectFiles.droppedProjectSaving}
               onClick={() => void projectFiles.resolveDroppedProjectPrompt("save")}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={projectFiles.windowClosePromptOpen}
+        onOpenChange={(open: boolean) => {
+          if (!open) void projectFiles.resolveWindowClosePrompt("cancel");
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("toolbar.windowClose.savePromptTitle")}</DialogTitle>
+            <DialogDescription>{t("toolbar.windowClose.savePromptDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={projectFiles.windowCloseSaving}
+              onClick={() => void projectFiles.resolveWindowClosePrompt("cancel")}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={projectFiles.windowCloseSaving}
+              onClick={() => void projectFiles.resolveWindowClosePrompt("discard")}
+            >
+              {t("newProject.doNotSave")}
+            </Button>
+            <Button
+              disabled={projectFiles.windowCloseSaving}
+              onClick={() => void projectFiles.resolveWindowClosePrompt("save")}
             >
               {t("common.save")}
             </Button>
@@ -177,6 +227,13 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
           </div>
         </DialogContent>
       </Dialog>
+      <SharedProjectVersionsDialog
+        target={projectFiles.remoteSaveWarning}
+        onClose={projectFiles.clearRemoteSaveWarning}
+        onOpenVersion={(rawUrl, token) =>
+          projectFiles.openProjectFromShareUrl(rawUrl, { authToken: token, asCopy: true })
+        }
+      />
       <Dialog
         open={projectFiles.qgisImportWarnings !== null}
         onOpenChange={(open: boolean) => {
@@ -198,6 +255,50 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
           />
           <div className="flex justify-end">
             <Button onClick={() => projectFiles.setQgisImportWarnings(null)}>
+              {t("common.ok")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={projectFiles.layerStyleImportResult !== null}
+        onOpenChange={(open: boolean) => {
+          if (!open) projectFiles.setLayerStyleImportResult(null);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("toolbar.item.layerStylesImported")}</DialogTitle>
+            <DialogDescription>
+              {t("toolbar.item.layerStylesImportedSummary", {
+                count: projectFiles.layerStyleImportResult?.restyled.length ?? 0,
+                file: projectFiles.layerStyleImportResult?.fileName ?? "",
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          {(projectFiles.layerStyleImportResult?.restyled.length ?? 0) > 0 && (
+            <ul className="max-h-40 list-disc space-y-1 overflow-y-auto ps-5 text-sm">
+              {projectFiles.layerStyleImportResult?.restyled.map((name, index) => (
+                <li key={`${index}-${name}`}>{name}</li>
+              ))}
+            </ul>
+          )}
+          {(projectFiles.layerStyleImportResult?.unused.length ?? 0) > 0 && (
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                {t("toolbar.item.layerStylesUnused", {
+                  count: projectFiles.layerStyleImportResult?.unused.length ?? 0,
+                })}
+              </p>
+              <ul className="max-h-32 list-disc space-y-1 overflow-y-auto ps-5 text-sm text-muted-foreground">
+                {projectFiles.layerStyleImportResult?.unused.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex justify-end">
+            <Button onClick={() => projectFiles.setLayerStyleImportResult(null)}>
               {t("common.ok")}
             </Button>
           </div>
@@ -345,6 +446,140 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
         }}
       />
     </>
+  );
+}
+
+/** Credential failures read as sign-in guidance rather than a raw code. */
+function historyErrorMessage(caught: unknown, t: TFunction): string {
+  if (caught instanceof ShareOAuthError) return t(shareOAuthErrorKey(caught.code));
+  if (caught instanceof ShareUploadError && caught.code === "unauthorized") {
+    return t(
+      supportsShareOAuth() ? "gallery.errorUnauthorizedOAuth" : "gallery.errorUnauthorized",
+      { shareHost: shareHostLabel() },
+    );
+  }
+  return caught instanceof Error ? caught.message : t("toolbar.item.serverHistoryError");
+}
+
+function SharedProjectVersionsDialog({
+  target,
+  onClose,
+  onOpenVersion,
+}: {
+  target: RemoteSharedProjectTarget | null;
+  onClose: () => void;
+  onOpenVersion: (rawUrl: string, token: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [versions, setVersions] = useState<SharedProjectVersion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const handleClose = () => {
+    setShowHistory(false);
+    onClose();
+  };
+
+  useEffect(() => {
+    if (!target || !showHistory) return;
+    const controller = new AbortController();
+    setVersions([]);
+    setError(null);
+    setLoading(true);
+    // OAuth access token when signed in, else the personal-token fallback.
+    void resolveShareRequestToken(target.token, target.baseUrl)
+      .then((token) =>
+        fetchSharedProjectVersions({
+          token,
+          projectId: target.id,
+          baseUrl: target.baseUrl,
+          signal: controller.signal,
+        }),
+      )
+      .then((items) => {
+        if (!controller.signal.aborted) setVersions(items);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(historyErrorMessage(caught, t));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [target, showHistory, t]);
+
+  return (
+    <Dialog open={target !== null} onOpenChange={(open: boolean) => !open && handleClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {t(
+              showHistory
+                ? "toolbar.item.serverHistoryTitle"
+                : "toolbar.item.sharedSaveWarningTitle",
+            )}
+          </DialogTitle>
+          <DialogDescription>
+            {t(
+              showHistory
+                ? "toolbar.item.serverHistoryDescription"
+                : "toolbar.item.sharedSaveWarningDescription",
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        {!showHistory ? null : loading ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t("toolbar.item.loadingServerHistory")}
+          </p>
+        ) : error ? (
+          <p className="text-sm text-destructive">{error}</p>
+        ) : versions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("toolbar.item.emptyServerHistory")}</p>
+        ) : (
+          <ul className="max-h-72 divide-y overflow-y-auto rounded-md border">
+            {versions.map((version) => (
+              <li key={version.number} className="flex items-center gap-3 p-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">
+                    {t("toolbar.item.serverVersion", { version: version.number })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {version.createdAt
+                      ? new Date(version.createdAt).toLocaleString()
+                      : t("toolbar.item.serverVersionDateUnknown")}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (!target) return;
+                    void resolveShareRequestToken(target.token, target.baseUrl)
+                      .then((token) => onOpenVersion(version.rawUrl, token))
+                      .then(handleClose)
+                      .catch((caught) => setError(historyErrorMessage(caught, t)));
+                  }}
+                >
+                  {t("gallery.openCopy")}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant={showHistory ? "default" : "outline"} onClick={handleClose}>
+            {t("toolbar.item.dismiss")}
+          </Button>
+          {!showHistory ? (
+            <Button onClick={() => setShowHistory(true)}>
+              {t("toolbar.item.openServerHistory")}
+            </Button>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

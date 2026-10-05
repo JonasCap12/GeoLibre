@@ -16,6 +16,7 @@ The Settings dialog is organized into these sections:
 | **Geocoding** | The address-search provider. See [Data Integrations](data-integrations.md#geocoding). |
 | **AI Providers** | Model and credentials for the [AI Assistant](ai-assistant.md). |
 | **Environment** | The share token and runtime key-value pairs. See [Environment Variables](#environment-variables). |
+| **Cloud Storage** | S3 connections for private buckets, and the S3 Browser's default location. See [Cloud Storage](#cloud-storage). |
 | **Updates** | Update checks (desktop only). See [Updates](#updates). |
 | **Startup** | Which project the app opens with (desktop only). See [Startup](#startup). |
 | **Style Manager** | Your saved symbology presets, reachable here and from a layer's **Layer actions → Styles → Saved styles**. See [Styling Layers](styling.md). |
@@ -35,7 +36,7 @@ The Settings dialog is organized into these sections:
 | **Render world copies** | Show repeated copies of the world when zoomed out. |
 | **Celestial body** | The body whose radius drives distance, area, and scale measurements. Pick the one matching your planetary basemap under [Add Data](adding-data.md). |
 | **Scale bar units** | Metric (m / km), Imperial (ft / mi), or Nautical (nmi). This also sets the units used by the status bar's **Elev** and **Eye alt** readouts and by the quick-analysis buffer presets. |
-| **Coordinate format** | The notation the status bar reports the pointer coordinate in: decimal degrees, DMS, DDM, or UTM. See [the status bar](interface.md#coordinate-format). |
+| **Coordinate format** | The notation the status bar reports the pointer coordinate in: decimal degrees, DMS, DDM, UTM, MGRS, USNG, or x/y in a projected CRS. Choosing the projected format shows an **EPSG** field for the CRS code. See [the status bar](interface.md#coordinate-format). |
 
 Use **Use Current View** to set the bounds from where the map is now, or **Reset** to restore the defaults. These preferences are saved in the project file.
 
@@ -54,9 +55,10 @@ Panels also auto-hide on small screens for a responsive layout.
 
 ## Environment Variables
 
-**Settings → Environment Variables** (the **Environment** tab in the Settings dialog) holds the share token and the runtime key-value pairs that GeoLibre and its plugins read, such as API keys:
+**Settings → Environment Variables** (the **Environment** tab in the Settings dialog) holds the share account connection and the runtime key-value pairs that GeoLibre and its plugins read, such as API keys:
 
-- **Share.GeoLibre API token**: the personal API token used by **Project → Share** to upload to `share.geolibre.app`. See [Projects](projects.md#share).
+- **Share.GeoLibre account** (web app): sign in to `share.geolibre.app` through a popup, or sign out, used by **Project → Share** and the Project Gallery. See [Projects](projects.md#share).
+- **Share.GeoLibre API token**: the personal API token used by **Project → Share** — the normal path on the desktop app, and a fallback on the web. See [Projects](projects.md#share).
 - **Environment variables**: named key-value pairs (for example, API keys for Earth Engine, Street View, and other integrations). You can enable or disable individual variables, and secret values are masked. Variable names must start with a letter or underscore and contain only letters, numbers, and underscores.
 
 !!! tip "Where credentials go"
@@ -67,6 +69,10 @@ Panels also auto-hide on small screens for a responsive layout.
 
 !!! tip "Protomaps basemaps"
     To use the [Protomaps](https://protomaps.com) basemaps in the **New map** dialog, add an environment variable named `VITE_PROTOMAPS_API_KEY` with your own Protomaps API key. The Protomaps options appear in the dialog as soon as the key is enabled — no restart needed. When no key is set, the Protomaps section is hidden. See [Getting Started](../getting-started.md#optional-basemap-credentials) for setting the key at build time for a self-hosted deployment.
+
+## Cloud Storage
+
+**Settings → Cloud Storage** (also in the **Settings** menu) holds the S3 connections that read private Amazon S3 and S3-compatible buckets (access keys, AWS profiles including SSO, environment variables, and IAM roles), and the S3 Browser's default location. See [Cloud Storage](cloud-storage.md).
 
 ## Project name and file
 

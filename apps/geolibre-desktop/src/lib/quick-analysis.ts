@@ -1,4 +1,5 @@
 import {
+  shouldZoomToNewLayers,
   DEFAULT_LAYER_STYLE,
   useAppStore,
   type GeoLibreLayer,
@@ -230,7 +231,11 @@ export async function runQuickAnalysis(request: QuickAnalysisRequest): Promise<s
   const { toolId, parameters, resultName, extraLayers = [], mapControllerRef } = request;
   const tool = resolveQuickTool(toolId);
   if (!tool) {
-    setStatus({ phase: "error", toolName: toolId, message: `Unknown tool "${toolId}"` });
+    setStatus({
+      phase: "error",
+      toolName: toolId,
+      message: `Unknown tool "${toolId}"`,
+    });
     return null;
   }
 
@@ -262,12 +267,7 @@ export async function runQuickAnalysis(request: QuickAnalysisRequest): Promise<s
     const captured = await runAlgorithmCapture(tool, parameters, {
       layers: [...useAppStore.getState().layers, ...extraLayers],
       log,
-      viewportBounds: () => {
-        const map = mapControllerRef.current?.getMap();
-        if (!map) return null;
-        const bounds = map.getBounds();
-        return [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-      },
+      viewportBounds: () => mapControllerRef.current?.getViewBounds() ?? null,
     });
 
     if (softError) {
@@ -289,7 +289,7 @@ export async function runQuickAnalysis(request: QuickAnalysisRequest): Promise<s
     tracker.addOutputLayer(resultName);
     tracker.finish("success");
     const layer = useAppStore.getState().layers.find((item) => item.id === layerId);
-    if (layer) mapControllerRef.current?.fitLayer(layer);
+    if (layer && shouldZoomToNewLayers()) mapControllerRef.current?.fitLayer(layer);
     setRunStatus({ phase: "idle" });
     return layerId;
   } catch (error) {

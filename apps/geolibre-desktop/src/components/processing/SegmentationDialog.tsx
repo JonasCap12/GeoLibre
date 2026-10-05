@@ -1,4 +1,4 @@
-import { useAppStore } from "@geolibre/core";
+import { shouldZoomToNewLayers, useAppStore } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import { fetchMlStatus, mlSegment, type MlSegmentMode, type MlStatus } from "@geolibre/processing";
 import {
@@ -27,7 +27,6 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from "rea
 import { useTranslation } from "react-i18next";
 import { IS_MAS_BUILD } from "../../lib/build-flags";
 import { isTauri, openLocalDataFileWithFallback } from "../../lib/tauri-io";
-import { reprojectFeatureCollectionToWgs84 } from "../../lib/duckdb-vector-loader";
 import { startGeoLibreSidecar } from "../../lib/sidecar";
 import { UPDATE_URL } from "../../lib/updates";
 import { SidecarHelpBanner, SIDECAR_PORT, SIDECAR_URL } from "./SidecarHelpBanner";
@@ -180,6 +179,7 @@ export function SegmentationDialog({ mapControllerRef }: SegmentationDialogProps
       });
       // samgeo-api returns polygons in the source raster's CRS (e.g. EPSG:3857)
       // tagged with a GeoJSON `crs` member; the map and store need WGS84.
+      const { reprojectFeatureCollectionToWgs84 } = await import("../../lib/duckdb-vector-loader");
       const fc = await reprojectFeatureCollectionToWgs84(raw);
       const features = Array.isArray(fc?.features) ? fc.features : [];
       if (!features.length) {
@@ -192,7 +192,7 @@ export function SegmentationDialog({ mapControllerRef }: SegmentationDialogProps
           : t("segmentation.layerNameDefault");
       const layerId = addGeoJsonLayer(name, fc);
       const layer = useAppStore.getState().layers.find((item) => item.id === layerId);
-      if (layer) mapControllerRef.current?.fitLayer(layer);
+      if (layer && shouldZoomToNewLayers()) mapControllerRef.current?.fitLayer(layer);
       setResultMessage(t("segmentation.added", { count: features.length, name }));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("segmentation.error.failed"));

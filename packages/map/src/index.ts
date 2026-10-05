@@ -1,7 +1,21 @@
+// Tile large local vector layers on a worker in the app (the published
+// headless entry leaves this out and tiles inline).
+import "./geojson-vt-worker-factory";
+
 export { MapboxCanvas, type MapboxCanvasProps } from "./MapboxCanvas";
 export { ArcgisCanvas, type ArcgisCanvasProps } from "./ArcgisCanvas";
-export { ArcgisEngine, ARCGIS_CAPABILITIES, ARCGIS_DECK_CAPABILITIES } from "./arcgis-engine";
-export { isArcgisSupportedLayer } from "./arcgis-layers";
+export {
+  ArcgisEngine,
+  ARCGIS_CAPABILITIES,
+  ARCGIS_DECK_CAPABILITIES,
+  type ArcgisEngineMessages,
+} from "./arcgis-engine";
+export {
+  arcgisRasterEffect,
+  arcgisUnsupportedStyleSettings,
+  isArcgisSupportedLayer,
+  type ArcgisUnsupportedStyleSetting,
+} from "./arcgis-layers";
 export {
   ARCGIS_BASEMAP_STYLES,
   DEFAULT_ARCGIS_BASEMAP,
@@ -10,15 +24,21 @@ export {
 } from "./arcgis-basemap";
 export { ARCGIS_SDK_CDN, ARCGIS_SDK_HOST, ARCGIS_SDK_VERSION } from "./arcgis-sdk";
 export { MapboxEngine, MAPBOX_CAPABILITIES } from "./mapbox-engine";
-export { isMapboxSupportedLayer, styleUsesUnsupportedSource } from "./mapbox-layers";
+export { rendererCapabilities } from "./renderer-capabilities";
+export {
+  isMapboxSupportedLayer,
+  mapboxUnsupportedStyleSettings,
+  type MapboxUnsupportedStyleSetting,
+} from "./mapbox-layers";
+export { styleUsesUnsupportedSource } from "./gl-style-compiler";
 export {
   MapCanvas,
   type MapCanvasIdentifyAllLabels,
   type MapCanvasProps,
   type MapCanvasRasterIdentify,
   type MapCanvasRasterIdentifyResult,
-  type MapDiagnosticEvent,
 } from "./MapCanvas";
+export type { MapDiagnosticEvent } from "./map-diagnostic";
 export {
   FEATURE_SELECTION_EVENT,
   featuresIntersectingPolygon,
@@ -36,7 +56,13 @@ export { getPrimaryCesiumControlHost } from "./cesium-control-host";
 // `CesiumCanvas`'s dynamic import exists to keep it off.
 export type { CesiumWidgetControlLabels } from "./cesium-widget-controls";
 export { isCesiumSupportedLayerType } from "./cesium-layer-sync";
-export { arcgisVectorStyle } from "./arcgis-vector-style";
+export {
+  classifyLayer,
+  type LayerKind,
+  type LayerKindSupport,
+  type SupportedLayerKinds,
+} from "./layer-kind";
+export { arcgisVectorStyle } from "./vector-style";
 export {
   CESIUM_CAPABILITIES,
   CESIUM_PANE_CAPABILITIES,
@@ -65,6 +91,7 @@ export {
 export {
   MAPLIBRE_CAPABILITIES,
   type BuiltInMapControl,
+  type CameraIdleEvent,
   type FlyToCamera,
   type IdentifiedFeature,
   type ManualPlacementOptions,
@@ -139,6 +166,7 @@ export {
 export {
   isMapboxStyleUrl,
   loadMapboxStyle,
+  MAPBOX_BASEMAP_STYLES,
   mapboxAccessTokenFromStyleUrl,
   redactMapboxStyleUrl,
   resolveMapboxInternalUrl,
@@ -149,8 +177,8 @@ export {
   hasPMTilesArchive,
   registerPMTilesArchive,
   unregisterPMTilesArchive,
-  setExternalDeckLayerOrderHandler,
-} from "./layer-sync";
+} from "./pmtiles-archive";
+export { setExternalDeckLayerOrderHandler } from "./layer-sync";
 export {
   createPMTilesStoreLayer,
   pmtilesNativeLayerIds,
@@ -187,4 +215,11 @@ export {
   type QmlExportResult,
 } from "./qml-export";
 export { applyQmlImport, parseQml, type QmlImportResult } from "./qml-import";
-export { loadMarkerSvgImage } from "./markers";
+export { loadMarkerSvgImage, markerIconSizeValue, renderMarkerCanvas } from "./markers";
+export {
+  setWmsIdentifyFetcher,
+  setWmsIdentifyProjectionResolver,
+  type WmsIdentifyFetcher,
+  type WmsIdentifyProjection,
+  type WmsIdentifyProjectionResolver,
+} from "./identify-sources";

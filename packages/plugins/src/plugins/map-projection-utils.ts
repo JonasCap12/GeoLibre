@@ -75,6 +75,7 @@ export function acquireMercatorProjectionLock(
   mapOverride?: ProjectionMap | null,
 ): void {
   // ArcGIS local scenes already use Web Mercator without changing view mode.
+  // eslint-disable-next-line local/no-renderer-kind-checks -- ArcGIS local scenes are Web Mercator by construction
   if (app.getMapRenderer?.() === "arcgis") return;
   if (mercatorProjectionHolders.size === 0 && capturedProjectionToRestore === null) {
     // Only remember "globe" as worth restoring. Never capture "mercator": it may
@@ -86,6 +87,8 @@ export function acquireMercatorProjectionLock(
   }
   mercatorProjectionHolders.add(key);
   app.setMapProjection?.("mercator");
+  // On ArcGIS the projection is set through setMapProjection above.
+  // engine-audit-allow: arcgis-null-map
   ensureMercatorProjection(mapOverride ?? app.getMap?.() ?? app.getMapboxMap?.());
 }
 
@@ -100,6 +103,7 @@ export function releaseMercatorProjectionLock(key: string, app: MercatorProjecti
   if (!mercatorProjectionHolders.delete(key)) return;
   if (mercatorProjectionHolders.size > 0) return;
   if (capturedProjectionToRestore === null) return;
+  // eslint-disable-next-line local/no-renderer-kind-checks -- mirrors the ArcGIS skip in acquireMercatorProjectionLock
   if (app.getMapRenderer?.() !== "arcgis") app.setMapProjection?.(capturedProjectionToRestore);
   capturedProjectionToRestore = null;
 }

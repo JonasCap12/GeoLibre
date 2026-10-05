@@ -25,6 +25,13 @@ It also ships **1,000+ geoprocessing tools** that run *entirely in your browser*
 
 GeoLibre is built with **Tauri v2**, **React**, **TypeScript**, **MapLibre GL JS**, **DuckDB-WASM Spatial**, and **deck.gl**. The same workspace runs as a native desktop app, native Android and iOS apps, in any modern web browser, and adapts responsively to mobile and small screens.
 
+One project can be viewed through **four rendering engines**: MapLibre GL JS (the
+default), Mapbox GL JS, CesiumJS, or the ArcGIS Maps SDK for JavaScript. Switch
+the primary map from **View → Rendering engine**, or mix engines in synchronized
+split panes, without duplicating the project or its layers. See the
+[rendering-engine guide](https://geolibre.app/user-guide/rendering-engines/) for
+capabilities, credentials, and current compatibility.
+
 - **[Launch GeoLibre Web](https://web.geolibre.app/)** — the full app in your browser, nothing to install
 - **[Download the desktop app](https://geolibre.app/downloads/)** — Windows, macOS, and Linux installers
 - **[Get it on the Mac App Store](https://apps.apple.com/app/geolibre-desktop/id6796848769)** — the sandboxed macOS build
@@ -36,6 +43,8 @@ GeoLibre is built with **Tauri v2**, **React**, **TypeScript**, **MapLibre GL JS
 - **[1,000+ geoprocessing tools](https://geolibre.app/user-guide/processing/#whitebox-toolbox)** — the full toolbox, in the browser
 - **[Get started](https://geolibre.app/getting-started/)** — install, run from source, and configure
 - **[Features](https://geolibre.app/features/)** — the complete feature list
+- **[Rendering engines](https://geolibre.app/user-guide/rendering-engines/)** — compare MapLibre, Mapbox, Cesium, and ArcGIS and learn how to switch or combine them.
+- **[Open data gallery](https://geolibre.app/gallery/)** — 100 live projects built from public open data, grouped by theme: health, natural hazards, climate, oceans and water, nature, transport, cities, energy, space, history and culture, society and economy, and food.
 
 ## Demos
 
@@ -57,7 +66,7 @@ The animation below runs the Time Slider along the buildings' construction year,
 
 [![Animation of Manhattan buildings appearing by construction year as the Time Slider advances from 1850 to 2025](https://assets.geolibre.app/demos/nyc-buildings-gif.gif)](https://assets.geolibre.app/demos/nyc-buildings.webm)
 
-[Open the live project](https://share.geolibre.app/giswqs/nyc-buildings-and-subways)
+[Open the live project](https://share.geolibre.app/giswqs/manhattan-buildings-through-time)
 
 ### Planetary basemaps
 
@@ -109,6 +118,7 @@ Switch bodies from the planet switcher in the Layers panel. See [Demos](https://
 - [Mapping the 2026 Nepal Floods with Free High-Resolution Satellite Imagery](https://youtu.be/UDO1BCwOAAc)
 - [Building Cloud-Native GIS Workflows with GeoLibre](https://youtu.be/RgNoKsvZ5Hk)
 - [Image Georeferencing Using GeoLibre in the Browser](https://youtu.be/lbioujkDSG0)
+- [100 Interactive Maps from Open Data: Explore, Fork, and Build Your Own with GeoLibre](https://youtu.be/2r5OhvEa3AA)
 
 All of them, with chapters and summaries, are on the [Video Tutorials](https://geolibre.app/tutorials/videos/) page.
 
@@ -163,7 +173,7 @@ Full documentation, including the User Guide and Tutorials, is published at
   - [Plugin API](docs/plugin-api.md)
   - [UI Profiles](docs/ui-profiles.md)
   - [Internationalization](docs/i18n.md)
-  - [Python package (Jupyter)](docs/python.md) — also supports `from geolibre import DashMap` for Dash (install `geolibre[dash]`)
+  - [Python package (Jupyter)](docs/python.md)
   - [R package (RStudio, Quarto, and Shiny)](docs/r.md)
   - [Notebook Panel](docs/notebook.md)
   - [Roadmap](docs/roadmap.md)
