@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { FeatureCollection } from "geojson";
 import { MAX_SNAPSHOT_BYTES } from "../packages/collab-core/src/session.ts";
 import { prepareCollaborationLayers } from "../apps/geolibre-desktop/src/lib/collaboration-layers.ts";
 import {
@@ -129,6 +130,9 @@ describe("shared-library collaboration snapshots", () => {
 
   it("keeps a library-only snapshot far smaller than the same drawing embedded", () => {
     const drawing = "x".repeat(2_000_000);
+    // GeoJSON permits a null geometry; @types/geojson's `Feature` does not model
+    // one. This comparison only needs a feature whose properties are large, so
+    // the cast says what the fixture is rather than inventing a geometry.
     const heavy = {
       type: "FeatureCollection" as const,
       features: [
@@ -138,7 +142,7 @@ describe("shared-library collaboration snapshots", () => {
           geometry: null,
         },
       ],
-    };
+    } as unknown as FeatureCollection;
     const embedded = geojsonLayer({
       geojson: heavy,
       metadata: { embeddedGeoJSON: heavy },

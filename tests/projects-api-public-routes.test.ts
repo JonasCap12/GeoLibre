@@ -27,7 +27,9 @@ const CLOSED = [
   ["GET", ["api", "datasets", "ds-1", "content"]],
   ["GET", ["api", "projects"]],
   ["GET", ["surveyor", "span.geolibre.json"]],
-];
+  // `as const` the way OPEN above has it: without it each row widens to
+  // (string | string[])[] and the method and the segments stop being distinct.
+] as const;
 
 describe("projects API public routes", () => {
   for (const [method, segments] of OPEN) {

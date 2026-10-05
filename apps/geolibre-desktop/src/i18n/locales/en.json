@@ -3135,7 +3135,6 @@
       "accountPassword": "Password",
       "accountSignIn": "Sign in",
       "accountCreate": "Create account",
-      "accountClose": "Close",
       "accountSignedIn": "Signed in as {{username}}. The token is filled in above — save Settings to enable cloud persistence.",
       "accountMfaPrompt": "Password accepted. Enter the code from your authenticator app.",
       "accountMfaCodeOptional": "Two-factor code (if turned on)",
