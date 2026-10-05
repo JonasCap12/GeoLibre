@@ -28,7 +28,9 @@ export function prepareCollaborationLayers(
     // A shared-library layer already lives on the deployment's API. Embedding
     // its GeoJSON is what blows the snapshot ceiling (a survey drawing is tens
     // of megabytes). Peers fetch it by id instead. A local file has no such
-    // copy, so it still embeds below. This is only safe while the features
+    // copy, so it still embeds below. When that embed would be held, the
+    // snapshot path uploads it once (`collaboration-layer-promotion.ts`) and
+    // the next pass takes this branch. This is only safe while the features
     // still match the server copy — the edited branch above handles the rest.
     const sharedDatasetId = layer.metadata.sharedDatasetId;
     if (typeof sharedDatasetId === "string" && sharedDatasetId.trim() !== "") {

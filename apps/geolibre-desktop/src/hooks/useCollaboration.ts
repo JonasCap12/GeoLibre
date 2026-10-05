@@ -1,6 +1,7 @@
 import {
   applyProjectToStore,
   clearHistory,
+  redactCredentials,
   serializeProject,
   useAppStore,
   type CollaborationMode,
@@ -20,7 +21,16 @@ import i18n from "../i18n";
 import {
   buildCollaborationSnapshot,
   buildProjectEgressSnapshot,
+  buildProjectSnapshot,
 } from "../lib/build-project-snapshot";
+import { prepareCollaborationLayers } from "../lib/collaboration-layers";
+import {
+  applySharedDatasetPromotion,
+  COLLABORATION_DATASET_VISIBILITY,
+  createPromotionCache,
+  shrinkCollaborationLayers,
+} from "../lib/collaboration-layer-promotion";
+import { uploadSharedDataset } from "../lib/shared-datasets";
 import { projectChanged } from "../lib/project-broadcast-changed";
 import {
   CollabConnection,
@@ -135,6 +145,9 @@ export function useCollaboration(
   // Null until a too-large rejection names the relay's ceiling. The compile-time
   // constant is only the fallback; a deployment may set a lower one.
   const learnedLimitRef = useRef<number | null>(null);
+  // Dataset ids already uploaded this session, so a later snapshot of the same
+  // drawing does not post the bytes again.
+  const promotionCacheRef = useRef(createPromotionCache());
   // Separate from snapshotRequestRef. Sharing that counter would let a library
   // fetch cancel a snapshot that was already the newest one.
   const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -237,14 +250,73 @@ export function useCollaboration(
       return;
     }
     if (request !== snapshotRequestRef.current || !canEdit()) return;
-    const content = serializeProject(project);
-    const bytes = new TextEncoder().encode(content).length;
+    let content = serializeProject(project);
+    let bytes = new TextEncoder().encode(content).length;
     if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
-      syncPausedRef.current = true;
-      useAppStore.getState().setCollaboration({
-        error: localTooLargeMessage(bytes, snapshotSyncLimit(learnedLimitRef.current)),
+      const limit = snapshotSyncLimit(learnedLimitRef.current);
+      const token = useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
+      // Team, not public: any signed-in account on this deployment can read it,
+      // and an anonymous caller cannot. Private would hide it from the session.
+      const shrunk = await shrinkCollaborationLayers({
+        layers: project.layers,
+        limit,
+        token,
+        cache: promotionCacheRef.current,
+        measure: (layers) => {
+          const prepared = prepareCollaborationLayers(layers, new Map());
+          const next = redactCredentials(
+            buildProjectSnapshot(mapControllerRef, { layers: prepared }),
+          );
+          return new TextEncoder().encode(serializeProject(next)).length;
+        },
+        upload: async (candidate, shareToken) =>
+          uploadSharedDataset({
+            token: shareToken,
+            data: new TextEncoder().encode(JSON.stringify(candidate.features)),
+            filename: candidate.filename,
+            name: candidate.name,
+            visibility: COLLABORATION_DATASET_VISIBILITY,
+            contentType: "application/geojson",
+          }),
       });
-      return;
+      if (request !== snapshotRequestRef.current || !canEdit()) return;
+      for (const promotion of shrunk.promotions) {
+        const current = useAppStore
+          .getState()
+          .layers.find((layer) => layer.id === promotion.layerId);
+        if (!current) continue;
+        useAppStore.getState().updateLayer(promotion.layerId, {
+          metadata: applySharedDatasetPromotion(current, promotion.datasetId, promotion.filename)
+            .metadata,
+        });
+      }
+      if (request !== snapshotRequestRef.current || !canEdit()) return;
+      try {
+        project = await buildCollaborationSnapshot(mapControllerRef);
+      } catch {
+        if (request === snapshotRequestRef.current && canEdit()) {
+          useAppStore.getState().setCollaboration({ error: i18n.t("collaborate.shareFailed") });
+        }
+        return;
+      }
+      if (request !== snapshotRequestRef.current || !canEdit()) return;
+      content = serializeProject(project);
+      bytes = new TextEncoder().encode(content).length;
+      if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
+        syncPausedRef.current = true;
+        const held = shrunk.failure;
+        useAppStore.getState().setCollaboration({
+          error: held
+            ? held.reason === "no-token"
+              ? i18n.t("collaborate.layerShareNeedsSignIn", { name: held.layerName })
+              : i18n.t("collaborate.layerShareFailed", {
+                  name: held.layerName,
+                  detail: held.detail ?? "",
+                })
+            : localTooLargeMessage(bytes, limit),
+        });
+        return;
+      }
     }
     if (syncPausedRef.current) syncPausedRef.current = false;
     if (content === lastContentRef.current) {
