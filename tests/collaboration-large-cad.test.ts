@@ -4,6 +4,13 @@ import type { FeatureCollection } from "geojson";
 import { MAX_SNAPSHOT_BYTES } from "../packages/collab-core/src/session.ts";
 import { prepareCollaborationLayers } from "../apps/geolibre-desktop/src/lib/collaboration-layers.ts";
 import {
+  applySharedDatasetPromotion,
+  COLLABORATION_DATASET_VISIBILITY,
+  createPromotionCache,
+  shrinkCollaborationLayers,
+} from "../apps/geolibre-desktop/src/lib/collaboration-layer-promotion.ts";
+import type { GeoLibreLayer } from "@geolibre/core";
+import {
   CLIENT_SNAPSHOT_LIMIT_FALLBACK,
   learnedSnapshotLimit,
   snapshotSyncAction,
@@ -427,5 +434,221 @@ describe("shared library workspace round trip", () => {
       },
     });
     assert.equal(loads, 1);
+  });
+});
+
+function snapshotBytes(layers: GeoLibreLayer[]): number {
+  return new TextEncoder().encode(JSON.stringify(prepareCollaborationLayers(layers, new Map())))
+    .length;
+}
+
+function heavyDrawing(marker: string): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { drawing: marker.repeat(2_000_000) },
+        geometry: null,
+      },
+    ],
+  } as unknown as FeatureCollection;
+}
+
+describe("promoting an oversized layer into the shared library", () => {
+  const heavy = heavyDrawing("x");
+  const cad = geojsonLayer({
+    id: "cad",
+    name: "Survey.dxf",
+    geojson: undefined,
+    metadata: { embeddedGeoJSON: heavy },
+  });
+  const notes = geojsonLayer({
+    id: "notes",
+    name: "Notes",
+    metadata: { embeddedGeoJSON: FEATURES },
+  });
+
+  it("uploads only the drawing that blows the ceiling, then the snapshot fits", async () => {
+    const layers = prepareCollaborationLayers([cad, notes], new Map());
+    const before = snapshotBytes(layers);
+    assert.ok(before > 2_000_000, `before was ${before}`);
+    assert.equal(snapshotSyncAction(before, 100_000), "hold");
+
+    let uploads = 0;
+    const result = await shrinkCollaborationLayers({
+      layers,
+      limit: 100_000,
+      token: "tok",
+      cache: createPromotionCache(),
+      measure: snapshotBytes,
+      upload: async (candidate) => {
+        uploads += 1;
+        assert.equal(candidate.layerId, "cad");
+        assert.equal(candidate.filename, "Survey.geojson");
+        assert.equal(COLLABORATION_DATASET_VISIBILITY, "team");
+        return { id: "ds-survey" };
+      },
+    });
+
+    assert.equal(uploads, 1);
+    assert.equal(result.failure, null);
+    assert.equal(result.promotions.length, 1);
+    assert.ok(result.bytes < 100_000, `after was ${result.bytes}`);
+    assert.equal(snapshotSyncAction(result.bytes, 100_000), "send");
+    assert.ok(before / result.bytes > 20, `shrank from ${before} to ${result.bytes}`);
+
+    const promoted = layers.map((layer) =>
+      layer.id === "cad"
+        ? applySharedDatasetPromotion(layer, "ds-survey", "Survey.geojson")
+        : layer,
+    );
+    const [portableCad, portableNotes] = prepareCollaborationLayers(promoted, new Map());
+    assert.equal(portableCad.metadata.sharedDatasetId, "ds-survey");
+    assert.equal(portableCad.metadata.embeddedGeoJSON, undefined);
+    assert.equal(portableNotes.metadata.sharedDatasetId, undefined);
+    assert.equal(portableNotes.metadata.embeddedGeoJSON, FEATURES);
+  });
+
+  it("does not upload a layer while the snapshot already fits", async () => {
+    let uploads = 0;
+    const result = await shrinkCollaborationLayers({
+      layers: prepareCollaborationLayers([notes], new Map()),
+      limit: 10_000_000,
+      token: "tok",
+      cache: createPromotionCache(),
+      measure: snapshotBytes,
+      upload: async () => {
+        uploads += 1;
+        return { id: "unused" };
+      },
+    });
+    assert.equal(uploads, 0);
+    assert.equal(result.promotions.length, 0);
+    assert.equal(result.failure, null);
+  });
+
+  it("leaves the layer local and reports the failure when the upload does not land", async () => {
+    const layers = prepareCollaborationLayers([cad], new Map());
+    const result = await shrinkCollaborationLayers({
+      layers,
+      limit: 100_000,
+      token: "tok",
+      cache: createPromotionCache(),
+      measure: snapshotBytes,
+      upload: async () => {
+        throw new Error("offline");
+      },
+    });
+    assert.equal(result.promotions.length, 0);
+    assert.equal(result.failure?.reason, "upload");
+    assert.equal(result.failure?.layerName, "Survey.dxf");
+    assert.match(result.failure?.detail ?? "", /offline/);
+    assert.equal(snapshotSyncAction(result.bytes, 100_000), "hold");
+    const [stillLocal] = prepareCollaborationLayers(layers, new Map());
+    assert.equal(stillLocal.metadata.sharedDatasetId, undefined);
+    assert.ok(stillLocal.metadata.embeddedGeoJSON);
+  });
+
+  it("does not call the library when nobody is signed in", async () => {
+    let uploads = 0;
+    const result = await shrinkCollaborationLayers({
+      layers: prepareCollaborationLayers([cad], new Map()),
+      limit: 100_000,
+      token: " ",
+      cache: createPromotionCache(),
+      measure: snapshotBytes,
+      upload: async () => {
+        uploads += 1;
+        return { id: "nope" };
+      },
+    });
+    assert.equal(uploads, 0);
+    assert.equal(result.failure?.reason, "no-token");
+    assert.equal(result.promotions.length, 0);
+  });
+
+  it("re-uploads an edited drawing as a new dataset and stops embedding it", async () => {
+    const edited = heavyDrawing("e");
+    const layer = geojsonLayer({
+      id: "cad",
+      name: "Survey.dxf",
+      geojson: edited,
+      metadata: { sharedDatasetId: "pristine", geometryEdited: true },
+    });
+    const [prepared] = prepareCollaborationLayers([layer], new Map());
+    assert.equal(prepared.metadata.sharedDatasetId, undefined);
+    assert.equal(prepared.geojson, edited);
+
+    const result = await shrinkCollaborationLayers({
+      layers: [prepared],
+      limit: 100_000,
+      token: "tok",
+      cache: createPromotionCache(),
+      measure: snapshotBytes,
+      upload: async (candidate) => {
+        assert.equal(candidate.features, edited);
+        return { id: "edited-copy" };
+      },
+    });
+    const stored = applySharedDatasetPromotion(
+      layer,
+      result.promotions[0].datasetId,
+      result.promotions[0].filename,
+    );
+    assert.equal(stored.metadata.sharedDatasetId, "edited-copy");
+    assert.equal(stored.metadata.geometryEdited, undefined);
+    assert.equal(stored.geojson, edited);
+    const [portable] = prepareCollaborationLayers([stored], new Map());
+    assert.equal(portable.metadata.sharedDatasetId, "edited-copy");
+    assert.equal(portable.geojson, undefined);
+    assert.equal(snapshotSyncAction(snapshotBytes([stored]), null), "send");
+  });
+
+  it("posts the same drawing once when two snapshots promote it together", async () => {
+    const layers = prepareCollaborationLayers([cad], new Map());
+    const cache = createPromotionCache();
+    let uploads = 0;
+    let release: (dataset: { id: string }) => void = () => {};
+    const gate = new Promise<{ id: string }>((resolve) => {
+      release = resolve;
+    });
+    const run = () =>
+      shrinkCollaborationLayers({
+        layers,
+        limit: 100_000,
+        token: "tok",
+        cache,
+        measure: snapshotBytes,
+        upload: () => {
+          uploads += 1;
+          return gate;
+        },
+      });
+    const first = run();
+    const second = run();
+    await Promise.resolve();
+    assert.equal(uploads, 1);
+    release({ id: "ds-once" });
+    const [left, right] = await Promise.all([first, second]);
+    assert.equal(left.promotions[0].datasetId, "ds-once");
+    assert.equal(right.promotions[0].datasetId, "ds-once");
+    assert.equal(uploads, 1);
+
+    let again = 0;
+    const repeat = await shrinkCollaborationLayers({
+      layers: [applySharedDatasetPromotion(layers[0], "ds-once", left.promotions[0].filename)],
+      limit: 100_000,
+      token: "tok",
+      cache,
+      measure: snapshotBytes,
+      upload: async () => {
+        again += 1;
+        return { id: "ds-twice" };
+      },
+    });
+    assert.equal(again, 0);
+    assert.equal(repeat.promotions.length, 0);
+    assert.equal(snapshotSyncAction(repeat.bytes, null), "send");
   });
 });

@@ -1621,6 +1621,8 @@
     "connectFailed": "Could not connect to the collaboration server.",
     "copyFailed": "Could not copy to clipboard.",
     "shareFailed": "Could not share the latest project changes.",
+    "layerShareFailed": "Others in this session cannot see \"{{name}}\". It stayed on this computer: {{detail}}",
+    "layerShareNeedsSignIn": "Others in this session cannot see \"{{name}}\". Sign in under Settings so it can be uploaded for them. It is still only on this computer.",
     "connecting": "Connecting…",
     "reconnecting": "Reconnecting…",
     "connected": "Live session active",
