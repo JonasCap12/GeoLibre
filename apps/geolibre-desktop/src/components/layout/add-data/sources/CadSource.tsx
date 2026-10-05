@@ -112,9 +112,7 @@ export function CadSource() {
     if (extensionFromPath(path) === "dwg") {
       const support = readDwgSupport(new Uint8Array(data));
       if (support && !support.supported) {
-        throw new Error(
-          t("addData.cad.errorDwgVersion", { release: dwgReleaseLabel(support) }),
-        );
+        throw new Error(t("addData.cad.errorDwgVersion", { release: dwgReleaseLabel(support) }));
       }
     }
 
@@ -230,9 +228,8 @@ export function CadSource() {
       // The in-process reader emits the drawing's own coordinates, so it goes
       // through the same reprojection step GDAL's output does. Imported on use
       // so the DuckDB loader stays off the startup path.
-      const { reprojectFeatureCollectionToWgs84 } = await import(
-        "../../../../lib/duckdb-vector-loader"
-      );
+      const { reprojectFeatureCollectionToWgs84 } =
+        await import("../../../../lib/duckdb-vector-loader");
       featureCollection = await reprojectFeatureCollectionToWgs84(
         fallbackDrawing.toFeatureCollection(selectedLayer),
         overrideSourceCrs || null,

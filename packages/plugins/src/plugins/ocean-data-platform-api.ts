@@ -21,7 +21,6 @@
  */
 import { tilesUrl } from "@geolibre/core";
 
-
 /** ODP's API origin. */
 export const ODP_API_BASE = "https://api.hubocean.earth";
 
