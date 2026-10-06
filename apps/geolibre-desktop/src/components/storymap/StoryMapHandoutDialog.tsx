@@ -17,6 +17,7 @@ import {
 } from "@geolibre/ui";
 import { FileDown, Loader2 } from "lucide-react";
 import { captureEngineMapImage } from "../../lib/print-layout-export";
+import { safeImageSrc } from "../../lib/sanitize-html";
 import { googleMapsUrl } from "../../lib/external-map-links";
 import { PAPER_SIZES, type Orientation, type PaperSizeId } from "../../lib/print-layout";
 import type { HandoutChapter } from "../../lib/storymap-pdf";
@@ -124,6 +125,8 @@ const PHOTO_TIMEOUT_MS = 3000;
 type LoadedPhoto = { data: HTMLCanvasElement; width: number; height: number };
 
 function loadChapterPhoto(url: string): Promise<LoadedPhoto | null> {
+  const src = safeImageSrc(url);
+  if (!src) return Promise.resolve(null);
   return new Promise((resolve) => {
     const img = new Image();
     let settled = false;
@@ -141,7 +144,7 @@ function loadChapterPhoto(url: string): Promise<LoadedPhoto | null> {
     // Only request CORS for real remote URLs. A data: URI has no origin, and
     // some browsers fire `onerror` for `crossOrigin` data images, which would
     // wrongly drop an embedded photo.
-    if (!url.startsWith("data:")) img.crossOrigin = "anonymous";
+    if (!src.startsWith("data:")) img.crossOrigin = "anonymous";
     img.onload = () => {
       try {
         const canvas = document.createElement("canvas");
@@ -162,7 +165,7 @@ function loadChapterPhoto(url: string): Promise<LoadedPhoto | null> {
       }
     };
     img.onerror = () => finish(null);
-    img.src = url;
+    img.src = src;
   });
 }
 

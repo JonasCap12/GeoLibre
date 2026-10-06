@@ -18,7 +18,7 @@ import {
   type StoryMap,
 } from "@geolibre/core";
 import { NO_EXTERNAL_CDN } from "./build-flags";
-import { sanitizeStoryHtml } from "./sanitize-html";
+import { safeImageSrc, sanitizeStoryHtml } from "./sanitize-html";
 import {
   STORY_END_STEP_ID,
   STORY_GLOBAL_VIEW,
@@ -268,7 +268,7 @@ export function buildStoryMapHtml(options: StoryMapExportOptions): string {
       alignment: chapter.alignment,
       hidden: chapter.hidden,
       title: chapter.title,
-      image: chapter.image ?? "",
+      image: safeImageSrc(chapter.image ?? "") ?? "",
       description: sanitizeStoryHtml(chapter.description),
       location: {
         center: chapter.location.center,

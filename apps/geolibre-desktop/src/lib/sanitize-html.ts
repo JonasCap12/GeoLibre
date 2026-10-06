@@ -29,7 +29,7 @@ if (!purify.__glRelHook && typeof purify.addHook === "function") {
  * adds `rel="noopener noreferrer"` to any `target="_blank"` link so the opener
  * cannot be leaked. `<img>` is intentionally excluded so a shared project cannot
  * embed tracking pixels in a description; chapter images use the dedicated
- * `image` field instead.
+ * `image` field, which {@link safeImageSrc} checks before it is rendered.
  *
  * @param html Raw HTML string to clean.
  * @returns A sanitized HTML string safe for `dangerouslySetInnerHTML`.
@@ -105,4 +105,32 @@ export function sanitizeAttributionHtml(attribution: string): string {
     ALLOWED_TAGS: ["a", "abbr", "b", "br", "em", "i", "span", "strong", "sub", "sup"],
     ALLOWED_ATTR: ["href", "title", "target", "rel"],
   });
+}
+
+/**
+ * Whether a story-chapter image URL is one this app actually produces.
+ *
+ * The field is a URL or a data URI (`StoryChapter.image`). The sample story
+ * uses `https` URLs, and the chapter editor is a text field: nothing in the
+ * desktop build writes `asset:` or `blob:` into it. `https` and `data:image/`
+ * are therefore the whole set. Anything else — `javascript:`, `http:` (the
+ * web and desktop `img-src` policies do not allow a remote http image),
+ * `blob:`, `asset:` — is dropped so a shared project cannot point an `<img>`
+ * at a scheme the authoring UI never creates.
+ *
+ * @param value The raw `image` field.
+ * @returns The trimmed URL, or null when it must not be loaded.
+ */
+export function safeImageSrc(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.protocol === "https:" && url.hostname !== "") return trimmed;
+  if (url.protocol === "data:" && /^data:image\//i.test(trimmed)) return trimmed;
+  return null;
 }
