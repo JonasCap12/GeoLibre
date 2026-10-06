@@ -15,6 +15,7 @@ import {
 } from "./credential-store";
 import { isDesktopRuntime } from "./is-mobile";
 import { isTauri } from "./is-tauri";
+import { resolveSelfHostAuth } from "./selfhost-auth";
 import { getShareFetch } from "./share-fetch";
 import { resolveShareBaseUrl } from "./share-geolibre";
 import {
@@ -133,11 +134,21 @@ export const useShareOAuthStore = create<ShareOAuthState>(() => ({
 // Capability and issuer resolution
 // ---------------------------------------------------------------------------
 
-/** Desktop uses the system browser; mobile Tauri and notebook embeds stay PAT-only. */
+/**
+ * Desktop uses the system browser; mobile Tauri and notebook embeds stay PAT-only.
+ *
+ * A hosted deployment that signs in against its own accounts has no `/oauth`
+ * routes, so the web app returns false there. The flag is read only after the
+ * Tauri and embed branches: {@link resolveSelfHostAuth} must be passed
+ * `webApp: true`, and that is true here by construction. Checking it earlier
+ * would turn OAuth off on the desktop build if the variable were ever set
+ * there. When the flag is absent the web result is unchanged.
+ */
 export function supportsShareOAuth(): boolean {
   if (typeof window === "undefined") return false;
   if (typeof __GEOLIBRE_EMBED_BUILD__ !== "undefined" && __GEOLIBRE_EMBED_BUILD__) return false;
   if (isTauri()) return isDesktopRuntime() && !useShareOAuthStore.getState().setupError;
+  if (resolveSelfHostAuth(true)) return false;
   return true;
 }
 
