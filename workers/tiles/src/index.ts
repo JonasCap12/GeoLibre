@@ -412,7 +412,7 @@ const NEGATIVE_CACHE_CONTROL = "public, max-age=300";
  *
  *   - the production web app on `*.geolibre.app` (any subdomain, plus the apex)
  *   - Cloudflare Pages deploy previews for the `geolibre-preview` project
- *   - local dev on `localhost` / `127.0.0.1`
+ *   - `localhost` / `127.0.0.1`, only while no deployment origin list is set
  *
  * Everything else gets a 403 so the route can't be driven as an open proxy from
  * an arbitrary third-party site. This route is only reached by the web, dev, and
@@ -431,9 +431,11 @@ function isAllowedProxyOrigin(origin: string | null): boolean {
 /**
  * {@link isAllowedProxyOrigin} with the deployment's own list passed in, so a
  * test can run it. When that list is non-empty it is the whole policy, plus
- * the desktop app and local dev: the built-in hosts admit every
- * `*.workers.dev` and `*.geolibre.app`, which on a self-hosted account means
- * any stranger's Worker could drive these routes and run up its usage.
+ * the desktop app (`tauri:` and `tauri.localhost`, which a page cannot
+ * present): the built-in hosts admit every `*.geolibre.app`, which on a
+ * self-hosted account means a look-alike origin could drive these routes.
+ * `localhost` and `127.0.0.1` are gated the same way, because `Origin` is
+ * chosen by the client.
  */
 export function isAllowedProxyOriginFor(
   origin: string | null,
@@ -463,7 +465,12 @@ export function isAllowedProxyOriginFor(
     }
     if (hostname.endsWith(".geolibre-preview.pages.dev")) return true;
   }
+  // Same gate as `*.geolibre.app` above. `Origin: http://localhost` is a
+  // header any client can send, so it must not pass once a deployment has
+  // named its real origins. An unconfigured Worker (empty list) still allows
+  // it, which is how upstream local dev reaches the public tiles host.
   if (
+    extraProxyOrigins.size === 0 &&
     (protocol === "http:" || protocol === "https:") &&
     (hostname === "localhost" || hostname === "127.0.0.1")
   ) {

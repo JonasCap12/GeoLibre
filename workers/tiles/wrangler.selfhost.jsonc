@@ -43,7 +43,9 @@
   // (OpenAerialMap, Source Cooperative, Overpass). Setting it replaces the
   // built-in host list, which admits every *.workers.dev: on this account that
   // would let any stranger's Worker use these routes. Both of this app's
-  // hostnames are listed; the desktop app and localhost stay allowed.
+  // hostnames are listed. The desktop app stays allowed (`tauri:` and
+  // `tauri.localhost`). localhost does not: Origin is client-settable, and
+  // `npm run dev` proxies these feeds on the Vite server instead.
   "vars": {
     "ALLOWED_PROXY_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev"
   }
