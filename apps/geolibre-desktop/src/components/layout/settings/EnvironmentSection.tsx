@@ -4,9 +4,11 @@ import { Eye, EyeOff, Lock, Plus, Trash2, TriangleAlert, Unlock } from "lucide-r
 import { useMemo, type ComponentType, type ReactElement, type RefObject } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { credentialStorageLocation } from "../../../lib/credential-store";
+import { isTauri } from "../../../lib/is-tauri";
 import { projectCredentialsInKeychain } from "../../../lib/project-credentials";
-import { supportsShareOAuth, useShareOAuthStore } from "../../../lib/share-oauth";
+import { resolveSelfHostAuth } from "../../../lib/selfhost-auth";
 import { resolveShareHost, shareHostLabel } from "../../../lib/share-geolibre";
+import { supportsShareOAuth, useShareOAuthStore } from "../../../lib/share-oauth";
 import { CredentialStorageNotice } from "../CredentialStorageNotice";
 import { ShareAccountForm } from "../ShareAccountForm";
 import { ShareAccountSection } from "../ShareAccountSection";
@@ -132,6 +134,14 @@ export function EnvironmentSection({
       : t("settings.env.tokenUnavailable");
   const oauthSetupError = useShareOAuthStore((state) => state.setupError);
   const oauthSupported = supportsShareOAuth();
+  // Upstream's account card talks to `/oauth`, which this API does not
+  // implement. On the hosted web build that card can only show a setup error,
+  // so it stays hidden and the password form below is the sign-in. Desktop
+  // does not read the flag: `resolveSelfHostAuth(true)` is only valid once
+  // Tauri has already been ruled out. The flag off leaves the upstream
+  // condition exactly as written.
+  const selfHostWeb = !isTauri() && resolveSelfHostAuth(true);
+  const showOAuthAccount = !selfHostWeb && shareTokenUsable && (oauthSupported || oauthSetupError);
   const enabledVariableCount = useMemo(
     () =>
       draftPreferences.environmentVariables.filter(
@@ -185,18 +195,13 @@ export function EnvironmentSection({
   return (
     <div className="space-y-5">
       <CredentialStorageNotice />
-      {shareTokenUsable && (oauthSupported || oauthSetupError) ? (
+      {showOAuthAccount ? (
         <ShareAccountSection
           shareHost={shareHost}
           hasPersonalToken={draftDesktopSettings.shareToken.trim().length > 0}
         />
       ) : null}
-      <div
-        className={cn(
-          "space-y-2",
-          (oauthSupported || oauthSetupError) && shareTokenUsable && "border-t pt-5",
-        )}
-      >
+      <div className={cn("space-y-2", showOAuthAccount && "border-t pt-5")}>
         <h3 className="text-sm font-semibold">{t("settings.env.tokenTitle")}</h3>
         {shareTokenUsable ? (
           <>

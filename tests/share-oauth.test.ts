@@ -12,6 +12,7 @@ import {
   resolveShareIssuer,
   resolveShareRequestToken,
   s256Challenge,
+  supportsShareOAuth,
   ShareOAuthError,
   signInToShare,
   signOutOfShare,
@@ -53,6 +54,58 @@ function installRefreshEnvironment(issuer: string, fetchImpl: typeof fetch) {
     },
   };
 }
+
+describe("supportsShareOAuth", () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+
+  function restoreWindow(): void {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+
+  it("stays available on the web when self-hosted accounts are not configured", () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { __GEOLIBRE_DEPLOYMENT_ENV__: {} },
+    });
+    try {
+      assert.equal(supportsShareOAuth(), true);
+    } finally {
+      restoreWindow();
+    }
+  });
+
+  it("turns OAuth off when this deployment uses its own accounts", () => {
+    // The projects API on this fork has no /oauth routes. Leaving the card
+    // up only produces a setup error.
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { __GEOLIBRE_DEPLOYMENT_ENV__: { VITE_GEOLIBRE_SELFHOST_AUTH: "1" } },
+    });
+    try {
+      assert.equal(supportsShareOAuth(), false);
+    } finally {
+      restoreWindow();
+    }
+  });
+
+  it("keeps desktop OAuth when the self-host flag is set for a web deploy", () => {
+    // The flag means the hosted web app. A desktop build must not inherit it:
+    // resolveSelfHostAuth(true) is only valid after Tauri has been ruled out.
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        __TAURI_INTERNALS__: {},
+        __GEOLIBRE_DEPLOYMENT_ENV__: { VITE_GEOLIBRE_SELFHOST_AUTH: "1" },
+      },
+    });
+    try {
+      assert.equal(supportsShareOAuth(), true);
+    } finally {
+      restoreWindow();
+    }
+  });
+});
 
 describe("refresh failure handling", () => {
   it("keeps the session and reports a retryable error on network failure", async () => {
