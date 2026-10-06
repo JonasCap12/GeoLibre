@@ -85,6 +85,7 @@
       "eslint": "$eslint"
     },
     "fast-uri": "^3.1.7",
+    "proxy-addr": "^2.0.8",
     "filelist": "^2.0.2",
     "maplibre-gl": "^6.3.0",
     "miniflare": {
