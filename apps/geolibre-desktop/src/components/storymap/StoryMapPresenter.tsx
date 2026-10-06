@@ -20,7 +20,7 @@ import {
 import type { MapEngine } from "@geolibre/map";
 import { Button, cn } from "@geolibre/ui";
 import { GripVertical, List, X } from "lucide-react";
-import { sanitizeStoryHtml } from "../../lib/sanitize-html";
+import { safeImageSrc, sanitizeStoryHtml } from "../../lib/sanitize-html";
 import {
   STORY_END_STEP_ID,
   STORY_GLOBAL_VIEW,
@@ -662,6 +662,7 @@ export function StoryMapPresenter({
               width: layout?.w ? `${layout.w}px` : undefined,
               height: layout?.h ? `${layout.h}px` : undefined,
             };
+            const imageSrc = safeImageSrc(chapter.image ?? "");
             return (
               <div
                 key={chapter.id}
@@ -686,7 +687,7 @@ export function StoryMapPresenter({
                     </span>
                   </div>
                   <div className="glsm-card-body">
-                    {chapter.image ? <img src={chapter.image} alt={chapter.title} /> : null}
+                    {imageSrc ? <img src={imageSrc} alt={chapter.title} /> : null}
                     {chapter.description ? (
                       <div
                         // Descriptions support inline HTML, matching the template;

@@ -1,5 +1,6 @@
-// Guards the jsDelivr `script-src` allowlist of the desktop CSP (#2858) and the
-// web build's nginx CSP (#2875).
+// Guards the jsDelivr `script-src` allowlist of the desktop CSP (#2858), the
+// web build's nginx CSP (#2875), and the Cloudflare `_headers` policy that
+// serves the public site.
 //
 // The Tauri CSP no longer allows all of `https://cdn.jsdelivr.net/npm/`; it
 // lists one version-pinned path per package the app actually executes from the
@@ -11,6 +12,12 @@
 // every pinned path from its owner and fails when they disagree. The Docker web
 // build (docker/nginx.conf) executes the same scripts, so its app policy must
 // list exactly the same paths.
+//
+// `public/_headers` is the policy the public host sends. It is not a copy of
+// nginx.conf: connect-src drops the localhost allowances, and the
+// `__GEOLIBRE_*__` placeholders are already literals. Its jsDelivr script-src
+// paths are the same pinned set, because the live deploy runs `lite:build`
+// and loads DuckDB-WASM from jsDelivr.
 //
 // See docs/maintenance.md#desktop-csp-script-src-allowlist.
 
@@ -90,15 +97,43 @@ function nginxPolicies(): Map<string, string> {
 }
 
 /**
- * Read one directive from the CSP an nginx `location` block sends.
+ * Read the Content-Security-Policy from the `/*` rule in public/_headers.
+ *
+ * Cloudflare appends headers from every matching rule, so this file sets the
+ * app policy once, on `/*`, and nowhere else.
+ *
+ * Returns:
+ *   The policy value.
+ */
+function headersPolicy(): string {
+  const text = readFileSync(path.join(ROOT, "apps/geolibre-desktop/public/_headers"), "utf8");
+  let inRoot = false;
+  for (const line of text.split("\n")) {
+    if (line === "/*") {
+      inRoot = true;
+      continue;
+    }
+    if (!inRoot) continue;
+    if (/^\/\S/.test(line)) break;
+    const match = line.match(/^\s+Content-Security-Policy:\s*(.+)$/);
+    if (match) return match[1].trim();
+  }
+  throw new Error("public/_headers has no /* Content-Security-Policy");
+}
+
+/**
+ * Read one directive from the `/*` policy in public/_headers.
  *
  * Args:
- *   location: The `location` match, e.g. "/".
  *   name: The directive name, e.g. "script-src".
  *
  * Returns:
  *   The directive's sources, in order.
  */
+function headersDirective(name: string): string[] {
+  return directiveOf(headersPolicy(), name);
+}
+
 function nginxDirective(location: string, name: string): string[] {
   const policy = nginxPolicies().get(location);
   assert.ok(policy, `docker/nginx.conf location ${location} sends no CSP`);
@@ -304,5 +339,39 @@ describe("web build CSP script-src (docker/nginx.conf)", () => {
     const scriptSrc = nginxDirective("/", "script-src");
     assert.ok(scriptSrc.includes("'unsafe-eval'"));
     assert.ok(scriptSrc.includes("'wasm-unsafe-eval'"));
+  });
+});
+
+describe("public host CSP script-src (public/_headers)", () => {
+  const scriptSrc = headersDirective("script-src");
+
+  it("does not allow whole jsDelivr trees", () => {
+    for (const broad of BROAD_JSDELIVR_SOURCES) {
+      assert.ok(!scriptSrc.includes(broad), `script-src must not list ${broad}`);
+    }
+  });
+
+  it("pins the same jsDelivr script paths as the desktop CSP", () => {
+    // The hosted build is `lite:build`, which loads DuckDB-WASM from jsDelivr,
+    // so these paths are load-bearing. Only the script paths move with nginx;
+    // connect-src and the resolved placeholders stay different on purpose.
+    const listed = jsdelivrSources(scriptSrc);
+    assert.deepEqual(listed, expectedJsdelivrSources());
+    assert.deepEqual(listed, jsdelivrSources(cspDirective("script-src")));
+  });
+
+  it("ends every pinned jsDelivr path with a slash so it matches as a prefix", () => {
+    for (const source of scriptSrc.filter((s) => s.startsWith(JSDELIVR))) {
+      assert.ok(source.endsWith("/"), `${source} matches one exact URL without a trailing /`);
+    }
+  });
+
+  it("keeps base-uri and form-action, which do not fall back to default-src", () => {
+    assert.deepEqual(headersDirective("base-uri"), ["'self'"]);
+    assert.deepEqual(headersDirective("form-action"), ["'self'"]);
+    assert.deepEqual(cspDirective("base-uri"), ["'self'"]);
+    assert.deepEqual(cspDirective("form-action"), ["'self'"]);
+    assert.deepEqual(nginxDirective("/", "base-uri"), ["'self'"]);
+    assert.deepEqual(nginxDirective("/", "form-action"), ["'self'"]);
   });
 });
