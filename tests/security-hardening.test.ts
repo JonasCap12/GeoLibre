@@ -120,6 +120,14 @@ describe("tiles proxy origins", () => {
     assert.deepEqual([...origins], ["https://gis.jonasnguyen.uk"]);
     assert.equal(parseProxyOrigins(undefined).size, 0);
   });
+
+  it("names this deployment's hosts and not localhost", () => {
+    const conf = read("../workers/tiles/wrangler.selfhost.jsonc");
+    const listed = /"ALLOWED_PROXY_ORIGINS": "([^"]*)"/.exec(conf)?.[1] ?? "";
+    const origins = parseProxyOrigins(listed);
+    assert.ok(origins.has("https://gis.jonasnguyen.uk"));
+    assert.ok(![...origins].some((origin) => /localhost|127\.0\.0\.1/.test(origin)));
+  });
 });
 
 describe("deployment config", () => {
@@ -267,11 +275,20 @@ describe("tiles origin list", async () => {
     assert.ok(!isAllowedProxyOriginFor("https://stranger.workers.dev", listed));
     assert.ok(!isAllowedProxyOriginFor("https://web.geolibre.app", listed));
     assert.ok(isAllowedProxyOriginFor("tauri://localhost", listed));
-    assert.ok(isAllowedProxyOriginFor("http://localhost:5173", listed));
+    assert.ok(isAllowedProxyOriginFor("http://tauri.localhost", listed));
+    assert.ok(isAllowedProxyOriginFor("https://tauri.localhost", listed));
+    // Origin is client-settable, so a configured deployment does not treat
+    // localhost as itself. Local `npm run dev` proxies these feeds on the
+    // Vite server and never presents this origin to the Worker.
+    assert.ok(!isAllowedProxyOriginFor("http://localhost:5173", listed));
+    assert.ok(!isAllowedProxyOriginFor("https://localhost", listed));
+    assert.ok(!isAllowedProxyOriginFor("http://127.0.0.1:5173", listed));
   });
 
   it("keeps the upstream hosts when nothing is set", () => {
     assert.ok(isAllowedProxyOriginFor("https://web.geolibre.app", new Set()));
+    assert.ok(isAllowedProxyOriginFor("http://localhost:5173", new Set()));
+    assert.ok(isAllowedProxyOriginFor("http://127.0.0.1:4173", new Set()));
     // Upstream dropped the blanket `*.workers.dev` allowance (#2518), which is
     // the permissiveness ALLOWED_PROXY_ORIGINS exists to close. This
     // deployment names its own Worker origin in that list, so nothing here
