@@ -100,6 +100,8 @@ function applyAppSecurityHeaders(headers: Headers): void {
 // so exactly one policy reaches the browser.
 const JUPYTERLITE_CSP =
   "default-src 'self'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'; " +
   "connect-src 'self' https: data: blob:; " +
   "img-src 'self' data: blob: https:; " +
   "media-src 'self' blob: https:; " +

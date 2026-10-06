@@ -742,8 +742,9 @@ manual check, not a Dependabot event:
 
 ### Desktop CSP `script-src` allowlist
 
-The desktop CSP (`apps/geolibre-desktop/src-tauri/tauri.conf.json`) does not
-allow all of `https://cdn.jsdelivr.net/npm/`. It lists one version-pinned path
+The desktop CSP (`apps/geolibre-desktop/src-tauri/tauri.conf.json`), the Docker
+web build (`docker/nginx.conf`) and the public host (`apps/geolibre-desktop/public/_headers`)
+do not allow all of `https://cdn.jsdelivr.net/npm/`. Each lists one version-pinned path
 per package the app executes from jsDelivr. That blocks scripts from any other
 package or version on the CDN; it does not verify what is served at an allowed
 path, so a compromised release at a pinned path still runs, and CSP stops
@@ -776,9 +777,14 @@ paths by listing each new bundle's imports, for example
 recursing into each result, then update `ESM_TRANSITIVE_PATHS` and the CSP
 together.
 
-The web build's CSP (the app `location /` in `docker/nginx.conf`) lists exactly
-the same pinned paths, and the test fails when the two lists disagree, so update
-both files in the same change. There too the app's own worker files carry no
+The web build's CSP (the app `location /` in `docker/nginx.conf`) and the
+public host's (`apps/geolibre-desktop/public/_headers`, the `/*` rule Cloudflare
+serves) list exactly the same pinned paths, and the test fails when the three
+lists disagree, so update all three files in the same change. `_headers` is not
+a copy of `nginx.conf`: it drops the `localhost` `connect-src` allowances,
+because a public host must not let served JS probe each visitor's loopback, and
+it resolves the `__GEOLIBRE_*__` placeholders to literals. Only the jsDelivr
+`script-src` paths move together. There too the app's own worker files carry no
 CSP: nginx serves `.js` files from the static-asset location, which sends none.
 The JupyterLite location allows only `pyodide/` from jsDelivr, unpinned: the
 site's Pyodide comes from whichever `jupyterlite-pyodide-kernel` release pip
@@ -788,7 +794,7 @@ A self-hosted `VITE_PYODIDE_INDEX_URL` mirror needs no CSP change in either
 build: `pyodide-console.ts` fetches the mirror's entry scripts and runs them
 from `blob:` URLs, and the vector-tools worker is not under the CSP. A rebuilt
 app that loads scripts from any other host needs that host's path added to
-`script-src` in both files.
+`script-src` in all three files.
 
 **`'unsafe-eval'` stays.** `maplibre-gl-vector` builds its CDN loader with
 `new Function("url", "return import(url)")` at module scope, and that module is
