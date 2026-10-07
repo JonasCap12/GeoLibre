@@ -2,6 +2,7 @@ import {
   BLANK_BASEMAP,
   createDefaultMapView,
   detachProjectCopy,
+  IMAGERY_BASEMAPS,
   OPENFREEMAP_BASEMAPS,
   PLANETARY_BASEMAP_GROUPS,
   PLANETARY_BASEMAPS,
@@ -20,6 +21,7 @@ import { planetaryBasemapLabel, planetaryBasemapSectionKey } from "../../lib/pla
 import { buildRemotePmtilesBasemap, isPmtilesStyleUrl } from "../../lib/pmtiles-basemap-url";
 import { clearProjectSnapshots } from "../../lib/project-history-store";
 import { CollapsibleSection } from "../CollapsibleSection";
+import { ImageryBasemapSection } from "../panels/ImageryBasemapSection";
 import { RegionalBasemapSection } from "../panels/RegionalBasemapSection";
 import { StarterProjectsSection } from "./StarterProjectsSection";
 import {
@@ -57,6 +59,7 @@ type BasemapChoice =
   | (typeof OPENFREEMAP_BASEMAPS)[number]["id"]
   | (typeof PROTOMAPS_BASEMAPS)[number]["id"]
   | (typeof PLANETARY_BASEMAPS)[number]["id"]
+  | (typeof IMAGERY_BASEMAPS)[number]["id"]
   | (typeof REGIONAL_BASEMAPS)[number]["id"]
   | typeof CUSTOM_BASEMAP_ID
   | typeof BLANK_BASEMAP_ID;
@@ -182,6 +185,10 @@ export function NewProjectDialog({
     () => REGIONAL_BASEMAPS.find((basemap) => basemap.id === selectedBasemapId),
     [selectedBasemapId],
   );
+  const selectedImagery = useMemo(
+    () => IMAGERY_BASEMAPS.find((basemap) => basemap.id === selectedBasemapId),
+    [selectedBasemapId],
+  );
   const isCustomUrlValid = useMemo(() => {
     if (!customStyleUrl) return false;
     try {
@@ -196,7 +203,8 @@ export function NewProjectDialog({
     : isBlankSelected ||
       Boolean(selectedPreset) ||
       Boolean(selectedPlanetary) ||
-      Boolean(selectedRegional);
+      Boolean(selectedRegional) ||
+      Boolean(selectedImagery);
 
   const resetForm = () => {
     setSelectedBasemapId(DEFAULT_BASEMAP_ID);
@@ -223,7 +231,7 @@ export function NewProjectDialog({
         : customStyleUrl
       : isBlankSelected
         ? BLANK_BASEMAP
-        : (selectedPreset ?? selectedPlanetary ?? selectedRegional)?.styleUrl;
+        : (selectedPreset ?? selectedPlanetary ?? selectedRegional ?? selectedImagery)?.styleUrl;
     if (basemapStyleUrl == null) return;
 
     newProject({
@@ -443,6 +451,11 @@ export function NewProjectDialog({
                     </div>
                   </div>
                 ) : null}
+
+                <ImageryBasemapSection
+                  selectedId={selectedBasemapId}
+                  onSelect={(basemap) => setSelectedBasemapId(basemap.id)}
+                />
 
                 <RegionalBasemapSection
                   selectedId={selectedBasemapId}

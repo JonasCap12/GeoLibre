@@ -306,7 +306,9 @@
     "sectionMars": "Sao Hỏa",
     "sectionOther": "Các thiên thể khác",
     "sectionRegional": "Khu vực",
-    "regionChina": "Trung Quốc (中国)"
+    "regionChina": "Trung Quốc (中国)",
+    "sectionSatellite": "Ảnh vệ tinh",
+    "esriWorldImagery": "Ảnh vệ tinh Esri"
   },
   "planetSwitcher": {
     "label": "Bản đồ nguyên mẫu",

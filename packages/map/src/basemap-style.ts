@@ -1,8 +1,10 @@
 import {
   BLANK_BASEMAP,
   DEFAULT_BASEMAP,
+  getImageryBasemapByStyleUrl,
   getPlanetaryBasemapByStyleUrl,
   getRegionalBasemapByStyleUrl,
+  isImageryBasemapSentinel,
   isRegionalBasemapSentinel,
   PLANETARY_BASEMAP_SENTINEL_PREFIX,
   type PlanetaryBasemap,
@@ -88,6 +90,12 @@ export function resolveMapStyle(
     console.warn(`Unknown planetary basemap "${styleUrl}"; falling back to the default basemap.`);
     return DEFAULT_BASEMAP;
   }
+  const imagery = getImageryBasemapByStyleUrl(styleUrl);
+  if (imagery) return createXyzRasterStyle(imagery, "imagery-basemap");
+  if (isImageryBasemapSentinel(styleUrl)) {
+    console.warn(`Unknown imagery basemap "${styleUrl}"; falling back to the default basemap.`);
+    return DEFAULT_BASEMAP;
+  }
   const regional = getRegionalBasemapByStyleUrl(styleUrl);
   if (regional) return createRegionalMapStyle(regional);
   // Same guard as the planetary path: a regional sentinel that no longer
@@ -110,6 +118,25 @@ export function resolveMapStyle(
  * these cover Earth, so a gap should read as missing map, not as space.
  */
 function createRegionalMapStyle(basemap: RegionalBasemap): maplibregl.StyleSpecification {
+  return createXyzRasterStyle(basemap, "regional-basemap");
+}
+
+/**
+ * XYZ (or TMS) raster style shared by regional basemaps and keyless imagery.
+ * `sourceId` stays distinct so a style document names the catalog it came from.
+ * An `overlayTileUrl` stacks a transparent layer above the imagery. Imagery
+ * presets omit it: labels stay off.
+ */
+function createXyzRasterStyle(
+  basemap: {
+    tileUrl: string;
+    overlayTileUrl?: string;
+    scheme?: "tms";
+    maxZoom: number;
+    attribution: string;
+  },
+  sourceId: string,
+): maplibregl.StyleSpecification {
   const rasterSource = (tiles: string, withAttribution: boolean) =>
     ({
       type: "raster",
@@ -122,12 +149,13 @@ function createRegionalMapStyle(basemap: RegionalBasemap): maplibregl.StyleSpeci
       ...(withAttribution ? { attribution: basemap.attribution } : {}),
     }) satisfies maplibregl.RasterSourceSpecification;
 
+  const overlayId = `${sourceId}-overlay`;
   return {
     version: 8,
     sources: {
-      "regional-basemap": rasterSource(basemap.tileUrl, true),
+      [sourceId]: rasterSource(basemap.tileUrl, true),
       ...(basemap.overlayTileUrl
-        ? { "regional-basemap-overlay": rasterSource(basemap.overlayTileUrl, false) }
+        ? { [overlayId]: rasterSource(basemap.overlayTileUrl, false) }
         : {}),
     },
     layers: [
@@ -136,15 +164,9 @@ function createRegionalMapStyle(basemap: RegionalBasemap): maplibregl.StyleSpeci
         type: "background",
         paint: { "background-color": BLANK_BACKGROUND_COLOR },
       },
-      { id: "regional-basemap", type: "raster", source: "regional-basemap" },
+      { id: sourceId, type: "raster", source: sourceId },
       ...(basemap.overlayTileUrl
-        ? [
-            {
-              id: "regional-basemap-overlay",
-              type: "raster" as const,
-              source: "regional-basemap-overlay",
-            },
-          ]
+        ? [{ id: overlayId, type: "raster" as const, source: overlayId }]
         : []),
     ],
   };

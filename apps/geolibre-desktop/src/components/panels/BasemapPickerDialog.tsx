@@ -2,10 +2,12 @@ import {
   availableCesiumBasemap,
   BLANK_BASEMAP,
   CESIUM_BASEMAPS,
+  IMAGERY_BASEMAPS,
   REGIONAL_BASEMAPS,
   PLANETARY_BASEMAP_GROUPS,
   PLANETARY_BASEMAPS,
   useAppStore,
+  type ImageryBasemap,
   type PlanetaryBasemap,
   type RegionalBasemap,
 } from "@geolibre/core";
@@ -44,6 +46,7 @@ import { useMapboxAccessToken } from "../../hooks/useMapboxAccessToken";
 import { planetaryBasemapLabel, planetaryBasemapSectionKey } from "../../lib/planetary-sections";
 import { buildRemotePmtilesBasemap, isPmtilesStyleUrl } from "../../lib/pmtiles-basemap-url";
 import { CollapsibleSection } from "../CollapsibleSection";
+import { ImageryBasemapSection } from "./ImageryBasemapSection";
 import { RegionalBasemapSection } from "./RegionalBasemapSection";
 
 // Picking the "Liberty 3D" preset applies the Liberty style and tilts the
@@ -177,6 +180,11 @@ export function BasemapPickerDialog({ open, onOpenChange }: BasemapPickerDialogP
         name: b.name,
         styleUrl: b.styleUrl,
       })),
+      ...IMAGERY_BASEMAPS.map((b) => ({
+        id: b.id,
+        name: b.id,
+        styleUrl: b.styleUrl,
+      })),
       ...REGIONAL_BASEMAPS.map((b) => ({
         id: b.id,
         name: b.name,
@@ -245,6 +253,11 @@ export function BasemapPickerDialog({ open, onOpenChange }: BasemapPickerDialogP
 
   // A regional basemap is a plain raster style for Earth, so unlike the
   // planetary ones it only swaps the style and leaves the ellipsoid alone.
+  const applyImagery = (basemap: ImageryBasemap) => {
+    setBasemapStyleUrl(basemap.styleUrl);
+    onOpenChange(false);
+  };
+
   const applyRegional = (basemap: RegionalBasemap) => {
     setBasemapStyleUrl(basemap.styleUrl);
     onOpenChange(false);
@@ -389,6 +402,8 @@ export function BasemapPickerDialog({ open, onOpenChange }: BasemapPickerDialogP
               </div>
             </div>
           ) : null}
+
+          <ImageryBasemapSection selectedId={activeChoice} onSelect={applyImagery} />
 
           <RegionalBasemapSection selectedId={activeChoice} onSelect={applyRegional} />
 

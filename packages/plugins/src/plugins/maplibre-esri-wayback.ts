@@ -1,4 +1,9 @@
-import { DEFAULT_LAYER_STYLE, useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import {
+  DEFAULT_LAYER_STYLE,
+  ESRI_WORLD_IMAGERY_ATTRIBUTION,
+  useAppStore,
+  type GeoLibreLayer,
+} from "@geolibre/core";
 import {
   DEFAULT_LAYER_ID,
   DEFAULT_SOURCE_ID,
@@ -117,8 +122,7 @@ function detachStoreSync(control: EsriWaybackControl): void {
 // Esri's usage terms require crediting the World Imagery (Wayback) tiles. The
 // upstream control adds its raster source without an `attribution`, so set one
 // so MapLibre's attribution control shows it (see applyWaybackAttribution).
-const ESRI_WAYBACK_ATTRIBUTION =
-  'Powered by <a href="https://www.esri.com/" target="_blank" rel="noreferrer">Esri</a> — Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+const ESRI_WAYBACK_ATTRIBUTION = ESRI_WORLD_IMAGERY_ATTRIBUTION;
 
 type WaybackMap = NonNullable<ReturnType<EsriWaybackControl["getMap"]>>;
 

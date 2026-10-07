@@ -22,6 +22,7 @@
  */
 
 import { getPlanetaryBasemapByStyleUrl } from "./ellipsoids";
+import { getImageryBasemapByStyleUrl } from "./imagery-basemaps";
 import { getRegionalBasemapByStyleUrl } from "./regional-basemaps";
 import { BLANK_BASEMAP, DEFAULT_BASEMAP } from "./types";
 
@@ -338,6 +339,15 @@ export function basemapToCesiumImagery(
       attribution: planetary.attribution,
       maximumLevel: planetary.maxZoom,
       ...(planetary.scheme ? { scheme: planetary.scheme } : {}),
+    };
+  }
+
+  const imageryBasemap = getImageryBasemapByStyleUrl(url);
+  if (imageryBasemap) {
+    // The same MapServer the `esri-imagery` catalog row already names.
+    return {
+      kind: "arcgis",
+      url: `https://services.arcgisonline.com/ArcGIS/rest/services/${imageryBasemap.cesiumService}/MapServer`,
     };
   }
 

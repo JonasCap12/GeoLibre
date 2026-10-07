@@ -321,7 +321,9 @@
     "sectionMars": "Mars",
     "sectionOther": "Other celestial bodies",
     "sectionRegional": "Regional",
-    "regionChina": "China (中国)"
+    "regionChina": "China (中国)",
+    "sectionSatellite": "Satellite",
+    "esriWorldImagery": "Esri World Imagery"
   },
   "planetSwitcher": {
     "label": "Celestial body",
