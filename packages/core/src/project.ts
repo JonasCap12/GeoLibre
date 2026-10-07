@@ -1,3 +1,4 @@
+import { newProjectBasemapStyleUrl } from "./basemap-policy";
 import { normalizeCesiumBasemap } from "./cesium-imagery";
 import { redactUrlCredentials } from "./credentials";
 import { v4 as uuidv4 } from "uuid";
@@ -109,7 +110,7 @@ export function createEmptyProject(
     version: PROJECT_VERSION,
     name,
     mapView: options.mapView ?? createDefaultMapView(),
-    basemapStyleUrl: options.basemapStyleUrl ?? DEFAULT_BASEMAP,
+    basemapStyleUrl: options.basemapStyleUrl ?? newProjectBasemapStyleUrl(),
     basemapVisible: true,
     basemapOpacity: 1,
     blankBackgroundColor: null,

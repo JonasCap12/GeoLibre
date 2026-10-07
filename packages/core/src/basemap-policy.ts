@@ -11,6 +11,7 @@
  * `getRegionalBasemapByStyleUrl` and `resolveMapStyle` do not consult it.
  */
 
+import { getImageryBasemapById } from "./imagery-basemaps";
 import { getBuildEnvironment } from "./runtime-env";
 import {
   REGIONAL_BASEMAP_GROUPS,
@@ -18,8 +19,10 @@ import {
   type RegionalBasemap,
   type RegionalBasemapRegionId,
 } from "./regional-basemaps";
+import { DEFAULT_BASEMAP } from "./types";
 
 export const HIDDEN_BASEMAP_REGIONS_ENV = "VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS";
+export const DEFAULT_BASEMAP_ENV = "VITE_GEOLIBRE_DEFAULT_BASEMAP";
 
 /**
  * Providers in `maplibre-gl-basemap-control`'s default catalog that serve
@@ -94,4 +97,17 @@ export function withoutChinaMarketBasemaps<T extends { provider: string }>(
   if (!chinaMarketBasemapProvidersHidden(env)) return basemaps;
   const hidden = new Set<string>(CHINA_MARKET_BASEMAP_PROVIDERS);
   return basemaps.filter((basemap) => !hidden.has(basemap.provider));
+}
+
+/**
+ * Style URL for a project created with no explicit basemap. The build may name
+ * an imagery preset id in {@link DEFAULT_BASEMAP_ENV}. Anything else, including
+ * an unset or unknown value, keeps {@link DEFAULT_BASEMAP}. Saved projects do
+ * not come through here: {@link parseProject} still fills a missing field from
+ * {@link DEFAULT_BASEMAP}, so an old file does not switch to satellite.
+ */
+export function newProjectBasemapStyleUrl(env?: Record<string, string | undefined>): string {
+  const requested = readEnv(env)[DEFAULT_BASEMAP_ENV]?.trim();
+  if (!requested) return DEFAULT_BASEMAP;
+  return getImageryBasemapById(requested)?.styleUrl ?? DEFAULT_BASEMAP;
 }

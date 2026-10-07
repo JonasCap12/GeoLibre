@@ -3,6 +3,7 @@ import {
   createDefaultMapView,
   detachProjectCopy,
   IMAGERY_BASEMAPS,
+  newProjectBasemapStyleUrl,
   OPENFREEMAP_BASEMAPS,
   PLANETARY_BASEMAP_GROUPS,
   PLANETARY_BASEMAPS,
@@ -41,6 +42,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 const DEFAULT_BASEMAP_ID = "liberty";
+
+/** The basemap a new project starts on. The build may name an imagery preset. */
+function defaultBasemapChoice(): BasemapChoice {
+  const styleUrl = newProjectBasemapStyleUrl();
+  return (
+    IMAGERY_BASEMAPS.find((basemap) => basemap.styleUrl === styleUrl)?.id ?? DEFAULT_BASEMAP_ID
+  );
+}
+
 const CUSTOM_BASEMAP_ID = "custom";
 const BLANK_BASEMAP_ID = "blank";
 const DEFAULT_PROJECT_NAME = "Untitled Project";
@@ -121,7 +131,7 @@ export function NewProjectDialog({
   const loadProject = useAppStore((s) => s.loadProject);
   const templateLibrary = useAppStore((s) => s.templateLibrary);
   const deleteTemplateEntry = useAppStore((s) => s.deleteTemplateEntry);
-  const [selectedBasemapId, setSelectedBasemapId] = useState<BasemapChoice>(DEFAULT_BASEMAP_ID);
+  const [selectedBasemapId, setSelectedBasemapId] = useState<BasemapChoice>(defaultBasemapChoice);
   const [projectName, setProjectName] = useState(DEFAULT_PROJECT_NAME);
   const [customUrl, setCustomUrl] = useState("");
   const [customFlavor, setCustomFlavor] = useState<ProtomapsFlavor>("light");
@@ -207,7 +217,7 @@ export function NewProjectDialog({
       Boolean(selectedImagery);
 
   const resetForm = () => {
-    setSelectedBasemapId(DEFAULT_BASEMAP_ID);
+    setSelectedBasemapId(defaultBasemapChoice());
     setProjectName(DEFAULT_PROJECT_NAME);
     setCustomUrl("");
     setCustomFlavor("light");

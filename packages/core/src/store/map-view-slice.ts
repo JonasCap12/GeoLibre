@@ -4,11 +4,11 @@
  * map. The basemap fields are tracked by undo history; the camera is not.
  */
 import { v4 as uuidv4 } from "uuid";
+import { newProjectBasemapStyleUrl } from "../basemap-policy";
 import { createDefaultMapView, normalizeBlankBackgroundColor } from "../project";
 import { DEFAULT_ELLIPSOID_ID } from "../ellipsoids";
 import type { PlanetaryBasemap } from "../ellipsoids";
 import {
-  DEFAULT_BASEMAP,
   DEFAULT_MAP_GRID_LAYOUT,
   DEFAULT_PRIMARY_RENDERER,
   DEFAULT_PROJECT_PREFERENCES,
@@ -200,7 +200,7 @@ export interface MapViewSlice {
 
 export const createMapViewSlice: SliceCreator<MapViewSlice> = (set) => ({
   mapView: createDefaultMapView(),
-  basemapStyleUrl: DEFAULT_BASEMAP,
+  basemapStyleUrl: newProjectBasemapStyleUrl(),
   basemapVisible: true,
   basemapOpacity: 1,
   blankBackgroundColor: null,

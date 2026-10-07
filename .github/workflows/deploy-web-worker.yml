@@ -86,6 +86,10 @@ jobs:
           # Basemaps control. `china` hides Amap, Tencent and Tianditu. Unset
           # leaves the upstream catalog unchanged. The owner sets the variable.
           VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: ${{ vars.VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS }}
+          # Imagery preset id for projects created with no explicit basemap.
+          # `esri-world-imagery` starts them on satellite. Unset keeps Liberty.
+          # Existing files keep the basemap they saved. The owner sets the variable.
+          VITE_GEOLIBRE_DEFAULT_BASEMAP: ${{ vars.VITE_GEOLIBRE_DEFAULT_BASEMAP }}
           # Turnstile site key for the register / reset pages. A variable, not
           # a secret: it is public by design. Pairs with the projects API's
           # TURNSTILE_SECRET_KEY; set both or neither.

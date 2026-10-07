@@ -15,6 +15,7 @@ import {
   CHINA_MARKET_BASEMAP_PROVIDERS,
   visibleRegionalBasemapGroups,
   visibleRegionalBasemaps,
+  newProjectBasemapStyleUrl,
   withoutChinaMarketBasemaps,
 } from "../packages/core/src/basemap-policy";
 
@@ -129,5 +130,35 @@ describe("hidden basemap regions", () => {
     if (typeof style !== "object" || style === null) return;
     const source = style.sources["regional-basemap"];
     assert.equal(source?.type, "raster");
+  });
+});
+
+describe("deployment default basemap", () => {
+  it("starts a new project on the named imagery preset", () => {
+    assert.equal(
+      newProjectBasemapStyleUrl({ VITE_GEOLIBRE_DEFAULT_BASEMAP: "esri-world-imagery" }),
+      ESRI_WORLD_IMAGERY.styleUrl,
+    );
+  });
+
+  it("keeps Liberty when the switch is unset or names something else", () => {
+    assert.equal(newProjectBasemapStyleUrl({}), DEFAULT_BASEMAP);
+    assert.equal(
+      newProjectBasemapStyleUrl({ VITE_GEOLIBRE_DEFAULT_BASEMAP: "   " }),
+      DEFAULT_BASEMAP,
+    );
+    assert.equal(
+      newProjectBasemapStyleUrl({ VITE_GEOLIBRE_DEFAULT_BASEMAP: "liberty" }),
+      DEFAULT_BASEMAP,
+    );
+    assert.equal(createEmptyProject("Untitled").basemapStyleUrl, DEFAULT_BASEMAP);
+  });
+
+  it("does not rewrite a saved project that omits the field", () => {
+    const raw = JSON.parse(serializeProject(createEmptyProject("old"))) as {
+      basemapStyleUrl?: string;
+    };
+    delete raw.basemapStyleUrl;
+    assert.equal(parseProject(JSON.stringify(raw)).basemapStyleUrl, DEFAULT_BASEMAP);
   });
 });
