@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { CollaborationParticipant, MapViewState } from "@geolibre/core";
 import {
+  applyFollowedCamera,
+  bindCameraPresence,
   createFollowClock,
+  createPointerPresence,
   createThrottledViewSend,
   FOLLOW_SETTLE_MS,
   FOLLOW_STREAM_MAX_MS,
@@ -121,11 +124,20 @@ describe("followMotion", () => {
     });
     assert.deepEqual(same, { kind: "skip" });
     const wrapped = followMotion({
-      current: camera({ bearing: 359 }),
-      target: camera({ bearing: 1 }),
+      current: camera({ bearing: 359.8 }),
+      target: camera({ bearing: 0.2 }),
       msSinceLastFollowedView: 80,
     });
     assert.deepEqual(wrapped, { kind: "skip" });
+  });
+
+  it("does not skip a 2 degree bearing change", () => {
+    const motion = followMotion({
+      current: camera({ bearing: 0 }),
+      target: camera({ bearing: 2 }),
+      msSinceLastFollowedView: 80,
+    });
+    assert.equal(motion.kind, "ease");
   });
 
   it("eases for 500 ms on the first view after a follow", () => {
@@ -214,6 +226,144 @@ describe("createThrottledViewSend", () => {
     time = 80;
     fire?.();
     assert.deepEqual(sent, [1]);
+  });
+});
+
+describe("applyFollowedCamera", () => {
+  it("stops an ease that is still running when the new view is already current", () => {
+    let stops = 0;
+    applyFollowedCamera(
+      {
+        readView: () => camera(),
+        applyView() {},
+        isCameraMoving: () => true,
+        stopCamera() {
+          stops += 1;
+        },
+      },
+      camera(),
+      80,
+    );
+    assert.equal(stops, 1);
+  });
+
+  it("leaves a settled camera alone", () => {
+    let stops = 0;
+    applyFollowedCamera(
+      {
+        readView: () => camera(),
+        applyView() {},
+        isCameraMoving: () => false,
+        stopCamera() {
+          stops += 1;
+        },
+      },
+      camera(),
+      80,
+    );
+    assert.equal(stops, 0);
+  });
+});
+
+describe("createPointerPresence", () => {
+  it("sends the cursor and view at the pointer interval while the camera is still", () => {
+    let time = 0;
+    const sent: Array<{ lng: number | null; view: boolean }> = [];
+    const pointer = createPointerPresence({
+      throttleMs: 40,
+      now: () => time,
+      isFollowing: () => false,
+      isCameraMoving: () => false,
+      readView: () => camera(),
+      send: (message) => sent.push({ lng: message.cursor?.lng ?? null, view: "view" in message }),
+    });
+    assert.equal(pointer.due(), true);
+    pointer.move({ lng: 1, lat: 2 });
+    time = 10;
+    assert.equal(pointer.due(), false);
+    time = 40;
+    assert.equal(pointer.due(), true);
+    pointer.move({ lng: 3, lat: 4 });
+    assert.deepEqual(sent, [
+      { lng: 1, view: true },
+      { lng: 3, view: true },
+    ]);
+  });
+
+  it("keeps the cursor and does not send while the camera itself is moving", () => {
+    const sent: unknown[] = [];
+    const pointer = createPointerPresence({
+      throttleMs: 40,
+      now: () => 0,
+      isFollowing: () => false,
+      isCameraMoving: () => true,
+      readView: () => camera(),
+      send: (message) => sent.push(message),
+    });
+    assert.equal(pointer.due(), true);
+    pointer.move({ lng: 5, lat: 6 });
+    assert.deepEqual(sent, []);
+    assert.deepEqual(pointer.readCursor(), { lng: 5, lat: 6 });
+  });
+
+  it("still sends the cursor without a view while following", () => {
+    const sent: Array<{ cursor: { lng: number } | null; view?: unknown }> = [];
+    const pointer = createPointerPresence({
+      throttleMs: 40,
+      now: () => 0,
+      isFollowing: () => true,
+      isCameraMoving: () => true,
+      readView: () => camera({ zoom: 3 }),
+      send: (message) => sent.push(message),
+    });
+    assert.equal(pointer.due(), true);
+    pointer.move({ lng: 7, lat: 8 });
+    pointer.leave();
+    assert.deepEqual(sent, [{ cursor: { lng: 7, lat: 8 } }, { cursor: null }]);
+  });
+});
+
+describe("bindCameraPresence", () => {
+  it("attaches the cursor held at send time, including the trailing view", () => {
+    let time = 0;
+    let cursor: { lng: number; lat: number } | null = { lng: 1, lat: 2 };
+    const sent: Array<{ zoom: number; lng: number | null }> = [];
+    const trailers: Array<() => void> = [];
+    const moves: Array<() => void> = [];
+    bindCameraPresence({
+      throttleMs: 80,
+      isFollowing: () => false,
+      readView: () => camera({ zoom: time === 0 ? 4 : 9 }),
+      readCursor: () => cursor,
+      sendView: (view, next) => sent.push({ zoom: view.zoom, lng: next?.lng ?? null }),
+      onCameraMove: (listener) => {
+        moves.push(listener);
+        return () => {};
+      },
+      onCameraIdle: () => () => {},
+      now: () => time,
+      schedule: (fn) => {
+        trailers.push(fn);
+        return 1;
+      },
+      clear: () => {
+        trailers.length = 0;
+      },
+    });
+    assert.deepEqual(sent, [{ zoom: 4, lng: 1 }]);
+    cursor = { lng: 9, lat: 8 };
+    time = 10;
+    const move = moves[0];
+    assert.ok(move);
+    move();
+    const fire = trailers[0];
+    assert.ok(fire);
+    time = 80;
+    fire();
+    assert.deepEqual(sent, [
+      { zoom: 4, lng: 1 },
+      { zoom: 9, lng: 9 },
+    ]);
   });
 });
 

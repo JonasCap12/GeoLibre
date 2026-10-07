@@ -118,6 +118,8 @@ export function applyFollowedCamera(
     readView: () => MapViewState;
     applyView: (view: MapViewState) => void;
     easeToView?: (view: MapViewState, options?: { durationMs?: number; linear?: boolean }) => void;
+    isCameraMoving: () => boolean;
+    stopCamera: () => void;
   } | null,
   view: MapViewState,
   msSinceLastFollowedView: number | null,
@@ -128,7 +130,12 @@ export function applyFollowedCamera(
     target: view,
     msSinceLastFollowedView,
   });
-  if (motion.kind === "skip") return;
+  // A skip means the camera is already where the new view is. An ease started
+  // for an older target would otherwise keep going.
+  if (motion.kind === "skip") {
+    if (engine.isCameraMoving()) engine.stopCamera();
+    return;
+  }
   if (motion.kind === "jump" || typeof engine.easeToView !== "function") {
     engine.applyView(view);
     return;
@@ -228,22 +235,81 @@ export function createThrottledViewSend(input: {
   };
 }
 
+export interface PresenceCursor {
+  lng: number;
+  lat: number;
+}
+
+/**
+ * Pointer presence, throttled to `throttleMs`.
+ * While this client is moving its own camera, the camera feed carries the
+ * cursor, so the pointer does not send. Following still sends the cursor and
+ * omits the view: the camera feed is off then, and that view would be the
+ * other person's.
+ */
+export function createPointerPresence(input: {
+  throttleMs: number;
+  now?: () => number;
+  isFollowing: () => boolean;
+  isCameraMoving: () => boolean;
+  readView: () => MapViewState;
+  send: (message: { cursor: PresenceCursor | null; view?: MapViewState }) => void;
+}): {
+  due: () => boolean;
+  move: (cursor: PresenceCursor) => void;
+  leave: () => void;
+  readCursor: () => PresenceCursor | null;
+} {
+  const now = input.now ?? (() => Date.now());
+  let lastSample = Number.NEGATIVE_INFINITY;
+  let cursor: PresenceCursor | null = null;
+  const send = () => {
+    input.send(input.isFollowing() ? { cursor } : { cursor, view: input.readView() });
+  };
+  return {
+    due() {
+      const time = now();
+      if (time - lastSample < input.throttleMs) return false;
+      lastSample = time;
+      return true;
+    },
+    move(next) {
+      cursor = next;
+      if (input.isCameraMoving() && !input.isFollowing()) return;
+      send();
+    },
+    leave() {
+      cursor = null;
+      send();
+    },
+    readCursor: () => cursor,
+  };
+}
+
 /**
  * Publish this client's camera on a steady interval, plus once when it settles.
+ * The cursor is read at send time so a camera message does not clear it.
  * While following, the camera is someone else's: publishing it would echo their
  * view back as ours. `storyCamera` settles are scripted story moves, same skip.
  */
 export function bindCameraPresence(input: {
   throttleMs: number;
+  now?: () => number;
+  schedule?: (fn: () => void, ms: number) => unknown;
+  clear?: (id: unknown) => void;
   isFollowing: () => boolean;
   readView: () => MapViewState;
-  sendView: (view: MapViewState) => void;
+  readCursor: () => PresenceCursor | null;
+  sendView: (view: MapViewState, cursor: PresenceCursor | null) => void;
   onCameraMove: (listener: () => void) => () => void;
   onCameraIdle: (listener: (event?: { storyCamera?: boolean }) => void) => () => void;
 }): () => void {
   const publisher = createThrottledViewSend({
     throttleMs: input.throttleMs,
-    send: input.sendView,
+    now: input.now,
+    schedule: input.schedule,
+    clear: input.clear,
+    send: (view) => input.sendView(view, input.readCursor()),
   });
   const blocked = () => input.isFollowing();
   const detachMove = input.onCameraMove(() => {
@@ -262,8 +328,8 @@ export function bindCameraPresence(input: {
   };
 }
 
-const BEARING_EPS_DEG = 3;
-const PITCH_EPS_DEG = 1;
+const BEARING_EPS_DEG = 0.5;
+const PITCH_EPS_DEG = 0.5;
 const ZOOM_EPS = 0.02;
 
 function angleDelta(a: number, b: number): number {

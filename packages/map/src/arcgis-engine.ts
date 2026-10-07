@@ -8,7 +8,7 @@ import { createArcgisCogLayer, loadCogTiler } from "./arcgis-cog-imagery";
 import { createArcgisScaleBar, type ArcgisScaleBar } from "./arcgis-scale-bar";
 import { boundsFillMinZoom, normalizeMapBounds } from "./map-bounds";
 import { cachingCogTiler, cogSourceUrl } from "./cog-imagery";
-import { SEARCH_HIGHLIGHT_COLOR } from "./map-engine";
+import { SEARCH_HIGHLIGHT_COLOR, type EaseToViewOptions } from "./map-engine";
 import { renderFillPatternCanvas } from "./fill-patterns";
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import { createCogElevationLayer } from "./arcgis-cog-terrain";
@@ -979,8 +979,9 @@ export class ArcgisEngine implements MapEngine {
       this.constrainSettledView();
     }
   }
-  easeToView(view: MapViewState, options?: { durationMs?: number }): void {
-    // Fork: follow passes durationMs. Omitted stays 500, matching MapLibre.
+  easeToView(view: MapViewState, options?: EaseToViewOptions): void {
+    // Fork: follow passes durationMs. `linear` is not supported by goTo and is
+    // ignored. Omitted duration stays 500, matching MapLibre.
     const target = this.constrainView(view);
     void this.view
       ?.goTo(

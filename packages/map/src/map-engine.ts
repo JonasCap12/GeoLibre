@@ -16,6 +16,16 @@ import { MAPLIBRE_SUPPORTED_LAYER_KINDS } from "./maplibre-layer-kinds";
 export const SEARCH_HIGHLIGHT_COLOR = "#ef4444";
 
 /**
+ * Optional camera-ease controls. Absent fields keep the engine default
+ * (MapLibre's 500 ms ease). `linear` is a straight interpolation; engines
+ * whose only flight is already linear ignore it.
+ */
+export interface EaseToViewOptions {
+  durationMs?: number;
+  linear?: boolean;
+}
+
+/**
  * The renderer-neutral surface the app drives a map through (issue #2260).
  *
  * Historically there was no such seam: every panel, menu, and plugin reached
@@ -41,16 +51,6 @@ export const SEARCH_HIGHLIGHT_COLOR = "#ef4444";
  * meaningful is instead declared by {@link capabilities} — read that, do not
  * branch on {@link kind}.
  */
-/**
- * Optional camera-ease controls. Absent fields keep the engine default
- * (MapLibre's 500 ms ease). `linear` is a straight interpolation; engines
- * whose only flight is already linear ignore it.
- */
-export interface EaseToViewOptions {
-  durationMs?: number;
-  linear?: boolean;
-}
-
 export interface MapEngine {
   /** Which renderer backs this engine. Diagnostics and telemetry only. */
   readonly kind: MapRendererKind;

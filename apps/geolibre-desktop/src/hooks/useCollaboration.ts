@@ -47,6 +47,7 @@ import {
   applyFollowedCamera,
   bindCameraPresence,
   createFollowClock,
+  createPointerPresence,
   followAfterParticipants,
   followOnWelcome,
   followTarget,
@@ -531,31 +532,29 @@ export function useCollaboration(
     const surface = engine.getRenderSurface();
     if (!surface) return () => {};
     const container = surface.getContainer();
-    let lastCursor = 0;
-    const sendCursor = (cursor: { lng: number; lat: number } | null) => {
-      const following = useAppStore.getState().collaboration.followClientId !== null;
-      conn.send({
-        type: "presence",
-        cursor,
-        ...(following ? {} : { view: engine.readView() }),
-      });
-    };
+    const following = () => useAppStore.getState().collaboration.followClientId !== null;
+    const pointer = createPointerPresence({
+      throttleMs: CURSOR_THROTTLE_MS,
+      isFollowing: following,
+      isCameraMoving: () => engine.isCameraMoving(),
+      readView: () => engine.readView(),
+      send: (message) => conn.send({ type: "presence", ...message }),
+    });
     const onPointerMove = (event: PointerEvent) => {
-      const now = Date.now();
-      if (now - lastCursor < CURSOR_THROTTLE_MS) return;
-      lastCursor = now;
+      if (!pointer.due()) return;
       const bounds = container.getBoundingClientRect();
       const lngLat = surface.unproject([event.clientX - bounds.left, event.clientY - bounds.top]);
-      if (lngLat) sendCursor(lngLat);
+      if (lngLat) pointer.move(lngLat);
     };
-    const onPointerLeave = () => sendCursor(null);
+    const onPointerLeave = () => pointer.leave();
     container.addEventListener("pointermove", onPointerMove);
     container.addEventListener("pointerleave", onPointerLeave);
     const detachCamera = bindCameraPresence({
       throttleMs: VIEW_THROTTLE_MS,
-      isFollowing: () => useAppStore.getState().collaboration.followClientId !== null,
+      isFollowing: following,
       readView: () => engine.readView(),
-      sendView: (view) => conn.send({ type: "presence", view }),
+      readCursor: () => pointer.readCursor(),
+      sendView: (view, cursor) => conn.send({ type: "presence", view, cursor }),
       onCameraMove: (listener) => engine.onCameraMove(listener),
       onCameraIdle: (listener) => engine.onCameraIdle(listener),
     });

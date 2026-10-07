@@ -514,8 +514,8 @@ export class CesiumEngine implements MapEngine {
    * real Cesium implementation, not a duration tweak.
    */
   easeToView(view: MapViewState, options?: { durationMs?: number }): void {
-    // Fork: follow passes durationMs. Cesium's flight is already a timed
-    // linear move, so `linear` is ignored. Omitted duration stays 500 ms.
+    // Fork: follow passes durationMs. `linear` is not supported here and is
+    // ignored. Omitted duration stays 500 ms.
     const seconds = options?.durationMs !== undefined ? options.durationMs / 1000 : EASE_SECONDS;
     this.animateTo(view, seconds);
   }

@@ -23,6 +23,7 @@ import {
   DEFAULT_BUILT_IN_CONTROL_POSITIONS,
   DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
   STORY_OPACITY_PAINT_PROPERTIES,
+  type EaseToViewOptions,
   type MapEngine,
   type MapEngineCapabilities,
   type MapRenderSurface,
@@ -518,7 +519,7 @@ export class MapboxEngine implements MapEngine {
       return;
     this.map?.jumpTo(this.constrainView(view));
   }
-  easeToView(view: MapViewState, options?: { durationMs?: number; linear?: boolean }): void {
+  easeToView(view: MapViewState, options?: EaseToViewOptions): void {
     // Same additive options as MapController.easeToView (fork): omitted keeps
     // Mapbox's default ease. No eventData, so the move is not a user gesture.
     this.map?.easeTo({
