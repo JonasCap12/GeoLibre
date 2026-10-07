@@ -44,6 +44,9 @@ import {
   participantCanEditLayer,
 } from "../lib/collab-protocol";
 import {
+  applyFollowedCamera,
+  bindCameraPresence,
+  createFollowClock,
   followAfterParticipants,
   followOnWelcome,
   followTarget,
@@ -79,16 +82,7 @@ async function signedInIdentity(): Promise<string | undefined> {
 
 const SNAPSHOT_DEBOUNCE_MS = 250;
 const CURSOR_THROTTLE_MS = 40;
-
-/** Slide the camera to a followed view. Every engine implements `easeToView`. */
-function applyFollowedView(engine: MapEngine | null, view: MapViewState): void {
-  if (!engine) return;
-  if (typeof engine.easeToView === "function") {
-    engine.easeToView(view);
-    return;
-  }
-  engine.applyView(view);
-}
+const VIEW_THROTTLE_MS = 80;
 
 export interface CollaborationApi {
   enabled: boolean;
@@ -147,6 +141,7 @@ export function useCollaboration(
   // Dataset ids already uploaded this session, so a later snapshot of the same
   // drawing does not post the bytes again.
   const promotionCacheRef = useRef(createPromotionCache());
+  const followClockRef = useRef(createFollowClock());
   // Separate from snapshotRequestRef. Sharing that counter would let a library
   // fetch cancel a snapshot that was already the newest one.
   const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -324,6 +319,12 @@ export function useCollaboration(
     void rehydrateSharedLayersInStore(token, merged.layers);
   };
 
+  const applyRemoteFollow = (followClientId: string | null, view: MapViewState | null): void => {
+    followClockRef.current.note(followClientId);
+    if (!followClientId || !view) return;
+    applyFollowedCamera(mapControllerRef.current, view, followClockRef.current.mark());
+  };
+
   const handleMessage = (message: ServerMessage): void => {
     const store = useAppStore.getState();
     switch (message.type) {
@@ -372,7 +373,7 @@ export function useCollaboration(
           clientId: decided.followClientId ?? "",
           view: decided.followClientId ? message.presence[decided.followClientId]?.view : null,
         });
-        if (followedView) applyFollowedView(mapControllerRef.current, followedView);
+        applyRemoteFollow(decided.followClientId, followedView);
         const pending = pendingConnectRef.current;
         pendingConnectRef.current = null;
         pending?.resolve();
@@ -394,8 +395,7 @@ export function useCollaboration(
           view: message.view,
         };
         store.updateCollaborationPresence(message.clientId, presence);
-        const followedView = viewToApply(collab.followClientId, message);
-        if (followedView) applyFollowedView(mapControllerRef.current, followedView);
+        applyRemoteFollow(collab.followClientId, viewToApply(collab.followClientId, message));
         break;
       }
       case "presenter":
@@ -403,9 +403,11 @@ export function useCollaboration(
         break;
       case "participants": {
         const currentFollow = useAppStore.getState().collaboration.followClientId;
+        const nextFollow = followAfterParticipants(currentFollow, message.participants);
+        followClockRef.current.note(nextFollow);
         store.setCollaboration({
           participants: message.participants,
-          followClientId: followAfterParticipants(currentFollow, message.participants),
+          followClientId: nextFollow,
         });
         const present = new Set(message.participants.map((p) => p.clientId));
         const presence = useAppStore.getState().collaboration.presence;
@@ -530,33 +532,37 @@ export function useCollaboration(
     if (!surface) return () => {};
     const container = surface.getContainer();
     let lastCursor = 0;
+    const sendCursor = (cursor: { lng: number; lat: number } | null) => {
+      const following = useAppStore.getState().collaboration.followClientId !== null;
+      conn.send({
+        type: "presence",
+        cursor,
+        ...(following ? {} : { view: engine.readView() }),
+      });
+    };
     const onPointerMove = (event: PointerEvent) => {
       const now = Date.now();
       if (now - lastCursor < CURSOR_THROTTLE_MS) return;
       lastCursor = now;
       const bounds = container.getBoundingClientRect();
       const lngLat = surface.unproject([event.clientX - bounds.left, event.clientY - bounds.top]);
-      if (lngLat)
-        conn.send({
-          type: "presence",
-          cursor: lngLat,
-          view: engine.readView(),
-        });
+      if (lngLat) sendCursor(lngLat);
     };
-    const onPointerLeave = () =>
-      conn.send({ type: "presence", cursor: null, view: engine.readView() });
-    const onCameraIdle = (event?: { storyCamera: boolean }) => {
-      if (event?.storyCamera) return;
-      conn.send({ type: "presence", view: engine.readView() });
-    };
+    const onPointerLeave = () => sendCursor(null);
     container.addEventListener("pointermove", onPointerMove);
     container.addEventListener("pointerleave", onPointerLeave);
-    const detachCameraIdle = engine.onCameraIdle(onCameraIdle);
-    onCameraIdle();
+    const detachCamera = bindCameraPresence({
+      throttleMs: VIEW_THROTTLE_MS,
+      isFollowing: () => useAppStore.getState().collaboration.followClientId !== null,
+      readView: () => engine.readView(),
+      sendView: (view) => conn.send({ type: "presence", view }),
+      onCameraMove: (listener) => engine.onCameraMove(listener),
+      onCameraIdle: (listener) => engine.onCameraIdle(listener),
+    });
     return () => {
       container.removeEventListener("pointermove", onPointerMove);
       container.removeEventListener("pointerleave", onPointerLeave);
-      detachCameraIdle();
+      detachCamera();
     };
   };
 
@@ -567,6 +573,7 @@ export function useCollaboration(
       if (!event.originalEvent) return;
       if (!useAppStore.getState().collaboration.followClientId) return;
       autoFollowHostRef.current = false;
+      followClockRef.current.note(null);
       useAppStore.getState().setCollaboration({ followClientId: null });
     };
     const events = ["dragstart", "zoomstart", "rotatestart", "pitchstart"] as const;
@@ -601,6 +608,7 @@ export function useCollaboration(
       editOverride: null,
     };
 
+    followClockRef.current.note(null);
     useAppStore.getState().setCollaboration({
       connecting: true,
       isActive: false,
@@ -779,12 +787,13 @@ export function useCollaboration(
     autoFollowHostRef.current = false;
     const followClientId = followTarget(clientId, selfId);
     store.setCollaboration({ followClientId });
-    if (!followClientId) return;
-    const followedView = viewToApply(followClientId, {
-      clientId: followClientId,
-      view: store.collaboration.presence[followClientId]?.view,
-    });
-    if (followedView) applyFollowedView(mapControllerRef.current, followedView);
+    const followedView = followClientId
+      ? viewToApply(followClientId, {
+          clientId: followClientId,
+          view: store.collaboration.presence[followClientId]?.view,
+        })
+      : null;
+    applyRemoteFollow(followClientId, followedView);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

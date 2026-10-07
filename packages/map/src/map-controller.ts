@@ -101,6 +101,7 @@ import {
   DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
   DEFAULT_BUILT_IN_CONTROL_POSITIONS,
   STORY_OPACITY_PAINT_PROPERTIES,
+  type EaseToViewOptions,
   type MapEngine,
   type MapEngineCapabilities,
 } from "./map-engine";
@@ -972,10 +973,17 @@ export class MapController implements MapEngine {
   /**
    * Like {@link applyView} but animates the camera (MapLibre `easeTo`) instead
    * of jumping, for browser-style back/forward viewport navigation.
+   *
+   * `options` is optional. Ease and jump both omit MapLibre `eventData`, so
+   * `originalEvent` stays unset and following does not unfollow.
    */
-  easeToView(view: MapViewState): void {
+  easeToView(view: MapViewState, options?: EaseToViewOptions): void {
     if (!this.map) return;
-    this.map.easeTo(constrainMapView(view, this.mapPreferences, this.map));
+    this.map.easeTo({
+      ...constrainMapView(view, this.mapPreferences, this.map),
+      ...(options?.durationMs !== undefined ? { duration: options.durationMs } : {}),
+      ...(options?.linear ? { easing: (t: number) => t } : {}),
+    });
   }
 
   applyMapPreferences(preferences: MapPreferences): void {

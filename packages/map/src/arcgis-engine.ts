@@ -979,7 +979,8 @@ export class ArcgisEngine implements MapEngine {
       this.constrainSettledView();
     }
   }
-  easeToView(view: MapViewState): void {
+  easeToView(view: MapViewState, options?: { durationMs?: number }): void {
+    // Fork: follow passes durationMs. Omitted stays 500, matching MapLibre.
     const target = this.constrainView(view);
     void this.view
       ?.goTo(
@@ -988,7 +989,7 @@ export class ArcgisEngine implements MapEngine {
           ...this.zoomTarget(target.zoom),
           ...this.orientation(target.bearing, target.pitch),
         },
-        { duration: 500 },
+        { duration: options?.durationMs ?? 500 },
       )
       .catch(reportGoToFailure);
   }

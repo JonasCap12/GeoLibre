@@ -41,6 +41,16 @@ export const SEARCH_HIGHLIGHT_COLOR = "#ef4444";
  * meaningful is instead declared by {@link capabilities} — read that, do not
  * branch on {@link kind}.
  */
+/**
+ * Optional camera-ease controls. Absent fields keep the engine default
+ * (MapLibre's 500 ms ease). `linear` is a straight interpolation; engines
+ * whose only flight is already linear ignore it.
+ */
+export interface EaseToViewOptions {
+  durationMs?: number;
+  linear?: boolean;
+}
+
 export interface MapEngine {
   /** Which renderer backs this engine. Diagnostics and telemetry only. */
   readonly kind: MapRendererKind;
@@ -61,8 +71,15 @@ export interface MapEngine {
 
   /** Place the camera at `view` without animation, resolving after asynchronous engines settle. */
   applyView(view: MapViewState): void | Promise<void>;
-  /** Animate the camera to `view` with a short ease. */
-  easeToView(view: MapViewState): void;
+  /**
+   * Animate the camera to `view` with a short ease.
+   *
+   * `options` is additive (this fork): collaboration follow passes a short
+   * linear duration so a stream of views is not restarted as a 500 ms ease.
+   * Omitted options keep the previous default on every engine. An upstream
+   * merge that drops the argument restores the lag.
+   */
+  easeToView(view: MapViewState, options?: EaseToViewOptions): void;
   /** The camera's current position, in the store's engine-neutral shape. */
   readView(): MapViewState;
   /**

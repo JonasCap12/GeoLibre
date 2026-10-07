@@ -513,8 +513,11 @@ export class CesiumEngine implements MapEngine {
    * transition that reads as "travelling" rather than "sliding" — it needs a
    * real Cesium implementation, not a duration tweak.
    */
-  easeToView(view: MapViewState): void {
-    this.animateTo(view, EASE_SECONDS);
+  easeToView(view: MapViewState, options?: { durationMs?: number }): void {
+    // Fork: follow passes durationMs. Cesium's flight is already a timed
+    // linear move, so `linear` is ignored. Omitted duration stays 500 ms.
+    const seconds = options?.durationMs !== undefined ? options.durationMs / 1000 : EASE_SECONDS;
+    this.animateTo(view, seconds);
   }
 
   /** Animate to a story-chapter location. See {@link easeToView} on the arc. */

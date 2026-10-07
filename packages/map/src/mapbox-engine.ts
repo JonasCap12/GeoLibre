@@ -518,8 +518,14 @@ export class MapboxEngine implements MapEngine {
       return;
     this.map?.jumpTo(this.constrainView(view));
   }
-  easeToView(view: MapViewState): void {
-    this.map?.easeTo(this.constrainView(view));
+  easeToView(view: MapViewState, options?: { durationMs?: number; linear?: boolean }): void {
+    // Same additive options as MapController.easeToView (fork): omitted keeps
+    // Mapbox's default ease. No eventData, so the move is not a user gesture.
+    this.map?.easeTo({
+      ...this.constrainView(view),
+      ...(options?.durationMs !== undefined ? { duration: options.durationMs } : {}),
+      ...(options?.linear ? { easing: (t: number) => t } : {}),
+    });
   }
   /**
    * Clamp a view to the project's zoom, pitch and world-copy preferences ahead
