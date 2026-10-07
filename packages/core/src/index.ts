@@ -6,6 +6,7 @@ export * from "./photo";
 export * from "./ellipsoids";
 export * from "./regional-basemaps";
 export * from "./imagery-basemaps";
+export * from "./basemap-policy";
 export * from "./cesium-imagery";
 export * from "./geojson-z";
 export * from "./color-ramp";

@@ -9,6 +9,14 @@ import { createEmptyProject, parseProject, serializeProject } from "../packages/
 import { basemapToCesiumImagery } from "../packages/core/src/cesium-imagery";
 import { ARCGIS_KEYLESS_BASEMAP_URL, planArcgisBasemap } from "../packages/map/src/arcgis-basemap";
 import { resolveMapStyle } from "../packages/map/src/basemap-style";
+import { DEFAULT_BASEMAP } from "../packages/core/src/types";
+import { REGIONAL_BASEMAPS } from "../packages/core/src/regional-basemaps";
+import {
+  CHINA_MARKET_BASEMAP_PROVIDERS,
+  visibleRegionalBasemapGroups,
+  visibleRegionalBasemaps,
+  withoutChinaMarketBasemaps,
+} from "../packages/core/src/basemap-policy";
 
 describe("Esri World Imagery preset", () => {
   it("resolves to a label-free raster style with World Imagery tiles", () => {
@@ -54,5 +62,72 @@ describe("Esri World Imagery preset", () => {
     });
     const loaded = parseProject(serializeProject(project));
     assert.equal(loaded.basemapStyleUrl, ESRI_WORLD_IMAGERY.styleUrl);
+  });
+});
+
+describe("hidden basemap regions", () => {
+  const china = { VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: "china" };
+  const catalog = [
+    { id: "amap-street", provider: "amap" },
+    { id: "tencent-street", provider: "tencent" },
+    { id: "tianditu-vector", provider: "tianditu" },
+    { id: "openfreemap-liberty", provider: "openfreemap" },
+  ];
+
+  it("leaves the catalog untouched when the switch is unset", () => {
+    assert.equal(visibleRegionalBasemaps({}), REGIONAL_BASEMAPS);
+    assert.equal(
+      visibleRegionalBasemaps({ VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: "   " }),
+      REGIONAL_BASEMAPS,
+    );
+    assert.equal(withoutChinaMarketBasemaps(catalog, {}), catalog);
+  });
+
+  it("leaves the catalog untouched for an unknown region name", () => {
+    assert.equal(
+      visibleRegionalBasemaps({ VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: "mars" }),
+      REGIONAL_BASEMAPS,
+    );
+    assert.equal(
+      visibleRegionalBasemaps({ VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: "foo,bar" }),
+      REGIONAL_BASEMAPS,
+    );
+  });
+
+  it("drops China-market entries and the section when china is named", () => {
+    const visible = visibleRegionalBasemaps(china);
+    assert.equal(
+      visibleRegionalBasemaps({ VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: "china,foo" }).some(
+        (basemap) => basemap.region === "china",
+      ),
+      false,
+    );
+    assert.equal(
+      visible.some((basemap) => basemap.region === "china"),
+      false,
+    );
+    assert.equal(visibleRegionalBasemapGroups(china).length, 0);
+    assert.deepEqual(
+      withoutChinaMarketBasemaps(catalog, china).map((basemap) => basemap.provider),
+      ["openfreemap"],
+    );
+    assert.deepEqual([...CHINA_MARKET_BASEMAP_PROVIDERS], ["amap", "tencent", "tianditu"]);
+  });
+
+  it("still draws a saved China sentinel when the catalog hides it", () => {
+    const styleUrl = "geolibre://regional-basemap/amap-satellite";
+    assert.equal(
+      visibleRegionalBasemaps(china).some((basemap) => basemap.styleUrl === styleUrl),
+      false,
+    );
+    const project = createEmptyProject("saved", { basemapStyleUrl: styleUrl });
+    const loaded = parseProject(serializeProject(project));
+    assert.equal(loaded.basemapStyleUrl, styleUrl);
+    const style = resolveMapStyle(loaded.basemapStyleUrl);
+    assert.notEqual(style, DEFAULT_BASEMAP);
+    assert.equal(typeof style === "object" && style !== null, true);
+    if (typeof style !== "object" || style === null) return;
+    const source = style.sources["regional-basemap"];
+    assert.equal(source?.type, "raster");
   });
 });

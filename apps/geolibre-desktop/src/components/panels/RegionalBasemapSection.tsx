@@ -1,4 +1,4 @@
-import { REGIONAL_BASEMAP_GROUPS, type RegionalBasemap } from "@geolibre/core";
+import { visibleRegionalBasemapGroups, type RegionalBasemap } from "@geolibre/core";
 import { cn } from "@geolibre/ui";
 import { useTranslation } from "react-i18next";
 import { regionalBasemapRegionKey } from "../../lib/regional-sections";
@@ -23,10 +23,17 @@ interface RegionalBasemapSectionProps {
  * Collapsed by default, since most users never need a regional basemap, but
  * auto-expanded when one of them is the current selection so an active choice
  * is never hidden behind a closed heading.
+ *
+ * A deployment can hide a region with `VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS`.
+ * An empty group list returns nothing, so the section heading and its region
+ * note go with the entries. A project that already stores the sentinel still
+ * opens; this only changes what the picker offers.
  */
 export function RegionalBasemapSection({ selectedId, onSelect }: RegionalBasemapSectionProps) {
   const { t } = useTranslation();
-  const selectionIsRegional = REGIONAL_BASEMAP_GROUPS.some((group) =>
+  const groups = visibleRegionalBasemapGroups();
+  if (groups.length === 0) return null;
+  const selectionIsRegional = groups.some((group) =>
     group.basemaps.some((basemap) => basemap.id === selectedId),
   );
 
@@ -36,7 +43,7 @@ export function RegionalBasemapSection({ selectedId, onSelect }: RegionalBasemap
       defaultOpen={selectionIsRegional}
     >
       <div className="space-y-4">
-        {REGIONAL_BASEMAP_GROUPS.map((group) => (
+        {groups.map((group) => (
           <div key={group.id} className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground">
               {t(regionalBasemapRegionKey(group.id))}

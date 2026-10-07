@@ -82,6 +82,10 @@ jobs:
           # other deployment wants. Set the repository variable to 1 or the
           # built worker is ungated no matter what the code says.
           VITE_GEOLIBRE_SELFHOST_AUTH: ${{ vars.VITE_GEOLIBRE_SELFHOST_AUTH }}
+          # Comma-separated region ids to drop from the basemap pickers and the
+          # Basemaps control. `china` hides Amap, Tencent and Tianditu. Unset
+          # leaves the upstream catalog unchanged. The owner sets the variable.
+          VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS: ${{ vars.VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS }}
           # Turnstile site key for the register / reset pages. A variable, not
           # a secret: it is public by design. Pairs with the projects API's
           # TURNSTILE_SECRET_KEY; set both or neither.

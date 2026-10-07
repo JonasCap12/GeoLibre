@@ -1,8 +1,10 @@
 import {
+  chinaMarketBasemapProvidersHidden,
   getGoogleMapsApiKey,
   getMapboxAccessToken,
   getProtomapsApiKey,
   useAppStore,
+  withoutChinaMarketBasemaps,
 } from "@geolibre/core";
 import {
   BasemapControl,
@@ -262,24 +264,32 @@ function releaseControl(): void {
   styleChangeFallback = null;
 }
 
+const MAPBOX_STANDARD_BASEMAP: BasemapDefinition = {
+  id: "mapbox-standard",
+  name: "Mapbox Standard",
+  provider: "mapbox",
+  type: "style",
+  source: {
+    type: "style",
+    url: "https://api.mapbox.com/styles/v1/mapbox/standard?access_token={api-key}",
+  },
+};
+
 function getBasemapControlOptions(app: GeoLibreAppAPI): BasemapControlOptions {
+  const mapboxBasemaps = app.getMapboxMap?.() ? [MAPBOX_STANDARD_BASEMAP] : [];
+  // The control has no exclude-provider option. When this deployment hides
+  // China, hand it the default catalog with those providers removed and turn
+  // the built-in list off so they are not merged back in. Unset leaves the
+  // options exactly as before.
+  const hideChina = chinaMarketBasemapProvidersHidden();
+  const basemaps = hideChina
+    ? [...withoutChinaMarketBasemaps(DEFAULT_BASEMAPS), ...mapboxBasemaps]
+    : mapboxBasemaps.length > 0
+      ? mapboxBasemaps
+      : undefined;
   return {
-    ...(app.getMapboxMap?.()
-      ? {
-          basemaps: [
-            {
-              id: "mapbox-standard",
-              name: "Mapbox Standard",
-              provider: "mapbox",
-              type: "style",
-              source: {
-                type: "style",
-                url: "https://api.mapbox.com/styles/v1/mapbox/standard?access_token={api-key}",
-              },
-            },
-          ],
-        }
-      : {}),
+    ...(basemaps ? { basemaps } : {}),
+    ...(hideChina ? { includeDefaultBasemaps: false } : {}),
     collapsed: false,
     // Not used for layout (the dock owns placement); the control still reads it
     // when it builds its hidden toggle.
