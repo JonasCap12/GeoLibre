@@ -86,12 +86,15 @@ test("keeps every toolbar menu on one scrollable row on small screens", async ({
   await page.setViewportSize({ width: 400, height: 720 });
   await waitForMap(page);
 
-  // The menu bar stays a single row and scrolls horizontally instead of
-  // wrapping onto a second row.
+  // The menu bar stays a single row. The menus row scrolls; the header itself
+  // does not, so the theme toggle stays on screen (#871).
   const header = page.locator("header").first();
+  const menus = header.locator("div").first();
   const box = await header.boundingBox();
   expect(box?.height).toBeLessThan(56);
-  expect(await header.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  expect(await menus.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  expect(await header.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(false);
+  await expect(page.getByRole("button", { name: /Switch to (Light|Dark) Mode/ })).toBeInViewport();
 
   for (const menu of [
     "Project",
