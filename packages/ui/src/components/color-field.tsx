@@ -193,12 +193,17 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
       [ref],
     );
     React.useEffect(() => {
-      const node = colorInputRef.current;
       const coalescer = colorCoalescerRef.current;
-      if (!node || !coalescer) return;
-      const flush = () => coalescer.flush();
-      node.addEventListener("change", flush);
-      return () => node.removeEventListener("change", flush);
+      if (!coalescer) return;
+      const flush = (event: Event) => {
+        if (event.target !== colorInputRef.current) return;
+        coalescer.flush();
+      };
+      // Fork: listen on window, not the input. The input's own listener runs
+      // before React's delegated onChange, so it would flush before the sample
+      // exists. The window bubble runs after that sample is recorded.
+      window.addEventListener("change", flush);
+      return () => window.removeEventListener("change", flush);
     }, []);
     React.useEffect(() => () => colorCoalescerRef.current?.flush(), []);
 
@@ -281,7 +286,13 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
             // give assistive tech an accessible name that conveys the "no color"
             // state instead of letting it announce that opaque value.
             aria-label={transparent ? transparentSwatchLabel : undefined}
-            onChange={(event) => colorCoalescerRef.current?.push(event.target.value)}
+            onChange={(event) => {
+              const coalescer = colorCoalescerRef.current;
+              coalescer?.push(event.target.value);
+              // A `change` is the picker closing. Commit in this same turn;
+              // drag samples arrive as `input` and stay one per frame.
+              if (event.nativeEvent.type === "change") coalescer?.flush();
+            }}
             // `peer` so the overlay (which covers the input's own
             // focus-visible border) can re-expose the focus ring below.
             className={cn("peer", fill && "w-full", className)}
