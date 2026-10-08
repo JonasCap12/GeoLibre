@@ -298,8 +298,10 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
             className={cn("peer", fill && "w-full", className)}
             {...props}
             onBlur={(event) => {
-              onBlur?.(event);
+              // Flush first: a caller that commits on blur (ControlsMenu's
+              // ColorRow) must see the last sample, not the one before it.
               colorCoalescerRef.current?.flush();
+              onBlur?.(event);
             }}
           />
           {transparent ? (
