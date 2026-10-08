@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Pipette } from "lucide-react";
+import { createFrameCoalescer } from "../lib/frame-coalesce";
 import { cn } from "../lib/utils";
 import { Input } from "./input";
 
@@ -136,6 +137,7 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
       title,
       name,
       form,
+      onBlur,
       ...props
     },
     ref,
@@ -167,6 +169,39 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
       return () => abortRef.current?.abort();
     }, []);
 
+    // Fork: the native colour input fires `input` on every drag sample. Keep
+    // the newest sample and forward it at most once per frame, then flush the
+    // last one when the picker closes, the field blurs, or it unmounts.
+    const onChangeRef = React.useRef(onChange);
+    onChangeRef.current = onChange;
+    const colorCoalescerRef = React.useRef<ReturnType<typeof createFrameCoalescer<string>> | null>(
+      null,
+    );
+    if (colorCoalescerRef.current === null) {
+      colorCoalescerRef.current = createFrameCoalescer((hex) => onChangeRef.current(hex), {
+        request: (callback) => requestAnimationFrame(callback),
+        cancel: (handle) => cancelAnimationFrame(handle),
+      });
+    }
+    const colorInputRef = React.useRef<HTMLInputElement | null>(null);
+    const setColorInputRef = React.useCallback(
+      (node: HTMLInputElement | null) => {
+        colorInputRef.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref],
+    );
+    React.useEffect(() => {
+      const node = colorInputRef.current;
+      const coalescer = colorCoalescerRef.current;
+      if (!node || !coalescer) return;
+      const flush = () => coalescer.flush();
+      node.addEventListener("change", flush);
+      return () => node.removeEventListener("change", flush);
+    }, []);
+    React.useEffect(() => () => colorCoalescerRef.current?.flush(), []);
+
     const pickFromScreen = React.useCallback(async () => {
       if (typeof window === "undefined" || typeof window.EyeDropper !== "function") {
         return;
@@ -179,6 +214,7 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
           signal: controller.signal,
         });
         if (result?.sRGBHex) {
+          colorCoalescerRef.current?.drop();
           onChange(result.sRGBHex);
           onCommit?.();
         }
@@ -193,6 +229,7 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
 
     const setTransparent = React.useCallback(
       (next: boolean) => {
+        colorCoalescerRef.current?.drop();
         onChange(next ? TRANSPARENT_COLOR : lastOpaqueRef.current);
         onCommit?.();
       },
@@ -233,7 +270,7 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
             />
           ) : null}
           <Input
-            ref={ref}
+            ref={setColorInputRef}
             type="color"
             name={transparent ? undefined : name}
             form={form}
@@ -244,11 +281,15 @@ export const ColorField = React.forwardRef<HTMLInputElement, ColorFieldProps>(
             // give assistive tech an accessible name that conveys the "no color"
             // state instead of letting it announce that opaque value.
             aria-label={transparent ? transparentSwatchLabel : undefined}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={(event) => colorCoalescerRef.current?.push(event.target.value)}
             // `peer` so the overlay (which covers the input's own
             // focus-visible border) can re-expose the focus ring below.
             className={cn("peer", fill && "w-full", className)}
             {...props}
+            onBlur={(event) => {
+              onBlur?.(event);
+              colorCoalescerRef.current?.flush();
+            }}
           />
           {transparent ? (
             <span
