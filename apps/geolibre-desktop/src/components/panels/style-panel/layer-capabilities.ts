@@ -87,6 +87,17 @@ function hasPolygonGeometryMetadata(value: unknown): boolean {
 }
 
 /**
+ * The only layer fields a geometry scan reads. A style edit rebuilds the layer
+ * object and leaves both of these in place, so a memo keyed on them does not
+ * re-scan features while a colour is dragged.
+ */
+export function geometryScanInputs(
+  layer: { type?: string; geojson?: unknown } | undefined,
+): readonly [string | undefined, unknown] {
+  return [layer?.type, layer?.geojson];
+}
+
+/**
  * True when a GeoJSON layer contains only point geometry, so the heatmap and
  * cluster renderers (which only make sense for points) can be offered.
  */

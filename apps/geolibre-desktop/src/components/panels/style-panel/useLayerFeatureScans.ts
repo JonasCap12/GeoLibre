@@ -12,6 +12,7 @@ import { getAttributePropertyNames } from "../../../lib/expression-inputs";
 import { buildStyleSuggestions } from "../../../lib/style-suggestions";
 import { getPropertyValues } from "../../../lib/vector-style-classification";
 import {
+  geometryScanInputs,
   getGeometryFlags,
   isPointOnlyGeoJsonLayer,
   supportsPointRendererFor,
@@ -33,13 +34,24 @@ export function useLayerFeatureScans(layer: GeoLibreLayer | undefined) {
   // type stays "geojson"; tile-rendered layers become "vector-tiles"). Memoize
   // the point-only scan so a large layer isn't re-scanned on every panel render.
   // Must run before the early returns below so the hook order stays stable.
-  const isPointOnly = useMemo(() => (layer ? isPointOnlyGeoJsonLayer(layer) : false), [layer]);
+  // Keyed on the scan inputs, not `layer`: every style edit rebuilds that
+  // object, and a colour drag would otherwise re-scan the features.
+  const [scanType, scanGeojson] = geometryScanInputs(layer);
+  const isPointOnly = useMemo(
+    () => (layer ? isPointOnlyGeoJsonLayer(layer) : false),
+    // isPointOnlyGeoJsonLayer reads the layer type and its feature collection only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scanType, scanGeojson],
+  );
   // Memoized so the per-feature geometry scan (up to 2000 features) does not
-  // re-run on every render, e.g. while typing in a rule filter textarea. Kept
-  // before the early returns below so the hook order stays stable.
+  // re-run on every render, e.g. while typing in a rule filter textarea or
+  // dragging a colour. Kept before the early returns below so the hook order
+  // stays stable.
   const geometryFlags = useMemo(
     () => (layer ? getGeometryFlags(layer) : { hasPoint: true, hasLine: true, hasPolygon: true }),
-    [layer],
+    // getGeometryFlags reads the feature collection only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scanGeojson],
   );
   // Style suggestions (#1519). The candidate scan reads every feature's
   // properties, so it is memoized alongside the other per-feature scans rather
