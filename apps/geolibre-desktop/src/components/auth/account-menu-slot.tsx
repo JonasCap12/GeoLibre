@@ -112,10 +112,12 @@ export function SelfHostAccountFrame({ token, children }: { token: string; child
     <AccountMenuContext.Provider value={{ setHosted, account, busy, show, revoke }}>
       {children}
       {hosted ? null : (
-        // Built-in map controls occupy the top-end corner, so the fallback
-        // sits at the top-start and stays under dialogs (the old z-100 button
-        // floated over them).
-        <div className="fixed start-3 top-3 z-30">
+        // Built-in map controls sit in MapLibre's top-right corner, so the
+        // fallback sits top-left and stays under dialogs (the old z-100 button
+        // floated over them). Physical (not logical) anchor: MapLibre's control
+        // corners do not mirror in RTL, so `start-3` would land on them there.
+        // eslint-disable-next-line local/no-physical-tailwind -- see above
+        <div className="fixed left-3 top-3 z-30">
           <AccountMenuTrigger floating />
         </div>
       )}
