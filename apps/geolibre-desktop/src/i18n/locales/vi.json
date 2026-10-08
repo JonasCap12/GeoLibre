@@ -2088,6 +2088,10 @@
     "signIn": "Đăng nhập",
     "signOut": "Đăng xuất",
     "account": "Tài khoản",
+    "menu": {
+      "attentionMfa": "Chưa bật xác thực hai lớp",
+      "attentionEmail": "Email chưa được xác minh"
+    },
     "unavailableTitle": "Đăng nhập không khả dụng",
     "unavailableDescription": "GeoLibre không thể truy cập dịch vụ đăng nhập nên không thể biết bạn đã đăng nhập hay chưa. Việc này thường là tạm thời; nếu tình trạng này vẫn tiếp diễn thì có thể cần chú ý đến cài đặt xác thực của triển khai này.",
     "selfHostDescription": "Triển khai này yêu cầu tài khoản trên máy chủ này.",

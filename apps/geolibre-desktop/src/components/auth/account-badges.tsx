@@ -15,9 +15,17 @@ export function accountInitials(name: string | null | undefined): string {
 }
 
 const AVATAR_SIZES = {
+  xs: "h-5 w-5 text-[10px]",
   sm: "h-8 w-8 text-xs",
   md: "h-10 w-10 text-sm",
   lg: "h-14 w-14 text-lg",
+} as const;
+
+const AVATAR_BADGES = {
+  xs: "h-3 w-3",
+  sm: "h-4 w-4",
+  md: "h-4 w-4",
+  lg: "h-5 w-5",
 } as const;
 
 /**
@@ -48,8 +56,10 @@ export function AccountAvatar({
         {accountInitials(name)}
       </span>
       {admin ? (
-        <span className="absolute -bottom-0.5 -end-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-white ring-2 ring-background">
-          <ShieldCheck className="h-2.5 w-2.5" aria-hidden />
+        <span
+          className={`absolute -bottom-0.5 -end-0.5 flex items-center justify-center rounded-full bg-amber-500 text-white ring-2 ring-background ${AVATAR_BADGES[size]}`}
+        >
+          <ShieldCheck className={size === "xs" ? "h-2 w-2" : "h-2.5 w-2.5"} aria-hidden />
         </span>
       ) : null}
     </span>

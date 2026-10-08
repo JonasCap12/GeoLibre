@@ -2256,6 +2256,10 @@
     "signingIn": "Signing in…",
     "signOut": "Sign out",
     "account": "Account",
+    "menu": {
+      "attentionMfa": "Two-factor authentication is not on",
+      "attentionEmail": "Email address is not verified"
+    },
     "forgotPassword": "Forgot password?",
     "forgotPasswordTitle": "Reset your password",
     "forgotPasswordDescription": "If this address has an account, a reset link will be sent to it.",

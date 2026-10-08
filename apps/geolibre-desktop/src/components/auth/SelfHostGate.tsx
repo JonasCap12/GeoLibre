@@ -1,15 +1,5 @@
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  Input,
-  Label,
-} from "@geolibre/ui";
-import { LogOut, ShieldAlert, ShieldCheck, User, UserRound, X } from "lucide-react";
+import { Button, Input, Label } from "@geolibre/ui";
+import { LogOut, ShieldAlert, X } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
@@ -41,9 +31,8 @@ import {
   type SelfHostRoute,
 } from "../../lib/selfhost-routes";
 import { TURNSTILE_ACTIONS } from "../../lib/turnstile";
-import { AccountCenter, type AccountView } from "./AccountCenter";
+import { SelfHostAccountFrame } from "./account-menu-slot";
 import { MfaSection } from "./AccountSecurityDialog";
-import { AccountAvatar, RoleBadge } from "./account-badges";
 import { authCodeText, authErrorText } from "./auth-error-text";
 import { MfaCodeField } from "./MfaCodeField";
 import { PasswordField } from "./PasswordField";
@@ -175,7 +164,7 @@ function SignedIn({ token, children }: { token: string; children: ReactNode }) {
       : null;
 
   return (
-    <>
+    <SelfHostAccountFrame token={token}>
       {children}
       {deadline ? (
         <MfaDeadlineBanner
@@ -184,8 +173,7 @@ function SignedIn({ token, children }: { token: string; children: ReactNode }) {
           onDismiss={() => setBannerHidden(true)}
         />
       ) : null}
-      <UserMenu token={token} />
-    </>
+    </SelfHostAccountFrame>
   );
 }
 
@@ -875,120 +863,5 @@ function LinkProblem({
         {t("auth.continue")}
       </Button>
     </AuthScreen>
-  );
-}
-
-/** Account menu. Sign-out asks the server to revoke, then clears the saved token either way. */
-function UserMenu({ token }: { token: string }) {
-  const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const [account, setAccount] = useState<AccountInfo | null>(null);
-  const [open, setOpen] = useState(false);
-  const [view, setView] = useState<AccountView>("overview");
-  const show = (next: AccountView) => {
-    setView(next);
-    setOpen(true);
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    // A 401 here is caught by the session watch, which signs the tab out.
-    fetchAccount({ token })
-      .then((info) => {
-        if (!cancelled) setAccount(info);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  const reloadAccount = async () => setAccount(await fetchAccount({ token }));
-
-  // The local token is cleared whether or not the revoke reached the server.
-  // Someone pressing "Sign out" offline, or on a token the server already
-  // dropped, must not stay signed in on this device; an unrevoked token still
-  // dies at its idle timeout.
-  const revoke = async () => {
-    setBusy(true);
-    try {
-      await signOut({ token });
-    } catch (err) {
-      console.warn("sign-out could not reach the server; clearing the local session", err);
-    } finally {
-      writeShareToken("");
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="fixed end-2 top-2 z-[100]">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("auth.account")}
-            className="h-9 w-9 rounded-full bg-background p-0 shadow-sm"
-          >
-            {account ? (
-              <AccountAvatar name={account.username} admin={account.isAdmin} size="sm" />
-            ) : (
-              <User className="h-4 w-4" />
-            )}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
-          {account ? (
-            <>
-              <DropdownMenuLabel className="flex items-center gap-3 py-2 text-start font-normal">
-                <AccountAvatar name={account.username} admin={account.isAdmin} />
-                <span className="min-w-0 flex-1 space-y-1">
-                  <span className="block truncate text-sm font-semibold">
-                    {account.username ?? "—"}
-                  </span>
-                  <RoleBadge admin={account.isAdmin} />
-                </span>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-            </>
-          ) : null}
-          <DropdownMenuItem onSelect={() => show("overview")}>
-            <UserRound className="me-2 h-4 w-4" />
-            {t("auth.security.menu")}
-          </DropdownMenuItem>
-          {account?.isAdmin ? (
-            <DropdownMenuItem
-              onSelect={() => show("invites")}
-              className="text-amber-800 focus:bg-amber-500/10 focus:text-amber-900 dark:text-amber-200 dark:focus:text-amber-100"
-            >
-              <ShieldCheck className="me-2 h-4 w-4" />
-              {t("auth.admin.menu")}
-            </DropdownMenuItem>
-          ) : null}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            disabled={busy}
-            onSelect={(event) => {
-              event.preventDefault();
-              void revoke();
-            }}
-          >
-            <LogOut className="me-2 h-4 w-4" />
-            {t("auth.signOut")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <AccountCenter
-        open={open}
-        onOpenChange={setOpen}
-        view={view}
-        onViewChange={setView}
-        token={token}
-        account={account}
-        onToken={writeShareToken}
-        onAccountChange={reloadAccount}
-      />
-    </div>
   );
 }
