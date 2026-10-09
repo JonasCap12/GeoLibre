@@ -28,7 +28,7 @@ import {
   useSimulateClicks,
   type HazardUiSettings,
 } from "./hazard-alert-support";
-import { HazardZonePicker } from "./hazard-zone-picker";
+import { HazardPickBanner, HazardZonePicker, useHazardZonePickMode } from "./hazard-zone-picker";
 import { GeolocationError, watchPosition } from "../../lib/geolocation";
 import {
   acknowledgeZone,
@@ -247,6 +247,30 @@ export function HazardAlertDialog({
   useHazardMarker(mapControllerRef, monitoring, fix);
   const simulateLost = useSimulateClicks(mapControllerRef, monitoring && simulate, setFix);
 
+  // Picking zones needs the map, which the modal dialog covers: close the
+  // dialog while picking and reopen it when done (as Field Collection does).
+  // `onOpenChange` is called directly here, not through the Dialog's wrapper,
+  // so closing for picking does not cancel the pick mode it just started.
+  const stopPicking = useCallback(() => {
+    setPickMode(false);
+    onOpenChange(true);
+  }, [onOpenChange]);
+  useEffect(() => {
+    if (open) setPickMode(false);
+  }, [open]);
+  const pick = useHazardZonePickMode({
+    t,
+    mapControllerRef,
+    active: pickMode && !open,
+    onExit: stopPicking,
+  });
+  const startPicking = () => {
+    setSimulate(false);
+    pick.setNotice("");
+    setPickMode(true);
+    onOpenChange(false);
+  };
+
   const start = () => {
     soundRef.current ??= createHazardBeep();
     soundRef.current.unlock();
@@ -375,11 +399,9 @@ export function HazardAlertDialog({
             <HazardZonePicker
               t={t}
               mapControllerRef={mapControllerRef}
-              active={open && pickMode}
-              onActiveChange={(active) => {
-                setPickMode(active);
-                if (active) setSimulate(false);
-              }}
+              notice={pick.notice}
+              onNotice={pick.setNotice}
+              onStartPicking={startPicking}
             />
             <HazardMonitorSettings
               t={t}
@@ -407,6 +429,12 @@ export function HazardAlertDialog({
         />,
         document.body,
       )}
+      {pickMode && !open
+        ? createPortal(
+            <HazardPickBanner t={t} notice={pick.notice} onDone={stopPicking} />,
+            document.body,
+          )
+        : null}
     </>
   );
 }

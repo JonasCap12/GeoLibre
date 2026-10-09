@@ -5,6 +5,7 @@ import type { MapEngine } from "@geolibre/map";
 import { useAppStore } from "@geolibre/core";
 import { Button, Input, Label } from "@geolibre/ui";
 import type * as maplibregl from "maplibre-gl";
+import { releaseBodyPointerEvents } from "../../lib/radix-compat";
 import {
   addPickedHazardZone,
   hazardGeometryBounds,
@@ -21,8 +22,11 @@ import {
 interface HazardZonePickerProps {
   t: TFunction;
   mapControllerRef: RefObject<MapEngine | null>;
-  active: boolean;
-  onActiveChange: (active: boolean) => void;
+  /** Last pick result, shared with the banner shown while picking. */
+  notice: string;
+  onNotice: (notice: string) => void;
+  /** Close the dialog and start picking on the map. */
+  onStartPicking: () => void;
 }
 
 function id(prefix: string): string {
@@ -33,22 +37,34 @@ function applyProjectLayers(layers: ReturnType<typeof useAppStore.getState>["lay
   useAppStore.setState({ layers, isDirty: true });
 }
 
-/** Individual-zone authoring UI, kept separate from the monitoring dialog. */
-export function HazardZonePicker({
+/**
+ * Map clicks while picking zones.
+ *
+ * The modal dialog's overlay covers the map and Radix unmounts its content
+ * when it closes, so picking runs with the dialog closed and this hook lives
+ * at the dialog's top level (which stays mounted), the same way Field
+ * Collection's "Pick on map" works. Escape calls `onExit`.
+ */
+export function useHazardZonePickMode({
   t,
   mapControllerRef,
   active,
-  onActiveChange,
-}: HazardZonePickerProps) {
-  const layers = useAppStore((state) => state.layers);
-  const zones = useMemo(() => hazardZoneEntries(layers), [layers]);
-  const legacy = useMemo(() => legacyHazardLayers(layers), [layers]);
+  onExit,
+}: {
+  t: TFunction;
+  mapControllerRef: RefObject<MapEngine | null>;
+  active: boolean;
+  onExit: () => void;
+}): { notice: string; setNotice: (notice: string) => void } {
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
     if (!active) return;
     const map = mapControllerRef.current?.getMap() ?? null;
     if (!map) return;
+    // Radix can leave `pointer-events: none` on <body> after the modal closes.
+    releaseBodyPointerEvents();
+    const raf = requestAnimationFrame(releaseBodyPointerEvents);
     const onClick = (event: maplibregl.MapMouseEvent) => {
       const point = { lng: event.lngLat.lng, lat: event.lngLat.lat };
       const existing = pickExistingHazardZoneAt(point, useAppStore.getState().layers);
@@ -83,17 +99,61 @@ export function HazardZonePicker({
       setNotice(t("hazard.pickAdded", { layer: picked.layerName }));
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onActiveChange(false);
+      if (event.key === "Escape") onExit();
     };
     map.on("click", onClick);
     map.getCanvas().style.cursor = "crosshair";
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      cancelAnimationFrame(raf);
       map.off("click", onClick);
       map.getCanvas().style.cursor = "";
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [active, mapControllerRef, onActiveChange, t]);
+  }, [active, mapControllerRef, onExit, t]);
+
+  return { notice, setNotice };
+}
+
+/** Floating bar while picking: what to do, the last result, and "Done". */
+export function HazardPickBanner({
+  t,
+  notice,
+  onDone,
+}: {
+  t: TFunction;
+  notice: string;
+  onDone: () => void;
+}) {
+  return (
+    <div
+      data-testid="hazard-pick-banner"
+      className="fixed inset-x-0 bottom-6 z-[60] mx-auto flex w-fit max-w-[95%] flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground shadow-xl"
+    >
+      <p role="status" className="text-sm font-medium">
+        {t("hazard.pickActive")}
+      </p>
+      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+      <div className="flex justify-end">
+        <Button type="button" className="min-h-12 min-w-28" onClick={onDone} autoFocus>
+          {t("common.done")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Individual-zone authoring UI, kept separate from the monitoring dialog. */
+export function HazardZonePicker({
+  t,
+  mapControllerRef,
+  notice,
+  onNotice: setNotice,
+  onStartPicking,
+}: HazardZonePickerProps) {
+  const layers = useAppStore((state) => state.layers);
+  const zones = useMemo(() => hazardZoneEntries(layers), [layers]);
+  const legacy = useMemo(() => legacyHazardLayers(layers), [layers]);
 
   const remove = (featureKey: string, name: string) => {
     if (!window.confirm(t("hazard.removeZoneConfirm", { name }))) return;
@@ -132,19 +192,9 @@ export function HazardZonePicker({
         <h3 className="text-base font-medium">{t("hazard.zonesTitle")}</h3>
         <p className="mt-1 text-sm text-muted-foreground">{t("hazard.zonesHint")}</p>
       </div>
-      <Button
-        type="button"
-        variant={active ? "secondary" : "outline"}
-        className="min-h-12"
-        onClick={() => onActiveChange(!active)}
-      >
-        {t(active ? "hazard.stopPicking" : "hazard.pickOnMap")}
+      <Button type="button" variant="outline" className="min-h-12" onClick={onStartPicking}>
+        {t("hazard.pickOnMap")}
       </Button>
-      {active ? (
-        <p className="rounded-md bg-blue-100 px-3 py-2 text-sm text-blue-900">
-          {t("hazard.pickActive")}
-        </p>
-      ) : null}
       {notice ? (
         <p className="text-sm" role="status">
           {notice}
