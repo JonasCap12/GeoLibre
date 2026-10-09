@@ -251,7 +251,7 @@ export function HazardAlertDialog({
   }, [monitoring]);
 
   useHazardMarker(mapControllerRef, monitoring, fix);
-  useSimulateClicks(mapControllerRef, monitoring && simulate, setFix);
+  const simulateLost = useSimulateClicks(mapControllerRef, monitoring && simulate, setFix);
 
   const start = () => {
     soundRef.current ??= createHazardBeep();
@@ -405,13 +405,7 @@ export function HazardAlertDialog({
               }}
               onSettings={updateSettings}
               onSimulate={setSimulate}
-              onLost={() =>
-                setFix((current) =>
-                  current
-                    ? { ...current, timestamp: Date.now() - 60_000 }
-                    : { lng: 0, lat: 0, accuracy: 8, timestamp: Date.now() - 60_000 },
-                )
-              }
+              onLost={simulateLost}
             />
           </div>
         </DialogContent>

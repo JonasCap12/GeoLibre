@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import type { TFunction } from "i18next";
 import * as maplibregl from "maplibre-gl";
@@ -6,6 +6,10 @@ import type { MapEngine } from "@geolibre/map";
 import { Button, Input, Label } from "@geolibre/ui";
 import { accuracyCircle } from "../../lib/gps-tracking";
 import type { AlertKind } from "../../lib/hazard-alerts";
+import {
+  createHazardSimulationStream,
+  type HazardSimulationStream,
+} from "../../lib/hazard-simulation";
 import type { HazardEvaluation, HazardFix } from "../../lib/hazard-zones";
 
 declare global {
@@ -232,25 +236,29 @@ export function useSimulateClicks(
   enabled: boolean,
   setFix: (fix: HazardFix) => void,
 ) {
+  const streamRef = useRef<HazardSimulationStream | null>(null);
   useEffect(() => {
     if (!enabled) return;
     const map = mapControllerRef.current?.getMap() ?? null;
     if (!map) return;
+    const stream = createHazardSimulationStream(setFix);
+    streamRef.current = stream;
     const onClick = (event: maplibregl.MapMouseEvent) => {
-      setFix({
+      stream.move({
         lng: event.lngLat.lng,
         lat: event.lngLat.lat,
-        accuracy: 8,
-        timestamp: Date.now(),
       });
     };
     map.on("click", onClick);
     map.getCanvas().style.cursor = "crosshair";
     return () => {
+      stream.stop();
+      if (streamRef.current === stream) streamRef.current = null;
       map.off("click", onClick);
       map.getCanvas().style.cursor = "";
     };
   }, [enabled, mapControllerRef, setFix]);
+  return useCallback(() => streamRef.current?.loseSignal(), []);
 }
 
 export function HazardZoneForm({
