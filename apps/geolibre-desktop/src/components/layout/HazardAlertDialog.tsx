@@ -33,6 +33,7 @@ import {
   acknowledgeZone,
   DEFAULT_REPEAT_MS,
   emptyAlertMemory,
+  forgetZone,
   markAlerted,
   shouldAlert,
   triggerVibration,
@@ -125,20 +126,23 @@ export function HazardAlertDialog({
     let memory = memoryRef.current;
     const ringing: HazardZone[] = [];
     let kind: AlertKind = "near";
-    const consider = (zone: HazardZone, nextKind: AlertKind) => {
-      if (!shouldAlert(memory, zone.id, now, DEFAULT_REPEAT_MS, nextKind)) return;
+    const consider = (zone: HazardZone, nextKind: AlertKind, event: AlertKind | null) => {
+      if (!shouldAlert(memory, zone.id, event, now, DEFAULT_REPEAT_MS)) return;
       memory = markAlerted(memory, zone.id, now, nextKind);
       if (nextKind === "enter") kind = "enter";
       ringing.push(zone);
     };
     for (const event of result.events) {
-      if (event.type === "exit") continue;
-      consider(event.zone, event.type === "enter" ? "enter" : "near");
+      if (event.type === "exit") {
+        memory = forgetZone(memory, event.zone.id);
+        continue;
+      }
+      consider(event.zone, event.type, event.type);
     }
     for (const zone of zonesRef.current) {
       const presence = result.presence[zone.id];
-      if (presence === "inside") consider(zone, "enter");
-      else if (presence === "near" || presence === "uncertain") consider(zone, "near");
+      if (presence === "inside") consider(zone, "enter", null);
+      else if (presence === "near" || presence === "uncertain") consider(zone, "near", null);
     }
     memoryRef.current = memory;
     if (ringing.length === 0) {

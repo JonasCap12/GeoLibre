@@ -24,6 +24,8 @@ export const DEFAULT_REPEAT_MS = 15_000;
 export const DEFAULT_SILENCE_MS = 3 * 60_000;
 
 export type AlertKind = "enter" | "near";
+/** A new detection event, or `null` while checking a continuing presence. */
+export type AlertEvent = AlertKind | null;
 
 export interface VibrateHost {
   vibrate?: (pattern: number | number[]) => boolean;
@@ -64,23 +66,42 @@ export function triggerVibration(host: VibrateHost, kind: AlertKind): "vibrated"
 /**
  * True when this zone should ring again.
  *
- * A zone the worker has acknowledged stays quiet until `silencedUntil`.
- * Otherwise the alert repeats once `repeatMs` has passed since the last one.
- * Stepping from "near" into the zone (`kind === "enter"`) rings at once.
+ * A new entry always rings immediately. This deliberately ignores both the
+ * repeat window and an acknowledgement from a preceding near warning: a
+ * near -> inside escalation is a new, more serious event. Passing `null`
+ * means the worker is still in the same presence, so acknowledgement and the
+ * repeat window apply. An inside -> near de-escalation is a `near` event, so
+ * it remains subject to those gates and never causes a new loud enter alert.
  */
 export function shouldAlert(
   memory: AlertMemory,
   zoneId: string,
+  event: AlertEvent,
   now: number,
   repeatMs: number,
-  kind?: AlertKind,
 ): boolean {
+  if (event === "enter") return true;
   const silencedUntil = memory.silencedUntil[zoneId] ?? 0;
   if (now < silencedUntil) return false;
-  if (kind === "enter" && memory.lastKind[zoneId] !== "enter") return true;
   const last = memory.lastAlertAt[zoneId] ?? 0;
   if (last === 0) return true;
   return now - last >= repeatMs;
+}
+
+/**
+ * Forget one completed visit to a zone.
+ *
+ * Acknowledgement only silences the visit during which it was given. Once an
+ * exit is published, a later enter starts with no silence or repeat history.
+ */
+export function forgetZone(memory: AlertMemory, zoneId: string): AlertMemory {
+  const silencedUntil = { ...memory.silencedUntil };
+  const lastAlertAt = { ...memory.lastAlertAt };
+  const lastKind = { ...memory.lastKind };
+  delete silencedUntil[zoneId];
+  delete lastAlertAt[zoneId];
+  delete lastKind[zoneId];
+  return { silencedUntil, lastAlertAt, lastKind };
 }
 
 export function markAlerted(
