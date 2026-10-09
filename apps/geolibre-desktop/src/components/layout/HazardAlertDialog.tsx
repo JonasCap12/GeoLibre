@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { RefObject } from "react";
 import type { MapEngine } from "@geolibre/map";
-import { isInitialLayerStyle, useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import { useAppStore } from "@geolibre/core";
 import {
   Button,
   Dialog,
@@ -16,8 +16,8 @@ import { ShieldAlert } from "lucide-react";
 import { fixFromPosition, formatAccuracy } from "../../lib/gps-tracking";
 import {
   HazardLimits,
+  HazardMonitorSettings,
   HazardScreenAlerts,
-  HazardZoneForm,
   createHazardBeep,
   hazardStatusClass,
   hazardStatusKey,
@@ -28,6 +28,7 @@ import {
   useSimulateClicks,
   type HazardUiSettings,
 } from "./hazard-alert-support";
+import { HazardZonePicker } from "./hazard-zone-picker";
 import { GeolocationError, watchPosition } from "../../lib/geolocation";
 import {
   acknowledgeZone,
@@ -45,12 +46,6 @@ import {
   DEFAULT_HAZARD_SETTINGS,
   emptyHazardState,
   evaluateHazards,
-  HAZARD_FILL_COLOR,
-  HAZARD_FILL_OPACITY,
-  HAZARD_STROKE_COLOR,
-  HAZARD_STROKE_WIDTH,
-  HAZARD_ZONE_FLAG,
-  isHazardLayerCandidate,
   type HazardEvaluation,
   type HazardFix,
   type HazardState,
@@ -74,13 +69,12 @@ export function HazardAlertDialog({
 }: HazardAlertDialogProps) {
   const { t } = useTranslation();
   const layers = useAppStore((s) => s.layers);
-  const updateLayer = useAppStore((s) => s.updateLayer);
-  const candidates = useMemo(() => layers.filter(isHazardLayerCandidate), [layers]);
   const zones = useMemo(() => collectHazardZones(layers), [layers]);
 
   const [settings, setSettings] = useState<HazardUiSettings>(loadHazardSettings);
   const [monitoring, setMonitoring] = useState(false);
   const [simulate, setSimulate] = useState(false);
+  const [pickMode, setPickMode] = useState(false);
   const [showLimits, setShowLimits] = useState(false);
   const [limitsSeen, setLimitsSeen] = useState(false);
   const [fix, setFix] = useState<HazardFix | null>(null);
@@ -293,23 +287,6 @@ export function HazardAlertDialog({
     setAlarm(null);
   };
 
-  const toggleZone = (layer: GeoLibreLayer, on: boolean) => {
-    const metadata = { ...(layer.metadata ?? {}) };
-    if (on) metadata[HAZARD_ZONE_FLAG] = true;
-    else delete metadata[HAZARD_ZONE_FLAG];
-    const patch: Partial<GeoLibreLayer> = { metadata };
-    if (on && isInitialLayerStyle(layer.style, layer.geojson)) {
-      patch.style = {
-        ...layer.style,
-        fillColor: HAZARD_FILL_COLOR,
-        fillOpacity: HAZARD_FILL_OPACITY,
-        strokeColor: HAZARD_STROKE_COLOR,
-        strokeWidth: HAZARD_STROKE_WIDTH,
-      };
-    }
-    updateLayer(layer.id, patch);
-  };
-
   const updateSettings = (patch: Partial<HazardUiSettings>) => {
     const next = { ...settings, ...patch };
     setSettings(next);
@@ -327,7 +304,13 @@ export function HazardAlertDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) setPickMode(false);
+          onOpenChange(next);
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg">
@@ -389,22 +372,25 @@ export function HazardAlertDialog({
             >
               {t("hazard.showLimits")}
             </Button>
-            <HazardZoneForm
+            <HazardZonePicker
               t={t}
-              zones={candidates.map((layer) => ({
-                id: layer.id,
-                name: layer.name,
-                flagged: layer.metadata?.[HAZARD_ZONE_FLAG] === true,
-              }))}
+              mapControllerRef={mapControllerRef}
+              active={open && pickMode}
+              onActiveChange={(active) => {
+                setPickMode(active);
+                if (active) setSimulate(false);
+              }}
+            />
+            <HazardMonitorSettings
+              t={t}
               settings={settings}
               simulate={simulate}
               monitoring={monitoring}
-              onToggle={(id, on) => {
-                const layer = candidates.find((entry) => entry.id === id);
-                if (layer) toggleZone(layer, on);
-              }}
               onSettings={updateSettings}
-              onSimulate={setSimulate}
+              onSimulate={(active) => {
+                setSimulate(active);
+                if (active) setPickMode(false);
+              }}
               onLost={simulateLost}
             />
           </div>

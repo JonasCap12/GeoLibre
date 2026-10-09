@@ -261,49 +261,25 @@ export function useSimulateClicks(
   return useCallback(() => streamRef.current?.loseSignal(), []);
 }
 
-export function HazardZoneForm({
+export function HazardMonitorSettings({
   t,
-  zones,
   settings,
   simulate,
   monitoring,
-  onToggle,
   onSettings,
   onSimulate,
   onLost,
 }: {
   t: TFunction;
-  zones: { id: string; name: string; flagged: boolean }[];
   settings: HazardUiSettings;
   simulate: boolean;
   monitoring: boolean;
-  onToggle: (id: string, on: boolean) => void;
   onSettings: (patch: Partial<HazardUiSettings>) => void;
   onSimulate: (on: boolean) => void;
   onLost: () => void;
 }) {
   return (
     <>
-      <div>
-        <h3 className="mb-2 text-base font-medium">{t("hazard.zonesTitle")}</h3>
-        <p className="mb-2 text-sm text-muted-foreground">{t("hazard.zonesHint")}</p>
-        {zones.length === 0 ? <p className="text-sm">{t("hazard.zonesEmpty")}</p> : null}
-        <ul className="flex flex-col gap-2">
-          {zones.map((zone) => (
-            <li key={zone.id}>
-              <label className="flex min-h-12 items-center gap-3 text-base">
-                <input
-                  type="checkbox"
-                  className="h-5 w-5"
-                  checked={zone.flagged}
-                  onChange={(event) => onToggle(zone.id, event.target.checked)}
-                />
-                {zone.name}
-              </label>
-            </li>
-          ))}
-        </ul>
-      </div>
       <div className="grid grid-cols-2 gap-3">
         <Label className="flex flex-col gap-1 text-sm">
           {t("hazard.nearDistance")}
@@ -360,6 +336,11 @@ export function HazardZoneForm({
           </span>
         </span>
       </label>
+      {simulate ? (
+        <p className="rounded-md bg-blue-100 px-3 py-2 text-sm text-blue-900">
+          {t("hazard.simulationActive")}
+        </p>
+      ) : null}
       {simulate && monitoring ? (
         <Button type="button" variant="outline" className="min-h-12" onClick={onLost}>
           {t("hazard.simulateLost")}
