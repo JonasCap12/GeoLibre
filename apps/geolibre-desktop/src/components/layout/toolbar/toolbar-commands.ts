@@ -33,6 +33,7 @@ import {
   RefreshCw,
   Save,
   Share2,
+  ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -131,6 +132,7 @@ export interface ToolbarCommandContext {
   setGeoreferencerOpen: SetOpen;
   setFieldCollectionOpen: SetOpen;
   setGpsTrackingOpen: SetOpen;
+  setHazardAlertOpen: SetOpen;
   /** Open Settings → Interface, where the UI profiles live. */
   onSimplifyInterface: () => void;
   setSetViewOpen: SetOpen;
@@ -202,6 +204,7 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
     setGeoreferencerOpen,
     setFieldCollectionOpen,
     setGpsTrackingOpen,
+    setHazardAlertOpen,
     onSimplifyInterface,
     setSetViewOpen,
     setShortcutsOpen,
@@ -660,6 +663,14 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       keywords: "gps tracking track location record position device",
       icon: LocateFixed,
       run: () => setGpsTrackingOpen(true),
+    },
+    {
+      id: "control.hazard-alert",
+      title: t("toolbar.item.hazardAlert"),
+      group: t("toolbar.commandGroup.controls"),
+      keywords: "hazard danger zone alert safety gps vibration geofence",
+      icon: ShieldAlert,
+      run: () => setHazardAlertOpen(true),
     },
     // View
     // All eight drive the shared engine's camera, which every engine

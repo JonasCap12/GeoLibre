@@ -84,6 +84,8 @@ const COMMAND_MENU_ITEMS: ReadonlyArray<readonly [string, string]> = [
   ["control.view-state", "controls.viewState"],
   ["control.field-collection", "controls.fieldCollection"],
   ["control.gps-tracking", "controls.gpsTracking"],
+  // Fork: the danger-zone alert sits next to GPS Tracking and follows its visibility.
+  ["control.hazard-alert", "controls.gpsTracking"],
   // The remaining `control.<id>` commands toggle built-in map controls.
   ["control.", "controls.mapControl."],
   ["view.zoom-in", "view.zoomIn"],

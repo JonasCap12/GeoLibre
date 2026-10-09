@@ -184,6 +184,7 @@ const FULL_REGISTRY_IDS = [
   "control.view-state",
   "control.field-collection",
   "control.gps-tracking",
+  "control.hazard-alert",
   "view.zoom-in",
   "view.zoom-out",
   "view.previous",

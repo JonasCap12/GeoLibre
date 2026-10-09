@@ -32,6 +32,7 @@ export function useToolbarDialogs() {
   const [printLayoutOpen, setPrintLayoutOpen] = useState(false);
   const [fieldCollectionOpen, setFieldCollectionOpen] = useState(false);
   const [gpsTrackingOpen, setGpsTrackingOpen] = useState(false);
+  const [hazardAlertOpen, setHazardAlertOpen] = useState(false);
   const [recordTourOpen, setRecordTourOpen] = useState(false);
   const [recordVideoOpen, setRecordVideoOpen] = useState(false);
   const [georeferencerOpen, setGeoreferencerOpen] = useState(false);
@@ -64,6 +65,8 @@ export function useToolbarDialogs() {
     setFieldCollectionOpen,
     gpsTrackingOpen,
     setGpsTrackingOpen,
+    hazardAlertOpen,
+    setHazardAlertOpen,
     recordTourOpen,
     setRecordTourOpen,
     recordVideoOpen,

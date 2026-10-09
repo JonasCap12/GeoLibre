@@ -46,7 +46,14 @@ import {
   DropdownMenuTrigger,
   Slider,
 } from "@geolibre/ui";
-import { Clapperboard, ClipboardList, LocateFixed, SlidersHorizontal, Video } from "lucide-react";
+import {
+  Clapperboard,
+  ClipboardList,
+  LocateFixed,
+  ShieldAlert,
+  SlidersHorizontal,
+  Video,
+} from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
@@ -97,6 +104,7 @@ interface ControlsMenuProps {
   onTogglePrecipitation: () => void;
   onOpenFieldCollection: () => void;
   onOpenGpsTracking: () => void;
+  onOpenHazardAlert: () => void;
   onOpenRecordTour: () => void;
   onOpenRecordVideo: () => void;
 }
@@ -135,6 +143,7 @@ export function ControlsMenu({
   onTogglePrecipitation,
   onOpenFieldCollection,
   onOpenGpsTracking,
+  onOpenHazardAlert,
   onOpenRecordTour,
   onOpenRecordVideo,
 }: ControlsMenuProps) {
@@ -481,6 +490,13 @@ export function ControlsMenu({
             <DropdownMenuItem onSelect={onOpenGpsTracking}>
               <LocateFixed className="me-2 h-3.5 w-3.5" />
               {t("toolbar.item.gpsTracking")}
+            </DropdownMenuItem>
+          )}
+          {/* Fork: danger-zone alert, same visibility as GPS Tracking. */}
+          {show("controls.gpsTracking") && (
+            <DropdownMenuItem onSelect={onOpenHazardAlert}>
+              <ShieldAlert className="me-2 h-3.5 w-3.5" />
+              {t("toolbar.item.hazardAlert")}
             </DropdownMenuItem>
           )}
           {show("controls.recordTour") && (

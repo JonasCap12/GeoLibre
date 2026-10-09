@@ -24,6 +24,9 @@ export const GeoreferencerDialog = lazy(() =>
 export const GpsTrackingDialog = lazy(() =>
   import("../GpsTrackingDialog").then((m) => ({ default: m.GpsTrackingDialog })),
 );
+export const HazardAlertDialog = lazy(() =>
+  import("../HazardAlertDialog").then((m) => ({ default: m.HazardAlertDialog })),
+);
 export const KeyboardShortcutsDialog = lazy(() =>
   import("../../command/KeyboardShortcutsDialog").then((m) => ({
     default: m.KeyboardShortcutsDialog,

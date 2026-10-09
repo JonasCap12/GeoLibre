@@ -61,6 +61,7 @@ import {
   CommandPalette,
   GeoreferencerDialog,
   GpsTrackingDialog,
+  HazardAlertDialog,
   KeyboardShortcutsDialog,
   LoadFeaturesIntoEditorDialog,
   ManagePluginsDialog,
@@ -465,6 +466,7 @@ export function TopToolbar({
             onTogglePrecipitation={() => toggle(PRECIPITATION_PLUGIN_ID, appApi)}
             onOpenFieldCollection={() => dialogs.setFieldCollectionOpen(true)}
             onOpenGpsTracking={() => dialogs.setGpsTrackingOpen(true)}
+            onOpenHazardAlert={() => dialogs.setHazardAlertOpen(true)}
             onOpenRecordTour={() => dialogs.setRecordTourOpen(true)}
             onOpenRecordVideo={() => dialogs.setRecordVideoOpen(true)}
           />
@@ -545,6 +547,15 @@ export function TopToolbar({
               onOpenChange={dialogs.setGpsTrackingOpen}
               mapControllerRef={mapControllerRef}
               mapReadyGeneration={mapReadyGeneration}
+            />
+          </MountWhenOpened>
+        )}
+        {!viewer && (
+          <MountWhenOpened open={dialogs.hazardAlertOpen}>
+            <HazardAlertDialog
+              open={dialogs.hazardAlertOpen}
+              onOpenChange={dialogs.setHazardAlertOpen}
+              mapControllerRef={mapControllerRef}
             />
           </MountWhenOpened>
         )}
