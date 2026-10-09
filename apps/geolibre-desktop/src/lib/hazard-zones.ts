@@ -51,7 +51,10 @@ export interface HazardSettings {
   nearDistanceM: number;
   /** At or beyond this accuracy, never report "safe". */
   poorAccuracyM: number;
-  /** Consecutive fixes required before a presence change is published. */
+  /**
+   * Consecutive fixes required before a de-escalation (towards "outside") is
+   * published. Escalation is published on the first fix.
+   */
   confirmFixes: number;
   /** No fresh fix for this long means the signal is lost. */
   staleAfterMs: number;
@@ -78,6 +81,12 @@ export interface ZoneTrack {
 
 export interface HazardState {
   zones: Record<string, ZoneTrack>;
+  /**
+   * Identity of the fix the tracks were last stepped with. The dialog
+   * re-evaluates every second to notice a stale signal; re-reading the same
+   * fix must not count as another confirming fix.
+   */
+  lastFixKey?: string;
 }
 
 export type HazardEvent =
@@ -198,9 +207,19 @@ export function evaluateHazards(
   const events: HazardEvent[] = [];
   const nextZones: Record<string, ZoneTrack> = {};
   const presence: Record<string, ZonePresence> = {};
+  const fixKey = `${fix.timestamp}|${fix.lng}|${fix.lat}|${fix.accuracy}`;
+  const sameFix = previous.lastFixKey === fixKey;
 
   for (const zone of zones) {
-    const track = previous.zones[zone.id] ?? {
+    const known = previous.zones[zone.id];
+    // Same reading as last time: keep the track as it is. A zone flagged since
+    // then has no track yet and is evaluated normally.
+    if (sameFix && known) {
+      nextZones[zone.id] = known;
+      presence[zone.id] = known.presence;
+      continue;
+    }
+    const track = known ?? {
       presence: "outside",
       pending: null,
       pendingCount: 0,
@@ -224,7 +243,7 @@ export function evaluateHazards(
   }
 
   const summary = summarize(presence, zones, fix.accuracy, settings.poorAccuracyM);
-  return { state: { zones: nextZones }, events, summary, presence };
+  return { state: { zones: nextZones, lastFixKey: fixKey }, events, summary, presence };
 }
 
 function presenceOf(
@@ -265,7 +284,11 @@ function classify(
   return "outside";
 }
 
-/** Hold the published side of the boundary until the fix is clearly across it. */
+/**
+ * Hold the published side of the boundary until the fix is clearly across it.
+ * Never hides a fix that is inside: one just across the edge from "outside"
+ * is reported as "near", not as "outside".
+ */
 function applyMargin(
   raw: ZonePresence,
   published: ZonePresence,
@@ -274,10 +297,23 @@ function applyMargin(
 ): ZonePresence {
   if (!(marginM > 0) || relation.distanceM > marginM) return raw;
   if (published === "inside" && !relation.inside) return "inside";
-  if (published === "outside" && relation.inside) return "outside";
+  if (published === "outside" && relation.inside) return "near";
   return raw;
 }
 
+/** How serious a presence is. Escalation is published at once. */
+function severity(presence: ZonePresence): number {
+  if (presence === "inside") return 2;
+  if (presence === "near" || presence === "uncertain") return 1;
+  return 0;
+}
+
+/**
+ * Escalation (closer to danger) and a switch between "near" and "uncertain"
+ * are published on the first fix: a delayed or skipped warning is the
+ * failure this prototype must not have. Only de-escalation waits for
+ * `confirmFixes` agreeing fixes, which is what stops an edge from flapping.
+ */
 function stepTrack(
   track: ZoneTrack,
   raw: ZonePresence,
@@ -285,6 +321,9 @@ function stepTrack(
 ): { track: ZoneTrack; committed: ZonePresence | null } {
   if (raw === track.presence) {
     return { track: { presence: track.presence, pending: null, pendingCount: 0 }, committed: null };
+  }
+  if (severity(raw) >= severity(track.presence)) {
+    return { track: { presence: raw, pending: null, pendingCount: 0 }, committed: raw };
   }
   const pendingCount = track.pending === raw ? track.pendingCount + 1 : 1;
   if (pendingCount >= confirmFixes) {

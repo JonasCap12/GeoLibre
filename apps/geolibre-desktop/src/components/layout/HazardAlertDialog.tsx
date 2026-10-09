@@ -114,7 +114,10 @@ export function HazardAlertDialog({
     );
     stateRef.current = result.state;
     setEvaluation(result);
-    if (result.summary === "lost" || result.summary === "waiting") {
+    // Only "waiting" (no fix yet) clears the alarm. A lost signal keeps
+    // alerting on the last known presence: a worker inside a zone who loses
+    // GPS in a trench or under a bridge must not have the alarm fall silent.
+    if (result.summary === "waiting") {
       soundRef.current?.stop();
       setAlarm(null);
       return;

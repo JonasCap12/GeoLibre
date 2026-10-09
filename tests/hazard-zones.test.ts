@@ -143,21 +143,62 @@ describe("hazard zones", () => {
     assert.deepEqual(result.events, []);
   });
 
-  it("does not flap when fixes alternate across the boundary", () => {
+  it("warns on the first inside fix and does not flap when fixes alternate", () => {
     let state = emptyHazardState();
-    const inside = fix(0, 0);
-    const outside = fix(0, degrees(400));
-    for (const point of [inside, outside, inside, outside]) {
-      const result = step(point, [pit], state, { confirmFixes: 2 });
+    const events: string[] = [];
+    let ts = 1_000;
+    for (const [lng, lat] of [
+      [0, 0],
+      [0, degrees(400)],
+      [0, 0],
+      [0, degrees(400)],
+    ]) {
+      const result = step(fix(lng, lat, 5, ts++), [pit], state, { confirmFixes: 2 });
       state = result.state;
-      assert.equal(result.events.length, 0);
-      assert.equal(result.summary, "safe");
+      events.push(...result.events.map((event) => event.type));
+      // Escalation is immediate, and an alternating edge stays alarmed.
+      assert.equal(result.summary, "inside");
     }
-    const first = step(inside, [pit], state, { confirmFixes: 2 });
-    assert.equal(first.events.length, 0);
-    const second = step(inside, [pit], first.state, { confirmFixes: 2 });
-    assert.equal(second.events.length, 1);
-    assert.equal(second.events[0]?.type, "enter");
+    assert.deepEqual(events, ["enter"]);
+  });
+
+  it("needs confirming fixes, not re-reads of one fix, to step down", () => {
+    const entered = step(fix(0, 0, 5, 1), [pit], emptyHazardState(), { confirmFixes: 2 });
+    const away = fix(0, degrees(400), 5, 2);
+    const once = step(away, [pit], entered.state, { confirmFixes: 2 });
+    assert.equal(once.presence.pit, "inside");
+    // The dialog re-evaluates every second with the same fix.
+    const reread = step(away, [pit], once.state, { confirmFixes: 2 });
+    assert.equal(reread.presence.pit, "inside");
+    assert.deepEqual(reread.events, []);
+    const twice = step(fix(0, degrees(400), 5, 3), [pit], reread.state, { confirmFixes: 2 });
+    assert.equal(twice.presence.pit, "outside");
+    assert.equal(twice.events[0]?.type, "exit");
+  });
+
+  it("keeps warning while fixes alternate between near and uncertain", () => {
+    let state = emptyHazardState();
+    let ts = 1_000;
+    // 15 m out is "near"; 25 m out with 30 m accuracy is "uncertain".
+    for (const [metresOut, accuracy] of [
+      [15, 5],
+      [25, 30],
+      [15, 5],
+      [25, 30],
+    ]) {
+      const result = step(fix(0, degrees(100 + metresOut), accuracy, ts++), [pit], state, {
+        confirmFixes: 2,
+      });
+      state = result.state;
+      assert.equal(result.summary, "near");
+    }
+  });
+
+  it("reports a fix just across the edge from outside as near, never outside", () => {
+    const outside = step(fix(0, degrees(400), 5, 1), [pit], emptyHazardState(), { marginM: 3 });
+    const barelyIn = step(fix(0, degrees(99), 5, 2), [pit], outside.state, { marginM: 3 });
+    assert.equal(barelyIn.presence.pit, "near");
+    assert.equal(barelyIn.summary, "near");
   });
 
   it("holds a presence until the fix clears the margin", () => {
