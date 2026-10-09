@@ -396,6 +396,16 @@ function polygonContains(lng: number, lat: number, rings: Position[][]): boolean
   return true;
 }
 
+/** True when a map coordinate falls in a Polygon or MultiPolygon, respecting holes. */
+export function hazardGeometryContainsPoint(
+  lng: number,
+  lat: number,
+  geometry: Polygon | MultiPolygon,
+): boolean {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  return polygons.some((rings) => polygonContains(lng, lat, rings));
+}
+
 function pointSegmentDistance(point: LocalPoint, start: LocalPoint, end: LocalPoint): number {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
