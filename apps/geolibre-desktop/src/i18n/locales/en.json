@@ -3079,6 +3079,7 @@
       "customColor": "Custom color",
       "customColorHex": "Custom color hex code",
       "scheme": {
+        "forest": "Forest green",
         "blue": "Blue",
         "violet": "Violet",
         "emerald": "Emerald",
