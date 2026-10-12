@@ -148,7 +148,7 @@ export function AccountMenuToolbarItem() {
   }, [setHosted]);
   if (!menu) return null;
   return (
-    <div className="ms-1 flex items-center border-s border-border ps-1.5">
+    <div className="ms-1 flex items-center border-s border-header-foreground/25 ps-1.5 text-header-foreground">
       <AccountMenuTrigger />
     </div>
   );
@@ -173,7 +173,7 @@ function AccountMenuTrigger({ floating = false }: { floating?: boolean }) {
           className={
             floating
               ? "h-7 gap-1.5 rounded-md border bg-card px-1.5 shadow-sm"
-              : "h-7 gap-1.5 rounded-md px-1.5"
+              : "h-7 gap-1.5 rounded-none px-1.5 text-header-foreground hover:bg-white/10 hover:text-header-foreground data-[state=open]:bg-white/10 data-[state=open]:text-header-foreground"
           }
         >
           {account ? (
@@ -182,7 +182,9 @@ function AccountMenuTrigger({ floating = false }: { floating?: boolean }) {
               {attention ? (
                 <span
                   aria-hidden
-                  className="absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-card"
+                  className={`absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-500 ring-2 ${
+                    floating ? "ring-card" : "ring-header"
+                  }`}
                 />
               ) : null}
             </span>
@@ -192,7 +194,11 @@ function AccountMenuTrigger({ floating = false }: { floating?: boolean }) {
           {account?.username ? (
             <span className="hidden max-w-32 truncate text-xs md:inline">{account.username}</span>
           ) : null}
-          <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground md:inline" />
+          <ChevronDown
+            className={`hidden h-3.5 w-3.5 md:inline ${
+              floating ? "text-muted-foreground" : "text-header-muted"
+            }`}
+          />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={6} className="w-64">
