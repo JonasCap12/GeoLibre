@@ -93,7 +93,9 @@ export function AppearanceSection({
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.appearance.title")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.appearance.title")}
+        </h3>
         <p className="text-xs text-muted-foreground">{t("settings.appearance.description")}</p>
       </div>
       <div className="space-y-3">
@@ -117,12 +119,14 @@ export function AppearanceSection({
                 }}
                 className={cn(
                   "flex items-center gap-2.5 rounded-md border p-3 text-sm transition-colors",
-                  active ? "border-primary ring-2 ring-ring" : "hover:bg-accent",
+                  active
+                    ? "border-primary bg-primary text-primary-foreground ring-2 ring-ring"
+                    : "hover:bg-accent",
                 )}
               >
                 <ModeIcon className="h-5 w-5 shrink-0" />
                 <span>{t(`settings.appearance.mode.${mode}`)}</span>
-                {active ? <Check className="ms-auto h-4 w-4 text-primary" /> : null}
+                {active ? <Check className="ms-auto h-4 w-4 text-primary-foreground" /> : null}
               </button>
             );
           })}
@@ -143,7 +147,9 @@ export function AppearanceSection({
                 onClick={() => updateSavedThemeScheme(scheme.id)}
                 className={cn(
                   "flex items-center gap-2.5 rounded-md border p-3 text-sm transition-colors",
-                  active ? "border-primary ring-2 ring-ring" : "hover:bg-accent",
+                  active
+                    ? "border-primary bg-primary text-primary-foreground ring-2 ring-ring"
+                    : "hover:bg-accent",
                 )}
               >
                 <span
@@ -152,7 +158,7 @@ export function AppearanceSection({
                   style={{ backgroundColor: scheme.swatch }}
                 />
                 <span>{t(scheme.labelKey)}</span>
-                {active ? <Check className="ms-auto h-4 w-4 text-primary" /> : null}
+                {active ? <Check className="ms-auto h-4 w-4 text-primary-foreground" /> : null}
               </button>
             );
           })}
@@ -163,7 +169,7 @@ export function AppearanceSection({
             className={cn(
               "flex items-center gap-2.5 rounded-md border p-3 text-sm transition-colors",
               desktopSettings.theme.scheme === "custom"
-                ? "border-primary ring-2 ring-ring"
+                ? "border-primary bg-primary text-primary-foreground ring-2 ring-ring"
                 : "hover:bg-accent",
             )}
           >
@@ -176,7 +182,7 @@ export function AppearanceSection({
             />
             <span>{t("settings.appearance.custom")}</span>
             {desktopSettings.theme.scheme === "custom" ? (
-              <Check className="ms-auto h-4 w-4 text-primary" />
+              <Check className="ms-auto h-4 w-4 text-primary-foreground" />
             ) : null}
           </button>
         </div>

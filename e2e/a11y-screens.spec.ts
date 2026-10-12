@@ -130,7 +130,7 @@ test("Style panel for a vector and a raster layer", async ({ page }, testInfo) =
 
   await addXyzLayer(page, "tiles", `${TILE_HOST}/{z}/{x}/{y}.png`);
   await layerRow(page, "tiles").getByRole("button", { name: "Open Style panel" }).click();
-  await expect(stylePanel.getByText("Style - tiles")).toBeVisible();
+  await expect(stylePanel.getByText("tiles", { exact: true })).toBeVisible();
   await expectAccessible(page, "style-raster", testInfo);
 });
 

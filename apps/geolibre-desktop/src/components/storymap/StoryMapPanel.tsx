@@ -503,7 +503,7 @@ export function StoryMapPanel({ mapControllerRef }: StoryMapPanelProps) {
             </div>
           }
         >
-          <DialogHeader className="border-b px-5 py-4">
+          <DialogHeader className="px-5 py-4">
             <DialogTitle className="flex items-center gap-2">
               <MapPin className="h-4 w-4" />
               {t("storymap.title")}

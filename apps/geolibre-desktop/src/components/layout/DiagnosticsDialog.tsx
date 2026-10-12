@@ -141,7 +141,7 @@ export function DiagnosticsDialog({ diagnostics, open, onOpenChange }: Diagnosti
         className="max-h-[min(760px,92vh)] max-w-5xl"
         bodyClassName="grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden p-0"
       >
-        <DialogHeader className="border-b px-6 py-4 pe-12">
+        <DialogHeader className="px-6 py-4 pe-12">
           <DialogTitle>{t("diagnostics.title")}</DialogTitle>
           <DialogDescription>{t("diagnostics.description")}</DialogDescription>
         </DialogHeader>

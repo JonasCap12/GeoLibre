@@ -202,7 +202,9 @@ export function EnvironmentSection({
         />
       ) : null}
       <div className={cn("space-y-2", showOAuthAccount && "border-t pt-5")}>
-        <h3 className="text-sm font-semibold">{t("settings.env.tokenTitle")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.env.tokenTitle")}
+        </h3>
         {shareTokenUsable ? (
           <>
             <p className="text-xs text-muted-foreground">
@@ -243,7 +245,9 @@ export function EnvironmentSection({
         )}
       </div>
       <div className="space-y-2 border-t pt-5">
-        <h3 className="text-sm font-semibold">{t("settings.env.cesiumTokenTitle")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.env.cesiumTokenTitle")}
+        </h3>
         <p className="text-xs text-muted-foreground">
           <SettingsTrans
             i18nKey="settings.env.cesiumTokenDescription"
@@ -268,7 +272,9 @@ export function EnvironmentSection({
         </p>
       </div>
       <div className="space-y-2 border-t pt-5">
-        <h3 className="text-sm font-semibold">{t("settings.env.mapboxTokenTitle")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.env.mapboxTokenTitle")}
+        </h3>
         <p className="text-xs text-muted-foreground">
           <SettingsTrans
             i18nKey="settings.env.mapboxTokenDescription"
@@ -298,7 +304,9 @@ export function EnvironmentSection({
         </p>
       </div>
       <div className="space-y-2 border-t pt-5">
-        <h3 className="text-sm font-semibold">{t("settings.env.arcgisKeyTitle")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.env.arcgisKeyTitle")}
+        </h3>
         <p className="text-xs text-muted-foreground">
           <SettingsTrans
             i18nKey="settings.env.arcgisKeyDescription"
@@ -329,7 +337,9 @@ export function EnvironmentSection({
       </div>
       <div className="flex items-center justify-between gap-3 border-t pt-5">
         <div>
-          <h3 className="text-sm font-semibold">{t("settings.env.variablesTitle")}</h3>
+          <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+            {t("settings.env.variablesTitle")}
+          </h3>
           <p className="text-xs text-muted-foreground">
             {t("settings.env.variablesCount", {
               count: enabledVariableCount,

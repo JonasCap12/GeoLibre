@@ -437,7 +437,7 @@ export function StoryMapHandoutDialog({
   return (
     <Dialog open={open} onOpenChange={(next: boolean) => !generating && onOpenChange(next)}>
       <DialogContent className="flex max-h-[88vh] w-[min(92vw,34rem)] flex-col gap-0 p-0">
-        <DialogHeader className="border-b px-5 py-4">
+        <DialogHeader className="px-5 py-4">
           <DialogTitle className="flex items-center gap-2">
             <FileDown className="h-4 w-4" />
             {t("storymap.handout.title")}

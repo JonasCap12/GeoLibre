@@ -49,9 +49,14 @@ export function RasterStylePanel({
     <aside aria-label={t("style.panelLabel")} className={STYLE_PANEL_ASIDE_CLASS}>
       {resizeHandle}
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="truncate text-sm font-semibold">
-          {t("style.headingWithLayer", { name: layer.name })}
-        </span>
+        <div className="flex min-w-0 items-baseline gap-2 border-s-[3px] border-primary ps-2">
+          <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-primary">
+            {t("style.heading")}
+          </span>
+          <span className="truncate text-xs text-muted-foreground" title={layer.name}>
+            {layer.name}
+          </span>
+        </div>
         <Button
           variant="ghost"
           size="icon"

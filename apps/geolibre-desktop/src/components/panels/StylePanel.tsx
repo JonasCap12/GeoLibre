@@ -214,7 +214,9 @@ export function StylePanel({
       <aside aria-label={t("style.panelLabel")} className={STYLE_PANEL_ASIDE_CLASS}>
         {resizeHandle}
         <div className="flex items-center justify-between border-b px-3 py-1.5">
-          <span className="text-sm font-semibold">{t("style.heading")}</span>
+          <span className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+            {t("style.heading")}
+          </span>
           <Button
             variant="ghost"
             size="icon"

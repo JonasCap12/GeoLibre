@@ -62,7 +62,9 @@ export function LayerPanelHeader({
   const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
   return (
     <div className="flex items-center justify-between border-b px-3 py-1.5">
-      <span className="text-sm font-semibold">{t("sharedRail.layers")}</span>
+      <span className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+        {t("sharedRail.layers")}
+      </span>
       <div className="flex items-center gap-1">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

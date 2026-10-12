@@ -243,7 +243,7 @@ export function LayerRow({
       data-layer-id={layer.id}
       className={`relative min-w-0 max-w-full rounded-md border p-2 transition-colors ${
         selected
-          ? "border-primary bg-primary/5"
+          ? "border-border border-s-[3px] border-s-primary bg-primary/10"
           : "border-border bg-background hover:border-muted-foreground/40 hover:bg-muted/20"
       } ${dragged ? "opacity-50" : ""} ${
         // Nested rows get a calculated inline width below so

@@ -100,7 +100,9 @@ export function StartupSection({ mapControllerRef }: StartupSectionProps) {
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.startup.title")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.startup.title")}
+        </h3>
         <p className="text-xs text-muted-foreground">{t("settings.startup.description")}</p>
       </div>
       <div className={isTauri() ? "space-y-2" : "hidden"}>
