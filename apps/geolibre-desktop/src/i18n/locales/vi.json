@@ -2145,6 +2145,7 @@
     "truncated": "Hiển thị {{kept}} trong số {{total}} bước tiến trình (được lấy mẫu xuống để giới hạn số lần đọc)."
   },
   "auth": {
+    "tagline": "Bản đồ và dữ liệu công trường cho mọi dự án",
     "retry": "Thử lại",
     "signInTitle": "Đăng nhập vào GeoLibre",
     "signInDescription": "Việc triển khai này yêu cầu phải có tài khoản. Bạn sẽ được đưa đến trang đăng nhập an toàn và quay lại đây.",

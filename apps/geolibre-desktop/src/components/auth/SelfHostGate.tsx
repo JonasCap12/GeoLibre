@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
 import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
+import { resolveAppName } from "../../lib/app-name";
 import { installSessionWatch } from "../../lib/session-watch";
 import {
   ShareAccountError,
@@ -289,11 +290,46 @@ function MfaEnrollmentScreen({
   );
 }
 
-/** Full-screen centered layout, matching Auth0Gate's signed-out screens. */
 function AuthScreen({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  const appName = resolveAppName("GeoLibre");
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
-      {children}
+    <main className="min-h-screen bg-background md:grid md:grid-cols-[minmax(16rem,2fr)_minmax(0,3fr)]">
+      {/* Fork: every self-hosted auth route shares this presentational frame;
+          form state, Turnstile, MFA and route handling remain in their screens. */}
+      <section className="relative flex min-h-[120px] items-center overflow-hidden bg-header p-6 text-start text-header-foreground md:min-h-screen md:p-10">
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 opacity-60"
+          style={{
+            backgroundImage:
+              "linear-gradient(hsl(var(--header-foreground) / 0.08) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--header-foreground) / 0.08) 1px, transparent 1px)",
+            backgroundSize: "32px 32px",
+          }}
+        />
+        <svg
+          aria-hidden="true"
+          className="absolute inset-0 h-full w-full opacity-15"
+          viewBox="0 0 480 720"
+          preserveAspectRatio="xMidYMid slice"
+          fill="none"
+        >
+          <path
+            d="M-40 158C61 76 147 95 230 169s166 84 290-17M-58 229c106-78 202-65 285 7s174 78 308-31M-51 305c94-64 186-48 267 19s178 74 310-35M-34 392c90-55 174-38 253 23s175 67 294-31M-51 487c106-63 190-44 270 15s167 67 287-19"
+            stroke="currentColor"
+            strokeWidth="2"
+          />
+        </svg>
+        <div className="relative max-w-xs">
+          <p className="text-xl font-semibold uppercase tracking-[0.12em]">{appName}</p>
+          <p className="mt-2 text-sm leading-relaxed text-header-muted md:text-base">
+            {t("auth.tagline")}
+          </p>
+        </div>
+      </section>
+      <section className="flex min-h-[calc(100vh-120px)] flex-col items-center justify-center gap-4 p-6 text-center md:min-h-screen md:p-8">
+        {children}
+      </section>
     </main>
   );
 }
