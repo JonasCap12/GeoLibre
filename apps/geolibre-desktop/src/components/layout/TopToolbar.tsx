@@ -277,7 +277,12 @@ export function TopToolbar({
   });
 
   const toolbarButtonSize = compact ? "icon" : "sm";
-  const toolbarButtonClass = compact ? "h-8 w-8 shrink-0" : "shrink-0";
+  const toolbarButtonClass = cn(
+    compact ? "h-8 w-8 shrink-0" : "shrink-0",
+    // Fork: menu triggers sit directly on the brand band. Radix supplies the
+    // open state, so every built-in and plugin menu gets one shared indicator.
+    "relative rounded-none font-semibold text-header-foreground hover:bg-white/10 hover:text-header-foreground data-[state=open]:border-b-[3px] data-[state=open]:border-header-foreground data-[state=open]:bg-white/10 data-[state=open]:text-header-foreground",
+  );
   const toolbarIconClassName = cn("h-3.5 w-3.5", showLabels && "sm:me-1");
   // "GeoLibre Desktop" is the *desktop* product name. `isTauri()` alone is true
   // on iOS and Android too — where the app is named plain "GeoLibre" (the bundle
@@ -299,13 +304,13 @@ export function TopToolbar({
       className={cn(
         // One row at every width: menus that don't fit scroll horizontally
         // instead of wrapping onto a second row (#871).
-        "flex min-h-11 min-w-0 shrink-0 flex-nowrap items-center gap-1 border-b bg-card py-1",
+        "flex min-h-11 min-w-0 shrink-0 flex-nowrap items-center gap-1 border-b border-header bg-header py-1 text-header-foreground",
         compact ? "px-1.5" : "px-2",
       )}
     >
       {/* Fork: the menus scroll; the account cluster stays on screen (#871). */}
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-        <span className="me-1 flex shrink-0 items-center gap-1.5 text-sm font-semibold text-primary md:me-2">
+        <span className="me-1 flex shrink-0 items-center gap-1.5 text-sm font-semibold uppercase tracking-[0.08em] text-header-foreground md:me-2">
           <Map className="h-4 w-4" />
           {showProjectInfo ? <span className="hidden sm:inline">{appTitle}</span> : null}
         </span>
@@ -700,14 +705,14 @@ export function TopToolbar({
           </MountWhenOpened>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <div className="flex shrink-0 items-center gap-1.5 text-xs text-header-muted">
         <Button
           aria-label={
             themeMode === "dark"
               ? t("toolbar.command.switchToLight")
               : t("toolbar.command.switchToDark")
           }
-          className="h-7 w-7 shrink-0"
+          className="h-7 w-7 shrink-0 rounded-none text-header-foreground hover:bg-white/10 hover:text-header-foreground"
           onClick={onToggleThemeMode}
           size="icon"
           title={
@@ -727,7 +732,7 @@ export function TopToolbar({
           <>
             <Input
               aria-label={t("toolbar.item.projectName")}
-              className="hidden h-7 w-44 border-transparent px-2 text-xs shadow-none focus-visible:border-input md:block"
+              className="hidden h-7 w-44 border-white/30 bg-white/10 px-2 text-xs text-header-foreground shadow-none hover:bg-white/15 focus-visible:border-white/60 md:block"
               value={projectName}
               readOnly={viewer}
               onChange={(event) => {
@@ -759,7 +764,10 @@ export function TopToolbar({
               }}
             />
             {projectPath ? (
-              <span className="hidden max-w-48 truncate lg:inline" title={projectPath}>
+              <span
+                className="hidden max-w-48 truncate text-header-muted lg:inline"
+                title={projectPath}
+              >
                 {projectPath}
               </span>
             ) : null}
