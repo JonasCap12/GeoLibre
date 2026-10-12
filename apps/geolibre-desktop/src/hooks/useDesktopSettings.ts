@@ -43,6 +43,8 @@ export const UPDATE_NOTIFICATION_LEVELS: readonly UpdateNotificationLevel[] = [
 ];
 
 export interface DesktopSettings {
+  /** One-time migration marker for the former default blue accent. */
+  forestThemeMigrationComplete: boolean;
   additionalPluginDirectories: string[];
   /**
    * Persisted UI language code (e.g. `"en"`, `"zh"`). Empty string means "follow
@@ -305,6 +307,7 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
 };
 
 const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  forestThemeMigrationComplete: true,
   additionalPluginDirectories: [],
   language: "",
   layout: DEFAULT_DESKTOP_LAYOUT_SETTINGS,
@@ -338,6 +341,7 @@ export function normalizeDesktopSettings(settings: unknown): DesktopSettings {
 
   const candidate = settings as Partial<DesktopSettings>;
   return {
+    forestThemeMigrationComplete: candidate.forestThemeMigrationComplete === true,
     additionalPluginDirectories: normalizeStringList(candidate.additionalPluginDirectories),
     language: typeof candidate.language === "string" ? candidate.language.trim() : "",
     layout: normalizeDesktopLayoutSettings(candidate.layout),
@@ -587,10 +591,34 @@ function loadDesktopSettings(): DesktopSettings {
   try {
     const stored = window.localStorage.getItem(DESKTOP_SETTINGS_STORAGE_KEY);
     if (!stored) return DEFAULT_DESKTOP_SETTINGS;
-    return normalizeDesktopSettings(JSON.parse(stored) as unknown);
+    return normalizeDesktopSettings(migrateLegacyDefaultTheme(JSON.parse(stored) as unknown));
   } catch {
     return DEFAULT_DESKTOP_SETTINGS;
   }
+}
+
+/**
+ * Fork: blue used to be the implicit default, so move that persisted value to
+ * forest exactly once. The marker preserves blue after a user deliberately
+ * selects it again and leaves every other scheme untouched.
+ */
+export function migrateLegacyDefaultTheme(settings: unknown): unknown {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return settings;
+  const candidate = settings as Record<string, unknown>;
+  if (candidate.forestThemeMigrationComplete === true) return settings;
+  const theme = candidate.theme;
+  const migratedTheme =
+    theme && typeof theme === "object" && !Array.isArray(theme)
+      ? {
+          ...(theme as Record<string, unknown>),
+          ...((theme as Record<string, unknown>).scheme === "blue" ? { scheme: "forest" } : {}),
+        }
+      : theme;
+  return {
+    ...candidate,
+    forestThemeMigrationComplete: true,
+    ...(migratedTheme === undefined ? {} : { theme: migratedTheme }),
+  };
 }
 
 /**

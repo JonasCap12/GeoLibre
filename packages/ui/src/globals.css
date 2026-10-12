@@ -9,18 +9,21 @@
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 152 90% 28%;
+    --primary-foreground: 0 0% 100%;
+    --header: 152 33% 22%;
+    --header-foreground: 0 0% 100%;
+    --header-muted-foreground: 150 15% 78%;
     /* Neutrals sit at ~16% saturation rather than the stock 40%, so the chrome
        reads as grey next to the map instead of tinting blue. --accent is one
        step darker than --muted so hover fills register on white surfaces. */
-    --secondary: 220 16% 96%;
+    --secondary: 228 20% 95%;
     --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 220 16% 96%;
+    --muted: 228 20% 95%;
     /* Darkened from 46.9% L so secondary text meets WCAG AA (4.5:1) even on the
        muted/secondary backgrounds it is paired with (e.g. kbd badges). */
     --muted-foreground: 215.4 16.3% 40%;
-    --accent: 220 16% 94%;
+    --accent: 228 20% 92%;
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
@@ -28,10 +31,9 @@
        boundary, so it is deliberately darker. See the note in .dark below. */
     --border: 220 15% 88%;
     --input: 220 13% 76%;
-    --ring: 221.2 83.2% 53.3%;
-    /* 0.375rem rather than shadcn's stock 0.5rem: a dense tool UI reads sharper,
-       and the derived md/sm steps (calc -2px/-4px) stay positive. */
-    --radius: 0.375rem;
+    --ring: 152 90% 28%;
+    /* Fork: the corporate-inspired chrome uses square, tool-like corners. */
+    --radius: 0.25rem;
 
     /* Elevation shadow colours, consumed by the --shadow-* scale the app defines
        in index.css. Two layers: penumbra is the wide soft spread, umbra the
@@ -74,8 +76,11 @@
     --card-foreground: 210 40% 98%;
     --popover: 222 21% 15%;
     --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 152 65% 48%;
+    --primary-foreground: 152 35% 8%;
+    --header: 152 35% 10%;
+    --header-foreground: 0 0% 100%;
+    --header-muted-foreground: 150 15% 72%;
     --secondary: 220 18% 20%;
     --secondary-foreground: 210 40% 98%;
     --muted: 220 18% 20%;
@@ -103,14 +108,37 @@
        amber schemes below already pair ring with primary this way; emerald was
        the one exception and is brought into line there, since the lifted
        surfaces left its darker ring almost no headroom. */
-    --ring: 217.2 91.2% 59.8%;
+    --ring: 152 65% 48%;
   }
 
   /* Accent color schemes. Each scheme overrides only the accent-bearing tokens
      (primary / its foreground / focus ring); the neutral base inherited from
      :root and .dark is left untouched. Selected via a `data-theme` attribute on
-     <html> (see apps/.../lib/theme-schemes.ts). The default "blue" scheme needs
-     no block here because it equals the base :root / .dark values above. */
+     <html> (see apps/.../lib/theme-schemes.ts). Forest is the default and stays
+     explicit here so its contrast contract can be tested beside the base. */
+  [data-theme="forest"] {
+    --primary: 152 90% 28%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 152 90% 28%;
+  }
+  [data-theme="forest"].dark {
+    --primary: 152 65% 48%;
+    --primary-foreground: 152 35% 8%;
+    --ring: 152 65% 48%;
+  }
+
+  /* Blue was the former default, so it now needs an explicit selectable block. */
+  [data-theme="blue"] {
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --ring: 221.2 83.2% 53.3%;
+  }
+  [data-theme="blue"].dark {
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --ring: 217.2 91.2% 59.8%;
+  }
+
   [data-theme="violet"] {
     --primary: 262.1 83.3% 57.8%;
     --primary-foreground: 210 20% 98%;
