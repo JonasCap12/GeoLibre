@@ -542,7 +542,7 @@ export function ManagePluginsDialog({
         className="max-h-[min(88vh,760px)] max-w-3xl"
         bodyClassName="overflow-hidden p-0"
       >
-        <DialogHeader className="border-b px-6 pb-4 pt-6">
+        <DialogHeader className="px-6 pb-4 pt-6">
           <DialogTitle>{t("managePlugins.title")}</DialogTitle>
           <DialogDescription>
             <ManagePluginsTrans

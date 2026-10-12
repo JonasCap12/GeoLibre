@@ -36,7 +36,9 @@ export function UpdatesSection() {
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold">{t("settings.updates.title")}</h3>
+          <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+            {t("settings.updates.title")}
+          </h3>
           <p className="text-xs text-muted-foreground">{t("settings.updates.description")}</p>
         </div>
         <Button type="button" size="sm" variant="outline" onClick={resetUpdateSettings}>

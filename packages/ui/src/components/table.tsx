@@ -14,7 +14,15 @@ export const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("[&_tr]:border-b", className)} {...props} />
+  <thead
+    ref={ref}
+    className={cn(
+      // Fork: branded table heads mirror the active-tab treatment.
+      "bg-primary text-primary-foreground [&_tr]:border-b [&_tr]:border-primary-foreground/25",
+      className,
+    )}
+    {...props}
+  />
 ));
 TableHeader.displayName = "TableHeader";
 
@@ -47,7 +55,10 @@ export const TableHead = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <th
     ref={ref}
-    className={cn("h-10 px-2 text-start align-middle font-medium text-muted-foreground", className)}
+    className={cn(
+      "h-10 px-2 text-start align-middle font-medium text-primary-foreground",
+      className,
+    )}
     {...props}
   />
 ));

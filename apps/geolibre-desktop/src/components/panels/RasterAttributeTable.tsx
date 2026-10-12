@@ -577,7 +577,9 @@ export function RasterAttributeTable() {
       />
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 md:flex-nowrap">
         <Table2 className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-semibold">{t("rasterAttributeTable.title")}</span>
+        <span className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("rasterAttributeTable.title")}
+        </span>
         <span className="min-w-0 max-w-full truncate text-xs text-muted-foreground md:max-w-56">
           {ratLayer?.name ?? t("rasterAttributeTable.noRasterSelected")}
         </span>
@@ -691,8 +693,8 @@ export function RasterAttributeTable() {
           </p>
         ) : (
           <table className="w-full border-collapse text-xs">
-            <thead className="sticky top-0 z-10 bg-card">
-              <tr className="border-b text-start">
+            <thead className="sticky top-0 z-10 bg-primary text-primary-foreground">
+              <tr className="border-b border-primary-foreground/25 text-start">
                 <th className="px-3 py-1.5 text-start font-medium">
                   {t("rasterAttributeTable.columns.value")}
                 </th>

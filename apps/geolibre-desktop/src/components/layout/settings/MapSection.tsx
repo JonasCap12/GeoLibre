@@ -116,7 +116,9 @@ export function MapSection({ mapControllerRef, liveProjection }: MapSectionProps
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold">{t("settings.map.constraintsTitle")}</h3>
+          <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+            {t("settings.map.constraintsTitle")}
+          </h3>
         </div>
         <Button type="button" size="sm" variant="outline" onClick={resetMapPreferences}>
           <RotateCcw className="h-3.5 w-3.5" />

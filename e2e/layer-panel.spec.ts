@@ -125,7 +125,7 @@ test("opens the selected layer in the Style panel from its card", async ({ page 
   await layerRow(page, "first").getByRole("button", { name: "Open Style panel" }).click();
 
   await expect(stylePanel).toBeVisible();
-  await expect(stylePanel.getByText("Style - first", { exact: true })).toBeVisible();
+  await expect(stylePanel.getByText("first", { exact: true })).toBeVisible();
 });
 
 test("opens the Style panel from the layer card by keyboard", async ({ page }) => {
@@ -146,9 +146,9 @@ test("opens the Style panel from the layer card by keyboard", async ({ page }) =
   await styleButton("first").focus();
   await page.keyboard.press("Enter");
   await expect(stylePanel).toBeVisible();
-  await expect(stylePanel.getByText("Style - first", { exact: true })).toBeVisible();
+  await expect(stylePanel.getByText("first", { exact: true })).toBeVisible();
 
   await styleButton("second").focus();
   await page.keyboard.press("Space");
-  await expect(stylePanel.getByText("Style - second", { exact: true })).toBeVisible();
+  await expect(stylePanel.getByText("second", { exact: true })).toBeVisible();
 });

@@ -1565,7 +1565,9 @@ export function AttributeTable({ mapControllerRef }: AttributeTableProps) {
       />
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 md:flex-nowrap">
         <TableProperties className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-semibold">{t("attributeTable.title")}</span>
+        <span className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("attributeTable.title")}
+        </span>
         {layer ? (
           <span className="min-w-0 max-w-full truncate text-xs text-muted-foreground md:max-w-56">
             {t("attributeTable.selectedLayerName", { name: layer.name })}
@@ -1933,13 +1935,11 @@ export function AttributeTable({ mapControllerRef }: AttributeTableProps) {
                   <col key={col} style={{ width: columnWidth(col) }} />
                 ))}
               </colgroup>
-              <TableHeader className="sticky top-0 z-10 bg-card shadow-xs">
+              <TableHeader className="sticky top-0 z-10 shadow-xs">
                 <TableRow>
-                  <TableHead className="bg-card">{sortableHeader("__featureId", "#")}</TableHead>
+                  <TableHead>{sortableHeader("__featureId", "#")}</TableHead>
                   {columns.map((col, index) => (
-                    <TableHead key={col} className="bg-card">
-                      {attributeColumnHeader(col, index)}
-                    </TableHead>
+                    <TableHead key={col}>{attributeColumnHeader(col, index)}</TableHead>
                   ))}
                 </TableRow>
               </TableHeader>

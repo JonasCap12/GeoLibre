@@ -47,7 +47,9 @@ export function LanguageSection({ languagePack }: LanguageSectionProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-semibold">{t("settings.languagePack.title")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.languagePack.title")}
+        </h3>
         <p className="mt-1 text-sm text-muted-foreground">
           {t("settings.languagePack.description")}
         </p>

@@ -164,7 +164,7 @@ export function StatusBar({
   return (
     <footer
       className={cn(
-        "flex h-7 shrink-0 items-center gap-4 overflow-y-hidden whitespace-nowrap border-t bg-muted/40 px-3 font-mono text-xs text-muted-foreground",
+        "flex h-7 shrink-0 items-center gap-4 overflow-y-hidden whitespace-nowrap border-t bg-muted px-3 font-mono text-xs text-muted-foreground",
         compact ? "overflow-hidden" : "overflow-x-auto",
       )}
     >

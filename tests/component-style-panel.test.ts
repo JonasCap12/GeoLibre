@@ -74,7 +74,8 @@ describe("StylePanel", () => {
     selectPolygonLayer();
     renderStylePanel();
 
-    assert.equal(screen.getByText(/^Style - /).textContent, "Style - Blocks");
+    const panel = screen.getByRole("complementary", { name: "Layer style" });
+    assert.equal(within(panel).getByText("Blocks").textContent, "Blocks");
     assert.equal(input("Fill color").value, style("blocks").fillColor);
     assert.equal(input("Outline color").value, style("blocks").strokeColor);
     assert.equal(Number(input("Fill opacity").value), style("blocks").fillOpacity);
@@ -134,7 +135,8 @@ describe("StylePanel", () => {
       useAppStore.getState().selectLayer("other");
     });
 
-    assert.equal(screen.getByText(/^Style - /).textContent, "Style - Other");
+    const panel = screen.getByRole("complementary", { name: "Layer style" });
+    assert.equal(within(panel).getByText("Other").textContent, "Other");
   });
 
   it("offers the layer's attribute fields as popup title choices", () => {

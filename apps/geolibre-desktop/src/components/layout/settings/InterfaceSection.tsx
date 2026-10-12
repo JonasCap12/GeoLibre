@@ -158,7 +158,9 @@ export function InterfaceSection({ profilePlugins }: InterfaceSectionProps) {
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold">{t("settings.interface.title")}</h3>
+          <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+            {t("settings.interface.title")}
+          </h3>
           <p className="text-xs text-muted-foreground">{t("settings.interface.description")}</p>
         </div>
         <Button
@@ -194,6 +196,7 @@ export function InterfaceSection({ profilePlugins }: InterfaceSectionProps) {
                 // "custom" (issue #592). Inactive choices stay
                 // outlined.
                 variant={active ? "default" : "outline"}
+                className={active ? "hover:bg-primary" : undefined}
                 // "custom" activates automatically when an item is
                 // toggled below, but it is also directly clickable so
                 // the user can opt into custom mode while keeping the

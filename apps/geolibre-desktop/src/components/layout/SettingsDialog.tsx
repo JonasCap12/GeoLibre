@@ -584,10 +584,12 @@ export function SettingsDialog({
       <Button
         key={item.id}
         ref={effectiveSection === item.id ? activeSectionButtonRef : undefined}
-        className="justify-start"
+        className={
+          effectiveSection === item.id ? "justify-start hover:bg-primary" : "justify-start"
+        }
         size="sm"
         type="button"
-        variant={effectiveSection === item.id ? "secondary" : "ghost"}
+        variant={effectiveSection === item.id ? "default" : "ghost"}
         onClick={() => {
           setSection(item.id);
           setError(null);
@@ -932,7 +934,7 @@ export function SettingsDialog({
           className="max-h-[min(88vh,760px)] max-w-3xl"
           bodyClassName="overflow-hidden p-0"
         >
-          <DialogHeader className="border-b px-6 pb-4 pt-6">
+          <DialogHeader className="px-6 pb-4 pt-6">
             <DialogTitle>{t("settings.title")}</DialogTitle>
             <DialogDescription>{t("settings.description")}</DialogDescription>
           </DialogHeader>

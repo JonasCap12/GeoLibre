@@ -128,7 +128,7 @@ export function ViewerLayerPanel({ mapControllerRef, mapReadyGeneration }: Viewe
 
   return (
     <aside className="w-72 shrink-0 overflow-y-auto border-e bg-card p-3">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+      <h2 className="mb-3 flex items-center gap-2 border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
         <Layers className="h-4 w-4" />
         {t("sharedRail.layers")}
       </h2>

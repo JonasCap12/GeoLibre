@@ -48,7 +48,9 @@ export function GeocodingSection() {
     <div className="space-y-5">
       <CredentialStorageNotice />
       <div className="space-y-1">
-        <h3 className="text-sm font-semibold">{t("settings.geocoding.title")}</h3>
+        <h3 className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+          {t("settings.geocoding.title")}
+        </h3>
         <p className="text-xs text-muted-foreground">{t("settings.geocoding.description")}</p>
       </div>
       {(() => {
