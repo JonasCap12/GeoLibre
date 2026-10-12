@@ -210,6 +210,43 @@ body,
   direction: ltr;
 }
 
+/* Fork: keep native and plugin map controls on the sharper forest chrome.
+   These selectors intentionally stay inside the map control groups so dialogs,
+   panels and danger-state colours retain their existing semantics. */
+.maplibregl-ctrl-group,
+.mapboxgl-ctrl-group {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.maplibregl-ctrl-group button:not(:disabled):hover,
+.mapboxgl-ctrl-group button:not(:disabled):hover {
+  background-color: hsl(var(--primary) / 0.1);
+}
+
+.maplibregl-ctrl-group button[aria-pressed="true"],
+.maplibregl-ctrl-group button[aria-checked="true"],
+.maplibregl-ctrl-group button[data-active="true"],
+.maplibregl-ctrl-group button.active,
+.mapboxgl-ctrl-group button[aria-pressed="true"],
+.mapboxgl-ctrl-group button[aria-checked="true"],
+.mapboxgl-ctrl-group button[data-active="true"],
+.mapboxgl-ctrl-group button.active {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.maplibregl-ctrl-group button[aria-pressed="true"]:hover,
+.maplibregl-ctrl-group button[aria-checked="true"]:hover,
+.maplibregl-ctrl-group button[data-active="true"]:hover,
+.maplibregl-ctrl-group button.active:hover,
+.mapboxgl-ctrl-group button[aria-pressed="true"]:hover,
+.mapboxgl-ctrl-group button[aria-checked="true"]:hover,
+.mapboxgl-ctrl-group button[data-active="true"]:hover,
+.mapboxgl-ctrl-group button.active:hover {
+  background-color: hsl(var(--primary) / 0.9);
+}
+
 .geoagent-control .geoagent-control-toggle {
   align-items: center;
   display: flex;
