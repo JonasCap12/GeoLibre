@@ -65,10 +65,12 @@ export function LayerPanelHeader({
   const [compactLayerList, setCompactLayerList] = useCompactLayerList();
   return (
     <div className="flex items-center justify-between border-b px-3 py-1.5">
-      <span className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+      {/* Fork: the accent bar sits on the panel edge (-ms-3 cancels the row's
+          px-3), so it costs the button row no width. */}
+      <span className="-ms-3 min-w-0 truncate border-s-[3px] border-primary ps-[9px] text-xs font-semibold uppercase tracking-wide text-primary">
         {t("sharedRail.layers")}
       </span>
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-0.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
