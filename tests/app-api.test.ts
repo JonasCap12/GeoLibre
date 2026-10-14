@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { tool } from "@strands-agents/sdk";
 import { z } from "zod";
-import { useAppStore } from "@geolibre/core";
+import { getExternalNativePaintBridge, useAppStore } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import { createAppAPI, type AppApiHost } from "../apps/geolibre-desktop/src/lib/app-api";
 import {
@@ -24,6 +24,7 @@ import {
   registerMenuContribution,
   unregisterMenuContribution,
 } from "../packages/plugins/src/menu-contribution-registry";
+import { GEO_EDITOR_PLUGIN_ID } from "../packages/plugins/src/plugin-ids";
 import { PluginManager } from "../packages/plugins/src/plugin-manager";
 import {
   closeRightPanel,
@@ -39,7 +40,11 @@ import {
   registerToolbarMenu,
   unregisterToolbarMenu,
 } from "../packages/plugins/src/toolbar-menu-registry";
-import type { GeoLibreAppAPI, GeoLibrePlugin } from "../packages/plugins/src/types";
+import type {
+  GeoLibreActiveMapTool,
+  GeoLibreAppAPI,
+  GeoLibrePlugin,
+} from "../packages/plugins/src/types";
 
 // Contract tests for the plugin API object (`GeoLibreAppAPI`) the host hands to
 // every plugin. `createAppAPI` takes the `@geolibre/plugins` barrel services and
@@ -73,7 +78,12 @@ function declaredAppApiMembers(): string[] {
 }
 
 /** Members only the desktop (Tauri) runtime provides; undefined in a browser. */
-const DESKTOP_ONLY_MEMBERS = new Set(["nativeFetch", "pickVectorFilesWithSidecars"]);
+const DESKTOP_ONLY_MEMBERS = new Set([
+  "nativeFetch",
+  "downloadRemoteFile",
+  "pickDownloadFolder",
+  "pickVectorFilesWithSidecars",
+]);
 /** Members that are objects rather than functions. */
 const OBJECT_MEMBERS = new Set(["credentials"]);
 
@@ -118,6 +128,7 @@ function fakeHost(overrides: Partial<AppApiHost> = {}): { host: AppApiHost; call
       },
       isActive: (id: string) => active.has(id),
       applyPluginState: () => true,
+      subscribe: () => () => undefined,
     },
     projectPluginStateSnapshot: () => ({ active: [...active] }),
     persistProjectPluginState: (previousJson: string) => {
@@ -179,6 +190,7 @@ function fakeHost(overrides: Partial<AppApiHost> = {}): { host: AppApiHost; call
     openFloatingPanel,
     closeFloatingPanel,
     getOpenFloatingPanels,
+    getGeometryEditTargetLayerId: () => null,
     ...overrides,
   } as unknown as AppApiHost;
   return { host, calls };
@@ -232,6 +244,8 @@ describe("plugin app API contract", () => {
     try {
       const api = createAppAPI(engineRef(), fakeHost().host);
       assert.equal(typeof api.nativeFetch, "function");
+      assert.equal(typeof api.downloadRemoteFile, "function");
+      assert.equal(typeof api.pickDownloadFolder, "function");
       assert.equal(typeof api.pickVectorFilesWithSidecars, "function");
     } finally {
       if (previous === undefined) delete globals.window;
@@ -244,6 +258,78 @@ describe("plugin app API contract", () => {
     const api = createAppAPI(engineRef(), fakeHost().host);
     const extra = Object.keys(api).filter((name) => !declared.has(name));
     assert.deepEqual(extra, []);
+  });
+});
+
+describe("plugin app API map tools", () => {
+  beforeEach(() => {
+    useAppStore.getState().newProject({ name: "App API map tools" });
+  });
+
+  it("reports live tool transitions, gives feature selection precedence, and unsubscribes", () => {
+    const api = createAppAPI(undefined, fakeHost().host);
+    const events: Array<GeoLibreActiveMapTool> = [];
+    assert.equal(api.getActiveMapTool(), null);
+    const unsubscribe = api.onActiveMapToolChange((activeTool) => events.push(activeTool));
+
+    useAppStore.getState().setIdentifyLayer("first");
+    assert.equal(api.getActiveMapTool(), "identify");
+    useAppStore.getState().setIdentifyLayer("second");
+    assert.deepEqual(events, ["identify"]);
+
+    useAppStore.getState().setFeatureSelectionActive(true);
+    assert.equal(api.getActiveMapTool(), "feature-selection");
+    useAppStore.getState().setIdentifyLayer(null);
+    assert.deepEqual(events, ["identify", "feature-selection"]);
+
+    useAppStore.getState().setFeatureSelectionActive(false);
+    assert.equal(api.getActiveMapTool(), null);
+    assert.deepEqual(events, ["identify", "feature-selection", null]);
+    unsubscribe();
+
+    useAppStore.getState().setIdentifyLayer("after-unsubscribe");
+    assert.deepEqual(events, ["identify", "feature-selection", null]);
+  });
+
+  it("reports the GeoEditor while its plugin is active, below Identify and selection", async () => {
+    const manager = new PluginManager();
+    manager.register({
+      id: GEO_EDITOR_PLUGIN_ID,
+      name: "GeoEditor",
+      version: "0.0.0",
+      activate: () => undefined,
+      deactivate: () => undefined,
+    });
+    const api = createAppAPI(undefined, fakeHost({ plugins: manager }).host);
+    const events: Array<GeoLibreActiveMapTool> = [];
+    const unsubscribe = api.onActiveMapToolChange((activeTool) => events.push(activeTool));
+
+    await manager.activate(GEO_EDITOR_PLUGIN_ID, api as unknown as GeoLibreAppAPI);
+    assert.equal(api.getActiveMapTool(), "geo-editor");
+    assert.deepEqual(events, ["geo-editor"]);
+
+    useAppStore.getState().setIdentifyLayer("points");
+    assert.equal(api.getActiveMapTool(), "identify");
+    useAppStore.getState().setFeatureSelectionActive(true);
+    assert.equal(api.getActiveMapTool(), "feature-selection");
+    useAppStore.getState().setFeatureSelectionActive(false);
+    useAppStore.getState().setIdentifyLayer(null);
+    assert.equal(api.getActiveMapTool(), "geo-editor");
+
+    manager.deactivate(GEO_EDITOR_PLUGIN_ID, api as unknown as GeoLibreAppAPI);
+    assert.equal(api.getActiveMapTool(), null);
+    assert.deepEqual(events, [
+      "geo-editor",
+      "identify",
+      "feature-selection",
+      "identify",
+      "geo-editor",
+      null,
+    ]);
+    unsubscribe();
+
+    await manager.activate(GEO_EDITOR_PLUGIN_ID, api as unknown as GeoLibreAppAPI);
+    assert.equal(events.length, 6);
   });
 });
 
@@ -267,6 +353,70 @@ describe("plugin app API layers", () => {
       [id],
     );
     assert.deepEqual(seen, [[id]]);
+  });
+
+  it("replaces a GeoJSON layer's features in place, keeping its place and settings", () => {
+    const api = createAppAPI(undefined, fakeHost().host);
+    const empty = { type: "FeatureCollection" as const, features: [] };
+    const first = api.addGeoJsonLayer("First", empty, "service://records/first");
+    const second = api.addGeoJsonLayer("Second", empty);
+    useAppStore.getState().updateLayer(first, { opacity: 0.4, visible: false });
+    const point = {
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [1, 2] },
+      properties: { name: "kept" },
+    };
+
+    assert.equal(
+      api.updateGeoJsonLayer(first, { type: "FeatureCollection", features: [point] }),
+      true,
+    );
+
+    const { layers } = useAppStore.getState();
+    const layer = layers.find((item) => item.id === first);
+    assert.deepEqual(layer?.geojson?.features, [point]);
+    assert.equal(layer?.name, "First");
+    assert.equal(layer?.opacity, 0.4);
+    assert.equal(layer?.visible, false);
+    assert.equal(layer?.sourcePath, "service://records/first");
+    assert.deepEqual(
+      layers.map((item) => item.id),
+      [first, second],
+    );
+  });
+
+  it("refuses to replace the features of an unknown, non-GeoJSON or edited layer", () => {
+    const empty = { type: "FeatureCollection" as const, features: [] };
+    const point = {
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [1, 2] },
+      properties: {},
+    };
+    const api = createAppAPI(undefined, fakeHost().host);
+    const tiles = api.addTileLayer("Tiles", "https://tiles.example.com/{z}/{x}/{y}.png");
+    assert.equal(api.updateGeoJsonLayer("missing", empty), false);
+    assert.equal(api.updateGeoJsonLayer(tiles, empty), false);
+
+    const edited = api.addGeoJsonLayer("Edited", { type: "FeatureCollection", features: [point] });
+    const editingApi = createAppAPI(
+      undefined,
+      fakeHost({ getGeometryEditTargetLayerId: () => edited }).host,
+    );
+    assert.equal(editingApi.updateGeoJsonLayer(edited, empty), false);
+    const layer = useAppStore.getState().layers.find((item) => item.id === edited);
+    assert.deepEqual(layer?.geojson?.features, [point], "the open session's data is left alone");
+  });
+
+  it("removes a layer and the selection on it, and ignores unknown ids", () => {
+    const api = createAppAPI(undefined, fakeHost().host);
+    const id = api.addGeoJsonLayer("Points", { type: "FeatureCollection", features: [] });
+    assert.equal(useAppStore.getState().selectedLayerId, id);
+
+    api.removeLayer(id);
+    api.removeLayer("missing");
+
+    assert.deepEqual(api.getLayers(), []);
+    assert.notEqual(useAppStore.getState().selectedLayerId, id);
   });
 
   it("stores a tile layer without leaking beforeLayerId into its options", () => {
@@ -328,6 +478,21 @@ describe("plugin app API layers", () => {
     );
     // Unregistering an unknown id is a no-op rather than a throw.
     api.unregisterExternalNativeLayer("ext-1");
+  });
+
+  it("clears a native layer's paint bridge when removeLayer removes it", () => {
+    const api = createAppAPI(undefined, fakeHost().host);
+    api.registerExternalNativeLayer({
+      id: "ext-painted",
+      name: "Painted",
+      nativeLayerIds: ["ext-painted-custom"],
+      paintBridge: { setOpacity: () => undefined },
+    });
+    assert.ok(getExternalNativePaintBridge("ext-painted"));
+
+    api.removeLayer("ext-painted");
+
+    assert.equal(getExternalNativePaintBridge("ext-painted"), undefined);
   });
 
   it("routes the basemap to the Mapbox style while Mapbox is the primary renderer", () => {

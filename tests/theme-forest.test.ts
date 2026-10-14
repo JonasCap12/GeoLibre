@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { DEFAULT_THEME_SCHEME } from "../apps/geolibre-desktop/src/lib/theme-schemes";
 
-const css = readFileSync(new URL("../packages/ui/src/globals.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("../packages/ui/src/theme.css", import.meta.url), "utf8");
 
 type Hsl = [number, number, number];
 

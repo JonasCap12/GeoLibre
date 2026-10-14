@@ -55,6 +55,10 @@
     "description": "NASA EOSDIS ArcGIS image, map, and feature services, and published web maps.",
     "docs": "web-services.md#earthdata-gis"
   },
+  "geolibre-earthaccess": {
+    "description": "Search NASA Earthdata (CMR) for datasets and granules over the map view and download them with an Earthdata Login; ICESat-2 and GEDI granules open onto the map.",
+    "docs": "web-services.md#nasa-earthaccess"
+  },
   "maplibre-gl-openaerialmap": {
     "description": "Openly licensed drone and aerial imagery.",
     "docs": "web-services.md#openaerialmap"
@@ -65,6 +69,10 @@
   },
   "geolibre-ign-lidar-hd": {
     "description": "Search France's IGN LiDAR HD tile coverage and download COPC point clouds."
+  },
+  "geolibre-arcgis-portal": {
+    "description": "Browse and add the content of your ArcGIS Online organization or ArcGIS Enterprise portal after signing in.",
+    "docs": "web-services.md#arcgis-portal"
   },
   "maplibre-gl-arcgis-hub": {
     "description": "Public datasets published to ArcGIS Hub.",
@@ -119,12 +127,20 @@
     "docs": "web-services.md#satellite-embeddings"
   },
   "geolibre-fields-of-the-world": {
-    "description": "Global agricultural field boundaries colored by model confidence.",
+    "description": "Global agricultural field boundaries for 2017–2025, colored by model score.",
     "docs": "web-services.md#fields-of-the-world"
+  },
+  "geolibre-sentinel2-explorer": {
+    "description": "Sentinel-2 imagery search and viewer over static STAC-GeoParquet, with no API.",
+    "docs": "web-services.md#sentinel-2-explorer"
   },
   "geolibre-ocean-data-platform": {
     "description": "HUB Ocean's public ocean datasets: habitats, protected areas, fisheries, and observations.",
     "docs": "web-services.md#ocean-data-platform"
+  },
+  "geolibre-dynamical": {
+    "description": "dynamical.org weather forecasts, ensembles and analyses (NOAA GFS, GEFS, HRRR and MRMS, ECMWF AIFS and IFS, DWD ICON-EU, ECCC HRDPS, NASA IMERG) as Zarr layers.",
+    "docs": "web-services.md#dynamical"
   },
   "maplibre-gl-geolens": {
     "description": "A self-hosted GeoLens spatial catalog.",
@@ -161,7 +177,7 @@
     "description": "The web-map tile grid (z/x/y tile codes) over the current view; identify a cell and export the grid or selection."
   },
   "maplibre-gl-basemap-control": {
-    "description": "A basemap gallery for switching the background map, from the same catalog as the Change basemap dialog."
+    "description": "A basemap gallery for switching the background map, from the same catalog as the Change background dialog."
   },
   "maplibre-gl-esri-wayback": {
     "description": "Browse historical aerial and satellite imagery (Esri World Imagery Wayback) for a location."

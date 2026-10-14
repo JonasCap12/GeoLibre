@@ -171,6 +171,14 @@ export interface GeoLibreWfsLayerOptions {
    * `east` throws instead of being read as a Pacific-spanning box.
    */
   bbox?: [number, number, number, number];
+
+  /**
+   * Maximum number of features to request, sent as `count` (WFS 2.x) or
+   * `maxFeatures` (earlier versions). A positive integer; defaults to 1000.
+   * Stored in the layer's request URL, so refresh and reopened projects use it.
+   */
+  maxFeatures?: number;
+
   /**
    * Provenance fields merged into the new layer's `metadata`, as for
    * {@link GeoLibreTileLayerOptions.metadata}. GeoLibre's own WFS request keys
@@ -456,6 +464,9 @@ export interface GeoLibreSelection {
   features: Feature<Geometry | null>[];
 }
 
+/** The host tool currently owning map clicks, or null for ordinary map interaction. */
+export type GeoLibreActiveMapTool = "identify" | "feature-selection" | "geo-editor" | null;
+
 /** A lightweight assistant tool for standalone plugins. No runtime SDK import is needed.
  * JSON Schema describes input to the model but does NOT validate it at runtime.
  * The callback must validate its own input. Return JSON-serializable data;
@@ -466,6 +477,46 @@ export interface AssistantToolSpec {
   description: string;
   inputSchema?: JSONSchema;
   callback: (input: unknown) => unknown | Promise<unknown>;
+}
+
+/** Options for {@link GeoLibreAppAPI.downloadRemoteFile}. */
+interface GeoLibreRemoteDownloadBaseOptions {
+  /**
+   * Request headers: only `Authorization`, `Cookie` and `Accept`, which are
+   * sent to the first host only, and only over HTTPS. Others are rejected.
+   */
+  headers?: Record<string, string>;
+  /** Suggested file name (sanitized by the host). */
+  fileName: string;
+  signal?: AbortSignal;
+  /** Bytes received so far, and the total when the server sent a length. */
+  onProgress?: (received: number, total: number | null) => void;
+}
+
+/**
+ * Options for {@link GeoLibreAppAPI.downloadRemoteFile}: `"save"` asks where
+ * to save the file, `"memory"` returns its bytes, and `"folder"` writes it into
+ * the folder `folderId` names (see {@link GeoLibreAppAPI.pickDownloadFolder})
+ * without asking, never replacing a file already there.
+ */
+export type GeoLibreRemoteDownloadOptions = GeoLibreRemoteDownloadBaseOptions &
+  ({ target: "save" | "memory"; folderId?: never } | { target: "folder"; folderId: string });
+
+/** A folder picked with {@link GeoLibreAppAPI.pickDownloadFolder}. */
+export interface GeoLibreDownloadFolder {
+  /** Opaque id passed back as `folderId`. */
+  id: string;
+  /** The folder's path, for display. */
+  path: string;
+}
+
+/** What {@link GeoLibreAppAPI.downloadRemoteFile} resolves with. */
+export interface GeoLibreRemoteDownloadResult {
+  /** Where a saved file landed; null for a memory download. */
+  path: string | null;
+  size: number;
+  /** The bytes of a memory download; null for a saved file. */
+  data: ArrayBuffer | null;
 }
 
 /** Where `app.credentials` keeps values: the OS credential store on desktop, localStorage elsewhere. */
@@ -502,6 +553,25 @@ export interface GeoLibreAppAPI {
 
   setBasemap: (styleUrl: string) => void;
   addGeoJsonLayer: (name: string, data: FeatureCollection, sourcePath?: string) => string;
+  /**
+   * Replace a GeoJSON layer's features, keeping its id, name, place in the
+   * layer order, group, style and visibility, the way saving a GeoEditor
+   * session or refreshing a layer does. For a plugin that shows data held
+   * elsewhere and needs to show its current version, without removing and
+   * re-adding the layer. Returns false, changing nothing, when there is no
+   * GeoJSON layer with that id or the layer is being edited in the GeoEditor.
+   * Typed optional for forward-compatibility with host variants, so call it
+   * with optional chaining.
+   */
+  updateGeoJsonLayer?: (layerId: string, data: FeatureCollection) => boolean;
+  /**
+   * Remove a layer, as the Layers panel's remove action does: references to it
+   * (selection, legend, panes) are cleared, and a GeoEditor session on it is
+   * ended without saving. Does nothing when there is no layer with that id.
+   * Typed optional for forward-compatibility with host variants, so call it
+   * with optional chaining.
+   */
+  removeLayer?: (layerId: string) => void;
   listLayers?: () => GeoLibreLayerSummary[];
   getLayerFeatures?: (layerId: string) => Feature<Geometry | null>[];
   /**
@@ -525,6 +595,19 @@ export interface GeoLibreAppAPI {
   ) => Promise<GeoLibreRasterWindowReading | null>;
   getDrawnFeatures?: () => Feature<Geometry | null>[];
   onSelectionChange?: (callback: (selection: GeoLibreSelection) => void) => () => void;
+  /**
+   * Live, renderer-independent click-tool state, not a project snapshot.
+   * Feature selection takes precedence while its gesture owns map clicks, then
+   * Identify, then the GeoEditor (active while its plugin is on). Plugins can
+   * skip their own click/hover handling while a tool is active.
+   */
+  getActiveMapTool?: () => GeoLibreActiveMapTool;
+  /**
+   * Subscribe to changes of the effective tool (not Identify target changes).
+   * Does not call back immediately; read {@link getActiveMapTool} for the
+   * initial value. Call the returned unsubscribe function on deactivation.
+   */
+  onActiveMapToolChange?: (callback: (tool: GeoLibreActiveMapTool) => void) => () => void;
   /**
    * Add a native XYZ raster tile layer from a tile URL template (with
    * `{x}`/`{y}`/`{z}` placeholders) and return its layer id. Unlike calling
@@ -699,6 +782,43 @@ export interface GeoLibreAppAPI {
    */
   nativeFetch?: typeof globalThis.fetch;
   /**
+   * Download a large file through the desktop app's native HTTP: no CORS, no
+   * size cap, streamed to disk rather than buffered. `target: "save"` asks the
+   * user where to save it and resolves with the path; `target: "memory"`
+   * resolves with the bytes (the temporary file is deleted once read). Resolves
+   * null when the user cancels the save dialog. Headers go to the first host
+   * only, so a bearer token is not forwarded to a redirect's presigned URL.
+   * Desktop only; undefined in the browser and Jupyter builds.
+   */
+  downloadRemoteFile?: (
+    url: string,
+    options: GeoLibreRemoteDownloadOptions,
+  ) => Promise<GeoLibreRemoteDownloadResult | null>;
+  /**
+   * Open Add Data → ICESat-2 / GEDI with a granule already loaded, so the user
+   * picks beams and fields as for a local file. The buffer is handed to the
+   * reader without a copy; do not reuse it.
+   */
+  openSpaceborneLidarGranule?: (data: ArrayBuffer, fileName: string) => void;
+  /**
+   * Open Add Data → ICESat-2 / GEDI on a granule read lazily from a URL rather
+   * than downloaded: for ATL03 photon granules (1-7 GB), whose photons the
+   * dialog reads for the map view in byte ranges. The URL must serve ranges
+   * with CORS (the Earthdata relay for NASA granules); `headers` go with every
+   * request (an Earthdata Login bearer token).
+   */
+  openSpaceborneLidarUrl?: (
+    url: string,
+    fileName: string,
+    headers?: Record<string, string>,
+  ) => void;
+  /**
+   * Ask the user for a folder to save several downloads into, for
+   * {@link downloadRemoteFile}'s `"folder"` target. Resolves null when the user
+   * cancels. Desktop only.
+   */
+  pickDownloadFolder?: () => Promise<GeoLibreDownloadFolder | null>;
+  /**
    * Resolve a fetchable URL for an asset shipped alongside an external
    * plugin's manifest (e.g. sample data bundled in the plugin folder). The
    * host resolves `relativePath` against the plugin's own directory. Returns
@@ -802,6 +922,15 @@ export interface GeoLibreAppAPI {
    * Read it through `getControlMap` in `style-map.ts` rather than directly.
    */
   getArcgisControlMap?: () => MapLibreMap | null;
+  /**
+   * The same recording map on the Cesium globe (null while another engine is
+   * active, and in a split pane): camera, events and DOM go through the globe,
+   * a layer mirrored into the store is drawn by the globe's layer sync, and
+   * any other GeoJSON fill, line, circle or text layer is drawn as globe
+   * entities clamped to the ground. Read it through `getControlMap` in
+   * `style-map.ts` rather than directly.
+   */
+  getCesiumControlMap?: () => MapLibreMap | null;
   /** Native Mapbox map, available only while Mapbox is the primary renderer. */
   getMapboxMap?: () => ReturnType<import("@geolibre/map").MapboxEngine["getMapboxMap"]>;
   /**
@@ -838,6 +967,14 @@ export interface GeoLibreAppAPI {
    * are ignored. Plugins should call this rather than `window.open` directly.
    */
   openExternalUrl?: (url: string) => void;
+  /**
+   * Open a `.geolibre.json` project from an `http(s)://` or `s3://` URL,
+   * replacing the current project. An S3 object in a bucket a configured
+   * connection covers is read with its credentials. Rejects with an
+   * explanatory error when the file cannot be read or is not a valid project;
+   * resolves quietly when `signal` aborts.
+   */
+  openProjectFromUrl?: (url: string, signal?: AbortSignal) => Promise<void>;
   pickLocalDirectoryFiles?: () => Promise<File[] | null>;
   /**
    * Prompt the user (desktop only) to pick one or more vector files via the
@@ -1416,6 +1553,19 @@ export interface GeoLibrePlugin {
    * (and re-saved) into one that never had it.
    */
   clearsStateOnProjectLoad?: boolean;
+  /**
+   * Set when the plugin is a workspace tool rather than part of a project
+   * (e.g. the S3 Browser panel). Its activation belongs to the session: a
+   * project load or a map swap leaves it running when the project does not
+   * list it, and it is left out of the saved `activePluginIds`, so opening a
+   * project from its panel does not close the panel, and sharing a project
+   * does not open the panel for whoever opens it.
+   *
+   * Only for plugins that add no map controls or map layers of their own (they
+   * may still add layers through the store): the plugin is not re-activated
+   * when the map is replaced.
+   */
+  sessionScoped?: boolean;
 }
 
 export interface GeoLibreExternalPluginManifest {

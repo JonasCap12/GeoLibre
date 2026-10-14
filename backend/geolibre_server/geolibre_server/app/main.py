@@ -28,7 +28,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .conversion import router as conversion_router
 from .ml import router as ml_router
 from .ml import stop_child_server
-from .mssql import router as mssql_router
+from .mssql import (
+    MssqlWriteRolledBack,
+    mssql_write_rolled_back_handler,
+)
+from .mssql import (
+    router as mssql_router,
+)
+from .obia import router as obia_router
 from .pointcloud import router as pointcloud_router
 from .postgis import router as postgis_router
 from .raster import router as raster_router
@@ -55,6 +62,7 @@ _SIDECAR_TOKEN_BYTES = SIDECAR_TOKEN.encode("utf-8")
 _TOKEN_EXEMPT_PATHS = frozenset({"/health"})
 
 app = FastAPI(title="GeoLibre Server", version="0.8.0")
+app.add_exception_handler(MssqlWriteRolledBack, mssql_write_rolled_back_handler)
 
 
 @app.middleware("http")
@@ -119,6 +127,7 @@ app.include_router(mssql_router)
 app.include_router(sql_router)
 app.include_router(pointcloud_router)
 app.include_router(ml_router)
+app.include_router(obia_router)
 
 
 class RunRequest(BaseModel):

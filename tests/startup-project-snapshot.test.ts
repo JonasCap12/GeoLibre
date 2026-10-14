@@ -33,6 +33,8 @@ function settings(patch: Partial<StartupSettings> = {}): StartupSettings {
     center: [-100, 40],
     zoom: 2,
     layerStyles: null,
+    layers: null,
+    openS3Browser: false,
     ...patch,
   };
 }

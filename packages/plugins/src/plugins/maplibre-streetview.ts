@@ -5,6 +5,7 @@ import {
   type StreetViewControlOptions,
 } from "maplibre-gl-streetview";
 import type { GeoLibreAppAPI, GeoLibreMapControlPosition, GeoLibrePlugin } from "../types";
+import { createCesiumDomMarker } from "./cesium-dom-marker";
 
 const streetViewEnv = (
   import.meta as ImportMeta & {
@@ -22,13 +23,30 @@ function getRuntimeEnvironment(): Record<string, string | undefined> {
   };
 }
 
+/** The `app.credentials` names the keys applied in the panel are saved under. */
+const GOOGLE_CREDENTIAL_NAME = "google";
+const MAPILLARY_CREDENTIAL_NAME = "mapillary";
+
+/** Street View keys from runtime env, before any key saved in the panel. */
+function getEnvCredentials(): { googleApiKey?: string; mapillaryAccessToken?: string } {
+  const env = getRuntimeEnvironment();
+  return {
+    googleApiKey: getGoogleMapsApiKey(env),
+    mapillaryAccessToken: env.VITE_MAPILLARY_ACCESS_TOKEN?.trim() || undefined,
+  };
+}
+
 function getStreetViewCredentials(): Pick<
   StreetViewControlOptions,
   "defaultProvider" | "googleApiKey" | "mapillaryAccessToken"
 > {
-  const env = getRuntimeEnvironment();
-  const googleApiKey = getGoogleMapsApiKey(env);
-  const mapillaryAccessToken = env.VITE_MAPILLARY_ACCESS_TOKEN?.trim() || undefined;
+  const env = getEnvCredentials();
+  // A key applied in the panel wins over env, as the Mapillary plugin's pasted
+  // token does.
+  const googleApiKey =
+    activeApp?.credentials?.get(GOOGLE_CREDENTIAL_NAME).trim() || env.googleApiKey;
+  const mapillaryAccessToken =
+    activeApp?.credentials?.get(MAPILLARY_CREDENTIAL_NAME).trim() || env.mapillaryAccessToken;
 
   // Pick a default provider that actually has credentials so the panel does not
   // open onto a provider it cannot authenticate. Google wins when both are set.
@@ -40,9 +58,53 @@ function getStreetViewCredentials(): Pick<
 
   return {
     defaultProvider,
-    googleApiKey,
-    mapillaryAccessToken,
+    // "" rather than undefined for an unset key: the control writes the option
+    // straight into its key input, which would otherwise read "undefined" and be
+    // applied (and saved) as a literal token by the next Apply click.
+    googleApiKey: googleApiKey ?? "",
+    mapillaryAccessToken: mapillaryAccessToken ?? "",
   };
+}
+
+/**
+ * Save the keys the user applies in the control's API keys inputs. The control
+ * keeps them only in memory, so without this they are lost when the panel
+ * closes or the app restarts. Its Apply button calls `this.setApiKeys`, so
+ * wrapping the instance method catches every apply. That relies on the form
+ * looking the method up at submit time; tests/streetview-plugin.test.ts submits
+ * the real form so an upstream change that captures it earlier fails there. A value equal to the env
+ * key is not an override, so it (like a cleared field) deletes the saved key
+ * rather than copying the env key into the credential store.
+ *
+ * @param app - The plugin host API, whose `credentials` store the keys.
+ * @param control - The control whose applied keys are saved.
+ */
+function persistAppliedApiKeys(app: GeoLibreAppAPI, control: StreetViewControl): void {
+  const setApiKeys = control.setApiKeys.bind(control);
+  control.setApiKeys = (keys) => {
+    const env = getEnvCredentials();
+    const save = (name: string, value: string | null | undefined, envValue: string | undefined) => {
+      // Omitted keeps the current key; null clears it (the upstream contract).
+      if (value === undefined) return;
+      const trimmed = (value ?? "").trim();
+      // The result is ignored: on a failed write the host keeps the key for this
+      // session and raises the credential-storage warning on desktop.
+      app.credentials?.set(name, trimmed === (envValue ?? "") ? "" : trimmed);
+    };
+    save(GOOGLE_CREDENTIAL_NAME, keys.googleApiKey, env.googleApiKey);
+    save(MAPILLARY_CREDENTIAL_NAME, keys.mapillaryAccessToken, env.mapillaryAccessToken);
+    setApiKeys(keys);
+    // The live control already holds these keys, so a later unrelated env
+    // change must not rebuild it just because the saved keys moved.
+    if (control === streetViewControl) appliedCredentialsSignature = credentialsSignature();
+  };
+}
+
+/** Build a control seeded with the current keys, saving any the user applies. */
+function createStreetViewControl(app: GeoLibreAppAPI): StreetViewControl {
+  const control = new StreetViewControl(getStreetViewOptions(app));
+  persistAppliedApiKeys(app, control);
+  return control;
 }
 
 let streetViewPosition: GeoLibreMapControlPosition = "top-right";
@@ -105,9 +167,14 @@ function credentialsSignature(): string {
  * @returns A marker factory on a Mapbox host, else `undefined`.
  */
 export function streetViewMarkerFactory(
-  app: Pick<GeoLibreAppAPI, "getMapboxGl" | "getMapRenderer"> | null,
+  app: Pick<GeoLibreAppAPI, "getMapboxGl" | "getMapRenderer" | "getCesiumScene"> | null,
 ): CreateStreetViewMarker | undefined {
   const renderer = app?.getMapRenderer?.();
+  // On the globe the control's facade has no transform for MapLibre's Marker
+  // to read; a DOM marker positioned from the scene stands in.
+  // eslint-disable-next-line local/no-renderer-kind-checks -- builds the globe marker factory
+  if (renderer === "cesium")
+    return ({ element }) => createCesiumDomMarker(() => app?.getCesiumScene?.() ?? null, element);
   // eslint-disable-next-line local/no-renderer-kind-checks -- builds the Mapbox marker factory
   const mapbox = renderer === undefined ? !!app?.getMapboxGl?.() : renderer === "mapbox";
   if (!mapbox) return undefined;
@@ -126,17 +193,18 @@ export const maplibreStreetViewPlugin: GeoLibrePlugin = {
   id: "maplibre-gl-streetview",
   name: "Street View",
   version: "0.5.0",
-  // Both 2D engines: the control stays on the Style Spec surface they share,
-  // and the one MapLibre class it built itself — the location `Marker` — now
-  // comes from `createMarker` (see streetViewMarkerFactory). A renderer swap
+  // Both 2D engines and the globe: the control stays on the Style Spec surface
+  // they share (the globe's control facade included), and the one MapLibre
+  // class it built itself — the location `Marker` — now comes from
+  // `createMarker` (see streetViewMarkerFactory). A renderer swap
   // tears every active plugin down and re-activates it, so the rebuilt control
   // picks up the new engine's factory.
-  engines: ["maplibre", "mapbox"],
+  engines: ["maplibre", "mapbox", "cesium"],
   activate: (app: GeoLibreAppAPI) => {
     activeApp = app;
     addRuntimeEnvListener();
     if (!streetViewControl) {
-      streetViewControl = new StreetViewControl(getStreetViewOptions(app));
+      streetViewControl = createStreetViewControl(app);
     }
 
     const added = app.addMapControl(streetViewControl, streetViewPosition);
@@ -185,7 +253,7 @@ function addRuntimeEnvListener(): void {
     const signature = credentialsSignature();
     if (streetViewControl && signature === appliedCredentialsSignature) return;
     if (streetViewControl) activeApp.removeMapControl(streetViewControl);
-    streetViewControl = new StreetViewControl(getStreetViewOptions(activeApp));
+    streetViewControl = createStreetViewControl(activeApp);
     const added = activeApp.addMapControl(streetViewControl, streetViewPosition);
     if (!added) {
       // Keep the listener registered so a later credential change can retry.

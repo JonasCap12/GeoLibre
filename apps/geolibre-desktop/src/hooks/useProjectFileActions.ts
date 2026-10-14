@@ -7,6 +7,7 @@ import {
   excludeHiddenFieldsFromProject,
   extractLayerStyleEntries,
   serializeLayerStylesFile,
+  serializeLayersFile,
   serializeProject,
   splitProjectCredentials,
   useAppStore,
@@ -51,6 +52,9 @@ import { buildProjectHtml, viewerChromeParams } from "../lib/html-export";
 import { isLayersPanelCollapsed } from "../lib/layer-panel-collapse";
 import { ensureHtmlFileName, ensureJsonFileName, ensureProjectFileName } from "../lib/file-names";
 import { pickLayerStylesFile } from "../lib/layer-style-files";
+import { notify } from "../lib/notify";
+import { notifyUnsavedLocalRasters } from "../lib/local-raster-notices";
+import { APP_LAYERS_FILE_HOST, buildLayersFileContent } from "../lib/startup-layers";
 import { mergeStringLists } from "../lib/string-lists";
 import { fetchProjectFromUrl } from "../lib/project-url";
 import { getShareFetch } from "../lib/share-fetch";
@@ -92,6 +96,10 @@ import type { MapControllerRef } from "../components/layout/toolbar/constants";
 import { IS_MAS_BUILD } from "../lib/build-flags";
 import { resolveDroppedProjectIfCurrent } from "../lib/dropped-project";
 import { useWindowCloseGuard } from "./useWindowCloseGuard";
+import {
+  featureCollectionByteLength,
+  isSerializationTooLargeError,
+} from "../lib/project-serialization-limits";
 import {
   projectCredentialRollback,
   projectCredentialsInKeychain,
@@ -138,23 +146,6 @@ export interface DroppedProjectPrompt {
  * projects unbothered.
  */
 export const LARGE_EMBED_WARNING_BYTES = 50 * 1024 * 1024;
-
-/**
- * Messages engines raise when a string passes their maximum length, which is
- * how "this project is too large to serialize" surfaces.
- *
- * Matched by text rather than by error class because there is no typed signal:
- * V8 (Chromium, WebView2) throws `RangeError: Invalid string length`,
- * JavaScriptCore (the macOS and Linux Tauri webviews) reports an out-of-memory
- * error, and SpiderMonkey says "allocation size overflow". Matching only V8's
- * wording would leave desktop users on every other webview with the generic
- * failure message instead of the guidance this exists to give.
- *
- * Deliberately narrow: a genuine serialization bug (a cycle, say, which reads
- * "Converting circular structure to JSON") must not be filed under size.
- */
-const SERIALIZATION_TOO_LARGE_PATTERN =
-  /invalid string length|out of memory|allocation size overflow|string too long/i;
 
 /**
  * A pending "embed local vector data?" prompt, shown on the web when saving a
@@ -1082,7 +1073,10 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
       storymap: state.storymap,
       models: state.models,
       processingHistory: state.processingHistory,
+      obia: state.obiaWorkbench ?? undefined,
       widgets: state.widgets,
+      bookmarks: state.bookmarks,
+      bookmarkGroups: state.bookmarkGroups,
       dashboardColumns: state.dashboardColumns,
       mapLayout: state.mapLayout,
       secondaryMapViews: state.secondaryMapViews,
@@ -1122,8 +1116,20 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
       // on `RangeError` alone was too broad — a stack overflow raises one too,
       // and pointing that at PMTiles/FlatGeobuf would send the user chasing a
       // size problem they do not have.
+      const tooLarge = isSerializationTooLargeError(error);
+      // An Embed choice that produced an unwritable file must not be reused
+      // silently, or every later save repeats this failure without showing the
+      // prompt that offers Save without data (GeoLibre#3025).
+      const remembered = saveChoicesRef.current;
+      if (tooLarge && remembered?.vectorData === "embed") {
+        saveChoicesRef.current = {
+          ...remembered,
+          vectorData: undefined,
+          acknowledgedEmbedBytes: undefined,
+        };
+      }
       setActionError(
-        error instanceof Error && SERIALIZATION_TOO_LARGE_PATTERN.test(error.message)
+        tooLarge
           ? t("toolbar.error.projectTooLargeToSave")
           : t("toolbar.error.couldNotSaveProject"),
       );
@@ -1207,19 +1213,21 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
 
   // Sums the UTF-8 byte size of every local layer's features, for the embed
   // prompt's size warning. Vector control layers are materialized; plain
-  // GeoJSON layers use their `geojson`.
+  // GeoJSON layers use their `geojson`. Measured feature by feature: a layer
+  // loaded as tiles can serialize past the engine's string cap, and
+  // stringifying it whole threw out of Save As before the prompt (which offers
+  // saving without the data) could appear (GeoLibre#3025).
   const estimateEmbedBytes = (
     layers: GeoLibreLayer[],
     embeddable: Map<string, FeatureCollection>,
   ): number => {
-    const encoder = new TextEncoder();
     let bytes = 0;
     for (const collection of embeddable.values()) {
-      bytes += encoder.encode(JSON.stringify(collection)).length;
+      bytes += featureCollectionByteLength(collection);
     }
     for (const layer of layers) {
       if (!embeddable.has(layer.id) && isReloadableLocalFileLayer(layer) && layer.geojson) {
-        bytes += encoder.encode(JSON.stringify(layer.geojson)).length;
+        bytes += featureCollectionByteLength(layer.geojson);
       }
     }
     return bytes;
@@ -1466,6 +1474,8 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
         recordExplicitProjectSave();
       }
       setRemoteSaveWarning(updated.warning ? updatedRemoteProject : null);
+      // The shared copy cannot carry local raster data either.
+      notifyUnsavedLocalRasters(project.layers);
       return true;
     } catch (error) {
       console.error("Failed to update shared project", error);
@@ -1479,9 +1489,11 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
                   : "gallery.errorUnauthorized",
                 { shareHost: shareHostLabel() },
               )
-            : error instanceof Error
-              ? error.message
-              : t("toolbar.error.couldNotSaveProject"),
+            : isSerializationTooLargeError(error)
+              ? t("toolbar.error.projectTooLargeToSave")
+              : error instanceof Error
+                ? error.message
+                : t("toolbar.error.couldNotSaveProject"),
       );
       return false;
     }
@@ -1532,7 +1544,21 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     }
     // Offer to embed local vector data (or, on desktop, save file references)
     // first, so the serialized content below reflects the user's choice.
-    const layersForSave = await resolveLayersForSave();
+    let layersForSave: Awaited<ReturnType<typeof resolveLayersForSave>>;
+    try {
+      layersForSave = await resolveLayersForSave();
+    } catch (error) {
+      // Materializing or measuring the local vector data can fail (a read
+      // error, or data past the engine's string cap). Unreported, the throw
+      // escaped as an unhandled rejection and Save As did nothing (GeoLibre#3025).
+      console.error("Failed to prepare local vector data for saving", error);
+      setActionError(
+        isSerializationTooLargeError(error)
+          ? t("toolbar.error.projectTooLargeToSave")
+          : t("toolbar.error.couldNotSaveProject"),
+      );
+      return false;
+    }
     if (
       layersForSave === "cancel" ||
       useAppStore.getState().projectGeneration !== saveProjectGeneration
@@ -1670,6 +1696,8 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     rememberStartupProjectSnapshot(path, contentToSave);
     markSaved();
     recordExplicitProjectSave();
+    // A local raster's data cannot go in the file, so it would vanish on reopen.
+    notifyUnsavedLocalRasters(project.layers);
     return true;
   };
 
@@ -1835,6 +1863,85 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     }
   };
 
+  // Write the project's layers to a layers file: references to their data
+  // (URLs and local paths) with their styling, for the Startup setting that
+  // adds them to every new project. Layers whose data lives only in the app
+  // are left out, and the user is told which.
+  const handleExportLayers = async (): Promise<boolean> => {
+    if (isSavingRef.current) return false;
+    const build = buildLayersFileContent(APP_LAYERS_FILE_HOST);
+    if (build.content.layers.length === 0) {
+      setActionError(
+        build.skipped.length > 0
+          ? t("toolbar.error.noReferencedLayersToExport")
+          : t("toolbar.error.noLayersToExport"),
+      );
+      return false;
+    }
+    isSavingRef.current = true;
+    try {
+      const exportProjectGeneration = useAppStore.getState().projectGeneration;
+      const projectName = useAppStore.getState().projectName.trim() || DEFAULT_PROJECT_NAME;
+      const slug = `${
+        projectName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "geolibre-map"
+      }-layers`;
+      let defaultName = `${slug}.json`;
+      if (browserSaveFallsBackToDownload()) {
+        const chosen = await askSaveName(
+          defaultName,
+          {
+            title: t("toolbar.item.exportLayersAsTitle"),
+            description: t("toolbar.item.exportLayersAsDesc"),
+            label: t("toolbar.item.exportLayersFileName"),
+            placeholder: t("toolbar.item.exportLayersFileNamePlaceholder"),
+          },
+          exportProjectGeneration,
+        );
+        if (chosen === null) return false;
+        defaultName = ensureJsonFileName(chosen, slug);
+      }
+      // Same rule as Export Layer Styles: never write a project no longer open.
+      if (useAppStore.getState().projectGeneration !== exportProjectGeneration) return false;
+      const savedPath = await saveTextFileWithFallback(serializeLayersFile(build.content), {
+        defaultName,
+        filters: [{ name: t("toolbar.item.layersFile"), extensions: ["json"] }],
+        browserTypes: [
+          {
+            description: t("toolbar.item.layersFile"),
+            accept: { "application/json": [".json"] },
+          },
+        ],
+        mimeType: "application/json",
+      });
+      if (savedPath === null) return false;
+      if (build.skipped.length > 0) {
+        notify.warning(
+          t("toolbar.item.layersExportSkipped", {
+            count: build.skipped.length,
+            names: build.skipped.join(", "),
+          }),
+          { dedupeKey: "export-layers-skipped" },
+        );
+      }
+      if (build.redactedCount > 0) {
+        notify.info(t("toolbar.item.layersExportRedacted", { count: build.redactedCount }), {
+          dedupeKey: "export-layers-redacted",
+        });
+      }
+      return true;
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : t("toolbar.error.couldNotExportLayers"),
+      );
+      return false;
+    } finally {
+      isSavingRef.current = false;
+    }
+  };
+
   // Restyle the current project's layers from a layer styles file, matching
   // each entry to a layer by name, then report what matched.
   const handleImportLayerStyles = async () => {
@@ -1939,6 +2046,7 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     handleSaveAs,
     handleExportHtml,
     handleExportLayerStyles,
+    handleExportLayers,
     handleImportLayerStyles,
     layerStyleImportResult,
     setLayerStyleImportResult,

@@ -104,7 +104,7 @@ Build interactive maps in RStudio, Quarto, R Markdown, and Shiny with the [`geol
 <div class="feature-card" markdown>
 ### AI Assistant
 
-Chat with your data: a natural-language [assistant](user-guide/ai-assistant.md) that turns plain-English requests into GeoLibre operations — Spatial SQL, symbology, add or remove data, and map control — applied through the app so they stay auditable and undoable. Provider-pluggable (Google Gemini, Anthropic, OpenAI) with your own API key, disabled until configured.
+Chat with your data: a natural-language [assistant](user-guide/ai-assistant.md) that turns plain-English requests into GeoLibre operations — Spatial SQL, symbology, add or remove data, and map control — applied through the app so they stay auditable and undoable. Provider-pluggable (Google Gemini, Anthropic, OpenAI, OpenRouter, Vercel AI Gateway, Amazon Bedrock, a local Ollama, or any OpenAI-compatible endpoint) with your own credentials, disabled until configured.
 </div>
 
 <div class="feature-card" markdown>
@@ -144,7 +144,7 @@ Open a project by passing a public `.geolibre.json` URL with the `url` query par
 https://web.geolibre.app/?url=https://share.geolibre.app/giswqs/3d-tiles.geolibre.json
 ```
 
-You can also open hosted data directly. `data` accepts GeoJSON, GeoParquet, PMTiles, REST endpoints returning GeoJSON or ZIP, ZIP archives containing multiple GeoJSON files, and COGs. Add `style` to apply hosted vector or raster symbology:
+You can also open hosted data directly. `data` accepts GeoJSON, GeoParquet, PMTiles, COGs, LiDAR point clouds (LAS, LAZ, COPC, or an EPT `ept.json`), REST endpoints returning GeoJSON or ZIP, and ZIP archives containing multiple GeoJSON files. Add `style` to apply hosted vector or raster symbology:
 
 ```text
 https://web.geolibre.app/?data=https://assets.geolibre.app/data/places.geojson&style=https://assets.geolibre.app/data/sample.style.json
@@ -152,7 +152,7 @@ https://web.geolibre.app/?data=https://assets.geolibre.app/data/places.geojson&s
 
 Vector layers can produce a compatible file from **Layer actions → Styles → Export GeoLibre URL style**, and apply it again with **Import style from file (GeoLibre URL / Mapbox GL / SLD / QML)…**, or with **Import style from text…** by pasting the style itself.
 
-For narrow embeds, add `?layout=compact` to the demo URL to use icon-only toolbar buttons and hide project metadata:
+For narrow embeds, add `&layout=compact` to the demo URL to use icon-only toolbar buttons and hide project metadata:
 
 ```text
 https://web.geolibre.app/?url=https://share.geolibre.app/giswqs/3d-tiles.geolibre.json&layout=compact
@@ -213,19 +213,15 @@ see the [Roadmap](roadmap.md).
 
 ### Recently added
 
-Newest capabilities, still settling in: autosave with crash recovery and a
-browsable [project history](user-guide/projects.md#project-history-and-crash-recovery),
-[QGIS](user-guide/projects.md#importing-a-qgis-project) and
-[ArcGIS Pro project import](user-guide/projects.md#importing-an-arcgis-pro-project), nested
-[layer groups](user-guide/layers.md#layer-groups) with multi-select moves,
-anchored [review comments](user-guide/map-controls.md#review-comments) that sync
-through a collaboration session, an
-[Elements panel](user-guide/map-controls.md#annotations-and-the-elements-panel)
-for map annotations, [ArcGIS Hub and open-data catalog
-browsers](user-guide/adding-data.md#more-data-sources), address geocoding of
-delimited text at import time, KML Super-Overlay support, a Dashboard selector
-widget that cross-filters the other widgets, and
-[NMEA receiver support](user-guide/map-controls.md#gps-tracking) in GPS Tracking.
+Newest capabilities, still settling in. The v3.4 release added an
+[Object-Based Image Analysis](user-guide/obia.md) workbench with eCognition
+rule-set import, ICESat-2 and GEDI spaceborne LiDAR footprints and photons, a
+[NASA Earthaccess](user-guide/web-services.md#nasa-earthaccess) plugin,
+[Dynamical](user-guide/web-services.md#dynamical) weather forecasts, turn-by-turn
+navigation with voice guidance, domain-, attachment-, and related-record-aware
+[ArcGIS editing](arcgis-editing.md) behind Sign in with ArcGIS, Spilhaus and
+other projections on the ArcGIS engine, and plugin panels, point clouds, and
+Street View on the Cesium globe.
 
 The [roadmap](roadmap.md) tracks every release, version by version.
 

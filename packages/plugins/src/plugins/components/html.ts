@@ -7,6 +7,7 @@ import { getComponentsConstructors, type HtmlGuiControlConstructor } from "./con
 import {
   type ComponentHtmlGuiState,
   type RestorableHtmlGuiControl,
+  normalizeHtmlState,
   restoreGuiControlState,
 } from "./gui-state";
 import { constrainGuiPanelToViewport } from "./shared";
@@ -52,6 +53,70 @@ export function openHtmlPanel(app: GeoLibreAppAPI): void {
   void openStandaloneHtmlControl(app);
 }
 
+/**
+ * Adds an HTML control to the map with the given content, opening the shared
+ * HTML control first when needed. Existing entries are kept, so several
+ * layers' legends can sit on the map together; an entry with the same title and
+ * HTML is not added twice.
+ *
+ * @param app - The live app API used to mount the control.
+ * @param options - The entry's title, HTML and map corner.
+ * @returns Whether the entry is on the map.
+ */
+export async function openHtmlPanelWithEntry(
+  app: GeoLibreAppAPI,
+  options: { title: string; html: string; htmlPosition?: GeoLibreMapControlPosition },
+): Promise<boolean> {
+  const opened = await openStandaloneHtmlControl(app);
+  if (!opened) return false;
+  // openStandaloneHtmlControl shows/expands on a 0ms timer; defer past it so the
+  // state set here is not clobbered and getState() sees the live control.
+  return await new Promise<boolean>((resolve) => {
+    setTimeout(() => {
+      if (!htmlControl) {
+        resolve(false);
+        return;
+      }
+      try {
+        const control = htmlControl as RestorableHtmlGuiControl;
+        const current = normalizeHtmlState(htmlControl.getState());
+        if (!current) {
+          resolve(false);
+          return;
+        }
+        const entry = {
+          title: options.title,
+          html: options.html,
+          htmlPosition: options.htmlPosition ?? "bottom-left",
+          collapsible: true,
+        };
+        const existingIndex = current.htmls.findIndex(
+          (existing) => existing.title === entry.title && existing.html === entry.html,
+        );
+        const htmls = existingIndex >= 0 ? current.htmls : [...current.htmls, entry];
+        // Select the entry the top-level fields describe: the matching one on a
+        // repeat click, the freshly appended last one otherwise.
+        const selectedHtmlIndex = existingIndex >= 0 ? existingIndex : htmls.length - 1;
+        restoreGuiControlState(control, {
+          ...current,
+          ...entry,
+          hasHtmlControl: true,
+          selectedHtmlIndex,
+          htmls,
+        });
+        control.show();
+        // The editor panel is not wanted here: the user asked for the content
+        // on the map, not for the HTML form.
+        control.collapse();
+        setHtmlPanelVisible(true);
+        resolve(true);
+      } catch {
+        resolve(false);
+      }
+    }, 0);
+  });
+}
+
 export function closeHtmlPanel(app: GeoLibreAppAPI): void {
   teardownHtmlControl(app);
 }
@@ -89,11 +154,44 @@ async function openStandaloneHtmlControl(app: GeoLibreAppAPI): Promise<boolean> 
 
 function createHtmlControl(HtmlGuiControlClass: HtmlGuiControlConstructor): HtmlGuiControl {
   const control = new HtmlGuiControlClass(HTML_OPTIONS);
+  themeHtmlControlOutputs(control);
   control.on("expand", () => {
     constrainGuiPanelToViewport(".geolibre-html-control .html-gui-panel");
     setHtmlPanelVisible(true);
   });
   return control;
+}
+
+/** Apply theme defaults only to outputs managed by this GUI, including grid children. */
+export function themeHtmlControlOutputs(control: HtmlGuiControl): void {
+  // Keep the library's pristine sample HTML theme-neutral without rewriting
+  // imported or user-authored content.
+  const initialState = control.getState();
+  if (
+    !initialState.hasHtmlControl &&
+    initialState.htmls.length === 0 &&
+    initialState.html.includes("color: #666;")
+  ) {
+    control.setState({ html: initialState.html.replace("color: #666;", "") });
+  }
+  // HtmlGuiControl 0.31.1 creates each output HtmlControl in a private factory,
+  // without forwarding its GUI options. Wrap only those GUI-created outputs and
+  // use the public update API so their default surface follows live theme tokens.
+  type ThemedHtmlOutput = {
+    update(options: { backgroundColor: string; fontColor: string }): void;
+  };
+  const guiControl = control as unknown as {
+    _createHtmlControl: (entry: unknown) => ThemedHtmlOutput;
+  };
+  const createOutput = guiControl._createHtmlControl;
+  guiControl._createHtmlControl = (entry) => {
+    const output = createOutput.call(guiControl, entry);
+    output.update({
+      backgroundColor: "var(--geolibre-bg)",
+      fontColor: "var(--geolibre-fg)",
+    });
+    return output;
+  };
 }
 
 export function teardownHtmlControl(app: GeoLibreAppAPI): void {

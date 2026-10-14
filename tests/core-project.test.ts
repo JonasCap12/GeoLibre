@@ -455,6 +455,33 @@ describe("project parsing", () => {
     assert.equal(project.layers[0].metadata.feed, "satellites");
   });
 
+  it("leaves session-only layers out of the saved project", () => {
+    const kept = geojsonLayer({ id: "roads" });
+    const sessionOnly = {
+      ...geojsonLayer({ id: "streamed-cloud" }),
+      metadata: { sessionOnly: true },
+    } as unknown as Parameters<typeof projectFromStore>[0]["layers"][number];
+    const project = projectFromStore({
+      projectName: "Session layers",
+      mapView: { center: [0, 0], zoom: 2, bearing: 0, pitch: 0 },
+      basemapStyleUrl: DEFAULT_BASEMAP,
+      basemapVisible: true,
+      basemapOpacity: 1,
+      layers: [kept, sessionOnly],
+      selectedLayerId: "streamed-cloud",
+      preferences: createEmptyProject().preferences,
+      metadata: {},
+    });
+
+    assert.deepEqual(
+      project.layers.map((layer) => layer.id),
+      ["roads"],
+    );
+    assert.ok(!("streamed-cloud" in project.styles), "no style for the skipped layer");
+    // A selection pointing at the skipped layer is not written either.
+    assert.equal(project.selectedLayerId, undefined);
+  });
+
   it("keeps quick filters, which are project state rather than session state", () => {
     // The contrast with the test above is the point: `timeFilter`/`embedFilter`
     // are set at runtime by the Time Slider and the host page, but a quick
@@ -714,7 +741,10 @@ describe("project parsing", () => {
       id: "wfs-reference",
       name: "WFS",
       geojson: featureCollection,
-      source: { type: "geojson", url: "https://example.test/wfs?request=GetFeature&bbox=1,2,3,4" },
+      source: {
+        type: "geojson",
+        url: "https://example.test/wfs?request=GetFeature&bbox=1,2,3,4&count=25000",
+      },
       metadata: { sourceKind: "wfs-getfeature", featureCount: 1 },
       connection: {
         layerId: "wfs-reference",
@@ -741,7 +771,9 @@ describe("project parsing", () => {
     assert.equal(project.layers[0].source.url, layer.source.url);
     assert.deepEqual(project.layers[0].style, layer.style);
     assert.deepEqual(project.layers[0].connection, layer.connection);
-    assert.equal(parseProject(serializeProject(project)).layers[0].geojson, undefined);
+    const reopened = parseProject(serializeProject(project)).layers[0];
+    assert.equal(reopened.geojson, undefined);
+    assert.equal(new URL(String(reopened.source.url)).searchParams.get("count"), "25000");
     const embeddedEdit = projectFromStore({
       ...state,
       layers: [{ ...layer, source: { type: "geojson" } }],

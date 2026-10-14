@@ -2,6 +2,7 @@ mod arcgis_http;
 mod aws_credentials;
 mod aws_sts;
 mod plugin_http;
+mod remote_download;
 // Earth Engine sign-in uses Google's OAuth loopback-redirect flow, which binds
 // a listener on 127.0.0.1 to accept the browser's redirect. Accepting an
 // inbound connection requires the `com.apple.security.network.server`
@@ -209,6 +210,14 @@ const MARTIN_HEALTH_ATTEMPTS: usize = 30;
 const SIDECAR_HEALTH_ATTEMPTS: usize = 180;
 #[cfg(not(feature = "mas"))]
 const SIDECAR_PORT: u16 = 8765;
+// Returned when a sidecar from an earlier launch holds SIDECAR_PORT and could not
+// be reclaimed. The frontend (src/lib/sidecar.ts) recognizes it by the phrase
+// "does not accept this session's token" and shows it instead of the bare 401
+// the stale sidecar would answer later requests with (GeoLibre#2959).
+#[cfg(not(feature = "mas"))]
+const STALE_SIDECAR_ERROR: &str = "A GeoLibre processing server from a previous session is \
+     still running on port 8765 but does not accept this session's token. Quit any stray \
+     GeoLibre processes and try again.";
 // The sidecar's PostGIS endpoints refuse every destination until this variable
 // names the allowed hosts — the check that stops a *shared* deployment (the
 // Docker image, where the sidecar is reachable same-origin through the nginx
@@ -423,6 +432,7 @@ pub fn run() {
         .manage(SelectedImagePaths::default())
         .manage(arcgis_http::ArcGISRequests::default())
         .manage(plugin_http::PluginHttpRequests::default())
+        .manage(remote_download::RemoteDownloads::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // Runs before persisted-scope's setup hook so legacy photo grants are
@@ -490,6 +500,10 @@ pub fn run() {
             arcgis_http::cancel_arcgis_request,
             plugin_http::plugin_http_request,
             plugin_http::cancel_plugin_http_request,
+            remote_download::download_remote_file,
+            remote_download::cancel_remote_download,
+            remote_download::pick_download_folder,
+            remote_download::take_cached_download,
             aws_credentials::aws_list_profiles,
             aws_credentials::aws_resolve_credentials,
             aws_credentials::aws_sso_login_start,
@@ -548,11 +562,15 @@ pub fn run() {
             // The portable zip has no installer step, so nothing registers the
             // OAuth callback scheme and a sign-in link from the browser never
             // reaches the app (#2667). `build-portable.ps1` drops a marker next
-            // to the exe; only that build claims the scheme, per user, at
-            // runtime. NSIS/MSI already register it at install time, and MSIX
-            // declares it in the package manifest and virtualizes HKCU writes.
+            // to the exe; that build always claims the scheme, per user, at
+            // runtime. The bare `geolibre-desktop_windows_x64.exe` release
+            // asset has no installer or marker either, so any other non-MSIX
+            // build claims it too when no live handler exists (#3042). NSIS/MSI
+            // register it at install time, so their handler is live and left
+            // alone, and MSIX declares it in the package manifest and
+            // virtualizes HKCU writes.
             #[cfg(windows)]
-            if is_portable_windows_build() {
+            if windows_deep_link_needs_registration() {
                 spawn_deep_link_registration(app);
             }
             Ok(())
@@ -596,10 +614,41 @@ fn current_working_directory() -> PathBuf {
 #[cfg(any(windows, test))]
 const PORTABLE_MARKER_FILE: &str = "portable.marker";
 
-/// Whether this process runs from the portable zip rather than an installer.
+/// URL scheme the share-server OAuth callback uses (`plugins > deep-link` in
+/// `tauri.conf.json`).
 #[cfg(windows)]
-fn is_portable_windows_build() -> bool {
-    env::current_exe().is_ok_and(|exe| exe_has_portable_marker(&exe))
+const DEEP_LINK_SCHEME: &str = "org.geolibre.desktop";
+
+/// Whether this process should claim the OAuth callback scheme at startup.
+///
+/// The portable build always does. An MSIX install never does. Any other
+/// build (an NSIS/MSI install, or the bare exe from the release page) does
+/// only when the scheme has no live handler, so a bare exe never takes the
+/// scheme away from an installed copy.
+#[cfg(windows)]
+fn windows_deep_link_needs_registration() -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+    if exe_has_portable_marker(&exe) {
+        return true;
+    }
+    if is_msix_install(&exe) {
+        return false;
+    }
+    // Without a `URL Protocol` value Windows never launches the key's command
+    // for a URI, so such a key counts as no handler at all.
+    let command = windows_registry::CLASSES_ROOT
+        .open(DEEP_LINK_SCHEME)
+        .ok()
+        .filter(|scheme| scheme.get_string("URL Protocol").is_ok())
+        .and_then(|scheme| {
+            scheme
+                .open("shell\\open\\command")
+                .and_then(|key| key.get_string(""))
+                .ok()
+        });
+    scheme_handler_missing(command.as_deref(), Path::is_file)
 }
 
 /// Whether a portable marker file sits next to `exe`. Kept free of
@@ -608,6 +657,48 @@ fn is_portable_windows_build() -> bool {
 fn exe_has_portable_marker(exe: &Path) -> bool {
     exe.parent()
         .is_some_and(|dir| dir.join(PORTABLE_MARKER_FILE).is_file())
+}
+
+/// Whether `exe` runs from an MSIX package, which Windows always installs
+/// under `...\WindowsApps\`.
+#[cfg(any(windows, test))]
+fn is_msix_install(exe: &Path) -> bool {
+    exe.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
+}
+
+/// Whether a scheme's registered `shell\open\command` fails to launch an
+/// existing program: nothing registered, an unparsable command, or a program
+/// that was moved or deleted (such as a bare exe run once from Downloads).
+/// So another handler is never overwritten on a guess, a program path with `%`
+/// (an unexpanded `REG_EXPAND_SZ` variable) counts as live, and so does an
+/// unquoted command: its path may contain spaces, and the handlers Tauri, NSIS
+/// and MSI write are always quoted, so an unquoted one belongs to another app.
+#[cfg(any(windows, test))]
+fn scheme_handler_missing(command: Option<&str>, exists: impl Fn(&Path) -> bool) -> bool {
+    let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) else {
+        return true;
+    };
+    if !command.starts_with('"') {
+        return false;
+    }
+    match handler_program(command) {
+        Some(program) => !program.contains('%') && !exists(Path::new(program)),
+        None => true,
+    }
+}
+
+/// The program path of a quoted `shell\open\command` value
+/// (`"C:\Program Files\App\app.exe" "%1"`), or `None` when the value is
+/// unquoted or the quotes are empty.
+#[cfg(any(windows, test))]
+fn handler_program(command: &str) -> Option<&str> {
+    let program = command.trim_start().strip_prefix('"')?.split('"').next()?;
+    (!program.is_empty()).then_some(program)
 }
 
 fn has_geolibre_project_extension(path: &Path) -> bool {
@@ -1264,6 +1355,8 @@ const ALLOWED_ENV_VARS: &[&str] = &[
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
+    "AI_GATEWAY_API_KEY",
+    "AI_GATEWAY_MODEL",
     "OLLAMA_BASE_URL",
     "OLLAMA_MODEL",
     "OPENAI_COMPATIBLE_BASE_URL",
@@ -2664,12 +2757,7 @@ fn start_geolibre_sidecar_blocking(app: tauri::AppHandle) -> Result<SidecarServe
         // answering /health, and falling through to spawn would then surface as
         // an opaque uvicorn "address already in use" instead of this message.
         if !wait_for_port_free(SIDECAR_PORT) {
-            return Err(
-                "A GeoLibre processing server from a previous session is still \
-                 running on port 8765 but does not accept this session's token. \
-                 Quit any stray GeoLibre processes and try again."
-                    .to_string(),
-            );
+            return Err(STALE_SIDECAR_ERROR.to_string());
         }
     }
 
@@ -3103,10 +3191,8 @@ fn wait_for_jupyter_health(
 ) -> Result<(), String> {
     // Build the HTTP client once and reuse it across all health polls (this loop
     // runs up to JUPYTER_HEALTH_ATTEMPTS = 240 times).
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-        .map_err(|error| format!("Could not build HTTP client: {error}"))?;
+    let client =
+        loopback_http_client().map_err(|error| format!("Could not build HTTP client: {error}"))?;
     for _ in 0..JUPYTER_HEALTH_ATTEMPTS {
         if let Some(status) = child
             .try_wait()
@@ -3171,6 +3257,24 @@ fn sidecar_base_url() -> String {
     format!("http://127.0.0.1:{SIDECAR_PORT}")
 }
 
+/// A short-timeout HTTP client for the app's own loopback servers (the
+/// sidecar, Jupyter and Martin health, token and shutdown probes).
+///
+/// The proxy is disabled: reqwest otherwise follows `HTTP_PROXY`-style env vars
+/// and, on Windows, the system proxy, whose `ProxyOverride` list it copies
+/// verbatim without expanding `<local>`. A corporate proxy then answers these
+/// `127.0.0.1` requests itself (often with a 403), so a healthy sidecar never
+/// reads as ready and startup waits out every attempt (issue #3003). The
+/// webview's own sidecar requests already bypass the proxy in
+/// `src/lib/sidecar-fetch.ts`.
+#[cfg(not(feature = "mas"))]
+fn loopback_http_client() -> reqwest::Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .no_proxy()
+        .build()
+}
+
 /// A per-launch shared secret the frontend must present on every sidecar
 /// request. The sidecar binds loopback and is CORS-restricted, but neither stops
 /// a cross-origin simple POST (CSRF) or a DNS-rebinding read; this token does.
@@ -3189,9 +3293,7 @@ fn sidecar_token() -> &'static str {
 
 #[cfg(not(feature = "mas"))]
 fn sidecar_health_is_ready(base_url: &str) -> bool {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build();
+    let client = loopback_http_client();
     let Ok(client) = client else {
         return false;
     };
@@ -3213,10 +3315,7 @@ fn sidecar_health_is_ready(base_url: &str) -> bool {
 /// still reused.
 #[cfg(not(feature = "mas"))]
 fn sidecar_accepts_token(base_url: &str, token: &str) -> bool {
-    let Ok(client) = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-    else {
+    let Ok(client) = loopback_http_client() else {
         return false;
     };
     client
@@ -3229,9 +3328,7 @@ fn sidecar_accepts_token(base_url: &str, token: &str) -> bool {
 
 #[cfg(not(feature = "mas"))]
 fn request_sidecar_shutdown(base_url: &str) {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build();
+    let client = loopback_http_client();
     if let Ok(client) = client {
         // /shutdown is token-protected (only /health is exempt), so attach this
         // session's token. This shuts down a sidecar we started or adopted (same
@@ -3593,16 +3690,17 @@ fn terminate_jupyter_listeners_on_port(
 // only ever terminate a listener whose executable lives inside this user's own
 // GeoLibre runtime directory (the uv-managed environment under
 // `%APPDATA%\org.geolibre.desktop\runtime\`). A Jupyter the user installed
-// themselves lives outside it and is left alone. The sidecar's port keeps its
-// no-op: unlike Jupyter it already reports an actionable message of its own
-// when the port stays busy (see start_geolibre_sidecar_blocking).
+// themselves lives outside it and is left alone. The sidecar's port is reaped
+// the same way but recognized by its command line instead (see
+// terminate_sidecar_listeners_on_port), since its interpreter can be a system
+// Python that uv picked outside the runtime directory.
 #[cfg(all(target_os = "windows", not(feature = "mas")))]
 fn terminate_jupyter_listeners_on_port(
     port: u16,
     runtime_dir: &std::path::Path,
 ) -> Result<(), String> {
     for pid in listening_tcp_pids(port) {
-        terminate_listener_under(pid, runtime_dir);
+        terminate_listener_if(pid, |process| process_image_is_under(process, runtime_dir));
     }
     Ok(())
 }
@@ -3631,7 +3729,7 @@ fn listening_tcp_pids(port: u16) -> HashSet<u32> {
             |row| (row.dwLocalPort, row.dwOwningPid),
             &mut pids,
         ),
-        Err(error) => eprintln!("Jupyter: {error}"),
+        Err(error) => eprintln!("GeoLibre: {error}"),
     }
     match extended_tcp_table(AF_INET6) {
         Ok(table) => collect_owner_pids::<MIB_TCP6ROW_OWNER_PID>(
@@ -3640,7 +3738,7 @@ fn listening_tcp_pids(port: u16) -> HashSet<u32> {
             |row| (row.dwLocalPort, row.dwOwningPid),
             &mut pids,
         ),
-        Err(error) => eprintln!("Jupyter: {error}"),
+        Err(error) => eprintln!("GeoLibre: {error}"),
     }
     pids
 }
@@ -3733,26 +3831,26 @@ fn extended_tcp_table(family: u32) -> Result<Vec<u32>, String> {
     Err("Could not read the TCP listener table: it kept growing between calls.".to_string())
 }
 
-// Terminate `pid`, but only if its executable lives inside `runtime_dir`. Does
-// nothing when the process has already exited or we may not touch it.
+// Terminate `pid`, but only if `is_ours` recognizes the process. Does nothing
+// when the process has already exited or we may not touch it.
 //
-// The image check and the kill deliberately share ONE handle. An open handle
+// The identity check and the kill deliberately share ONE handle. An open handle
 // pins the process object, so the PID cannot be recycled onto some unrelated
 // process in between -- re-opening by PID to terminate would leave exactly that
-// window, and the whole point of the image check is that we never kill a
+// window, and the whole point of the identity check is that we never kill a
 // process that is not ours.
 //
 // Windows has no SIGTERM, so unlike the Linux path there is no graceful step to
 // try first: an orphan from a previous session has no channel we can ask it to
 // shut down through.
 #[cfg(all(target_os = "windows", not(feature = "mas")))]
-fn terminate_listener_under(pid: u32, runtime_dir: &Path) {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
+fn terminate_listener_if(
+    pid: u32,
+    is_ours: impl FnOnce(windows_sys::Win32::Foundation::HANDLE) -> bool,
+) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     };
 
     // SAFETY: one handle for both the query and the kill; closed on every path.
@@ -3766,6 +3864,23 @@ fn terminate_listener_under(pid: u32, runtime_dir: &Path) {
     if process.is_null() {
         return;
     }
+    if is_ours(process) {
+        // SAFETY: the same handle, opened with PROCESS_TERMINATE above.
+        let _ = unsafe { TerminateProcess(process, 1) };
+    }
+    let _ = unsafe { CloseHandle(process) };
+}
+
+// Whether the executable of `process` lives inside `runtime_dir`.
+#[cfg(all(target_os = "windows", not(feature = "mas")))]
+fn process_image_is_under(
+    process: windows_sys::Win32::Foundation::HANDLE,
+    runtime_dir: &Path,
+) -> bool {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Threading::{QueryFullProcessImageNameW, PROCESS_NAME_WIN32};
+
     // Sized for an extended-length path rather than MAX_PATH, so a deeply
     // nested app-data directory is not silently truncated into a non-match.
     let mut buffer = vec![0u16; 32_768];
@@ -3780,16 +3895,83 @@ fn terminate_listener_under(pid: u32, runtime_dir: &Path) {
             &mut length,
         )
     };
-    if queried != 0 {
-        let image = PathBuf::from(OsString::from_wide(
-            &buffer[..(length as usize).min(buffer.len())],
-        ));
-        if path_is_under(&image, runtime_dir) {
-            // SAFETY: the same handle, opened with PROCESS_TERMINATE above.
-            let _ = unsafe { TerminateProcess(process, 1) };
-        }
+    if queried == 0 {
+        return false;
     }
-    let _ = unsafe { CloseHandle(process) };
+    let image = PathBuf::from(OsString::from_wide(
+        &buffer[..(length as usize).min(buffer.len())],
+    ));
+    path_is_under(&image, runtime_dir)
+}
+
+// The full command line of `process`, via ProcessCommandLineInformation (Windows
+// 8.1+), which only needs PROCESS_QUERY_LIMITED_INFORMATION. None when the
+// query fails, e.g. the process has exited.
+#[cfg(all(target_os = "windows", not(feature = "mas")))]
+fn process_command_line(process: windows_sys::Win32::Foundation::HANDLE) -> Option<String> {
+    use std::mem::size_of;
+    use windows_sys::Wdk::System::Threading::{
+        NtQueryInformationProcess, ProcessCommandLineInformation,
+    };
+    use windows_sys::Win32::Foundation::UNICODE_STRING;
+
+    // NTSTATUS codes for "buffer too small"; the call reports the size it needs.
+    // Which one this info class returns is not documented, so accept all three.
+    const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
+    const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023_u32 as i32;
+    const STATUS_BUFFER_OVERFLOW: i32 = 0x8000_0005_u32 as i32;
+
+    // The result is a UNICODE_STRING header followed by the text it points at.
+    // A u64 buffer keeps the header's pointer field aligned.
+    let mut buffer = vec![0u64; 512];
+    for _ in 0..4 {
+        let capacity = (buffer.len() * size_of::<u64>()) as u32;
+        let mut needed: u32 = 0;
+        // SAFETY: the pointer and `capacity` describe the same allocation, and
+        // the call writes at most `capacity` bytes.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                process,
+                ProcessCommandLineInformation,
+                buffer.as_mut_ptr().cast(),
+                capacity,
+                &mut needed,
+            )
+        };
+        if matches!(
+            status,
+            STATUS_INFO_LENGTH_MISMATCH | STATUS_BUFFER_TOO_SMALL | STATUS_BUFFER_OVERFLOW
+        ) && needed > capacity
+        {
+            buffer = vec![0u64; (needed as usize).div_ceil(size_of::<u64>())];
+            continue;
+        }
+        if status < 0 {
+            return None;
+        }
+        // SAFETY: on success the buffer starts with an initialized, aligned
+        // UNICODE_STRING.
+        let header = unsafe { &*buffer.as_ptr().cast::<UNICODE_STRING>() };
+        let start = buffer.as_ptr() as usize;
+        let end = start + capacity as usize;
+        let text = header.Buffer as usize;
+        let bytes = usize::from(header.Length);
+        // The text must lie inside our allocation; anything else is not a
+        // shape we trust enough to read.
+        if header.Buffer.is_null()
+            || text < start + size_of::<UNICODE_STRING>()
+            || text
+                .checked_add(bytes)
+                .is_none_or(|text_end| text_end > end)
+            || !text.is_multiple_of(std::mem::align_of::<u16>())
+        {
+            return None;
+        }
+        // SAFETY: bounds and alignment were checked against our allocation.
+        let units = unsafe { std::slice::from_raw_parts(header.Buffer, bytes / 2) };
+        return Some(String::from_utf16_lossy(units));
+    }
+    None
 }
 
 // MIB_TCP*ROW_OWNER_PID keeps the local port in the low word of a DWORD, in
@@ -3852,17 +4034,109 @@ fn terminate_listeners_on_port(port: u16, is_ours: fn(i32) -> bool) -> Result<()
         }
     }
 
-    for pid in &pids {
-        terminate_pid(*pid, SIGTERM);
-    }
-    thread::sleep(Duration::from_millis(250));
-    for pid in &pids {
-        terminate_pid(*pid, SIGKILL);
+    terminate_pids(&pids, is_ours);
+    Ok(())
+}
+
+// Windows: the listener's owner comes from the IP Helper TCP table, and it is
+// only terminated when its command line names our sidecar app -- the same
+// identity guard Linux uses. The image path is no help here: uv may run the
+// sidecar on a system Python outside the runtime directory.
+#[cfg(all(target_os = "windows", not(feature = "mas")))]
+fn terminate_sidecar_listeners_on_port(port: u16) -> Result<(), String> {
+    for pid in listening_tcp_pids(port) {
+        terminate_listener_if(pid, |process| {
+            process_command_line(process)
+                .is_some_and(|command_line| is_geolibre_sidecar_command_line(&command_line))
+        });
     }
     Ok(())
 }
 
-#[cfg(all(not(target_os = "linux"), not(feature = "mas")))]
+// macOS has no /proc, so the listener comes from lsof and its command line from
+// ps. Both ship with the OS at fixed paths, which keeps a PATH override from
+// substituting either. A failed lookup reclaims nothing rather than erroring, so
+// the caller still reports the stale-session message the frontend recognizes.
+#[cfg(all(target_os = "macos", not(feature = "mas")))]
+fn terminate_sidecar_listeners_on_port(port: u16) -> Result<(), String> {
+    let pids: HashSet<i32> = listening_tcp_pids_lsof(port)
+        .into_iter()
+        .filter(|pid| is_geolibre_sidecar_pid(*pid))
+        .collect();
+    terminate_pids(&pids, is_geolibre_sidecar_pid);
+    Ok(())
+}
+
+#[cfg(all(target_os = "macos", not(feature = "mas")))]
+fn is_geolibre_sidecar_pid(pid: i32) -> bool {
+    process_command_line_ps(pid)
+        .is_some_and(|command_line| is_geolibre_sidecar_command_line(&command_line))
+}
+
+#[cfg(all(target_os = "macos", not(feature = "mas")))]
+fn listening_tcp_pids_lsof(port: u16) -> HashSet<i32> {
+    let output = match Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-t", "-sTCP:LISTEN"])
+        .arg(format!("-iTCP:{port}"))
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("GeoLibre: could not run lsof: {error}");
+            return HashSet::new();
+        }
+    };
+    // lsof exits 1 when nothing matches, so the status is not an error signal;
+    // an empty stdout is.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .filter(|pid| *pid > 0)
+        .collect()
+}
+
+#[cfg(all(target_os = "macos", not(feature = "mas")))]
+fn process_command_line_ps(pid: i32) -> Option<String> {
+    let output = Command::new("/bin/ps")
+        .args(["-ww", "-o", "command="])
+        .arg("-p")
+        .arg(pid.to_string())
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+// SIGTERM, a short grace, then SIGKILL for whatever is still alive. `kill(2)`
+// cannot pin a process the way a Windows handle does, so `is_ours` is checked
+// again right before each signal: a sidecar that exited on SIGTERM frees its
+// PID, and the OS may hand it to an unrelated process during the grace period.
+#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "mas")))]
+fn terminate_pids(pids: &HashSet<i32>, is_ours: fn(i32) -> bool) {
+    if pids.is_empty() {
+        return;
+    }
+    for pid in pids {
+        if is_ours(*pid) {
+            terminate_pid(*pid, SIGTERM);
+        }
+    }
+    thread::sleep(Duration::from_millis(250));
+    for pid in pids {
+        if is_ours(*pid) {
+            terminate_pid(*pid, SIGKILL);
+        }
+    }
+}
+
+#[cfg(all(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    not(feature = "mas")
+))]
 fn terminate_sidecar_listeners_on_port(_port: u16) -> Result<(), String> {
     Ok(())
 }
@@ -3932,8 +4206,22 @@ fn is_geolibre_sidecar_process(pid: i32) -> bool {
         return false;
     };
     let command_line = String::from_utf8_lossy(&command_line);
+    // Linux has always also accepted the app's directory path; Windows and macOS
+    // match only the module the sidecar is launched with.
+    is_geolibre_sidecar_command_line(&command_line) || command_line.contains("geolibre_server/app")
+}
+
+// Whether a process command line is one of our sidecars, started by
+// start_geolibre_sidecar_blocking as `uvicorn geolibre_server.app.main:app`.
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "windows", target_os = "macos"),
+        not(feature = "mas")
+    ),
+    test
+))]
+fn is_geolibre_sidecar_command_line(command_line: &str) -> bool {
     command_line.contains("geolibre_server.app.main")
-        || command_line.contains("geolibre_server/app")
 }
 
 // Recognize OUR Jupyter server (started by start_jupyter_server) by the bundled
@@ -4412,10 +4700,8 @@ fn wait_for_martin_health(
     output: &CapturedOutput,
 ) -> Result<(), String> {
     let health_url = format!("{base_url}/health");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-        .map_err(|error| format!("Could not create HTTP client: {error}"))?;
+    let client =
+        loopback_http_client().map_err(|error| format!("Could not create HTTP client: {error}"))?;
 
     for _ in 0..MARTIN_HEALTH_ATTEMPTS {
         if let Some(status) = child
@@ -4936,11 +5222,11 @@ mod tests {
     use super::{
         client_cert_is_pkcs12, client_cert_password_without_path, ensure_fetchable_url,
         is_allowed_geojson_write_path, is_allowed_local_vector_path, is_allowed_project_path,
-        is_disallowed_ip, is_image_picker_path, is_persisted_image_file, is_safe_absolute_path,
-        is_ssrf_guard_error, is_unc_resolved_path, path_is_under, project_path_string,
-        project_paths_from_args, read_mbtiles_zoom_range, resolve_fetch_timeout_secs,
-        tcp_table_port, write_local_geojson_file, MAX_FETCH_TIMEOUT_SECS, REMOTE_TILE_TIMEOUT_SECS,
-        SSRF_BLOCKED_MESSAGE,
+        is_disallowed_ip, is_geolibre_sidecar_command_line, is_image_picker_path,
+        is_persisted_image_file, is_safe_absolute_path, is_ssrf_guard_error, is_unc_resolved_path,
+        path_is_under, project_path_string, project_paths_from_args, read_mbtiles_zoom_range,
+        resolve_fetch_timeout_secs, tcp_table_port, write_local_geojson_file,
+        MAX_FETCH_TIMEOUT_SECS, REMOTE_TILE_TIMEOUT_SECS, SSRF_BLOCKED_MESSAGE,
     };
     #[cfg(target_os = "linux")]
     use super::{
@@ -4955,7 +5241,8 @@ mod tests {
     use super::{
         add_main_sidecar_extras, child_failure_message, clear_appimage_python_env,
         find_zip_manifest_path, plugin_archive_file_name, resolve_sidecar_in_resource_dir,
-        CapturedOutput, CAPTURED_LOG_MAX_LINES, CAPTURED_LOG_REPORTED_LINES, CAPTURED_LOG_SETTLE,
+        sidecar_accepts_token, sidecar_health_is_ready, CapturedOutput, CAPTURED_LOG_MAX_LINES,
+        CAPTURED_LOG_REPORTED_LINES, CAPTURED_LOG_SETTLE,
     };
     // Only the unix-only Martin tests (they spawn `sh`) use these.
     #[cfg(all(unix, not(feature = "mas")))]
@@ -5119,6 +5406,54 @@ mod tests {
         assert!(!super::exe_has_portable_marker(
             &nested.join("geolibre-desktop.exe")
         ));
+    }
+
+    // The bare release exe claims the OAuth callback scheme only when no live
+    // handler exists (#3042): an installed copy's handler stays put, while a
+    // missing key or a handler pointing at a deleted exe gets replaced.
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn scheme_handler_missing_only_without_a_live_program() {
+        let installed = r#""C:\Program Files\GeoLibre Desktop\geolibre-desktop.exe" "%1""#;
+        assert_eq!(
+            super::handler_program(installed),
+            Some(r"C:\Program Files\GeoLibre Desktop\geolibre-desktop.exe")
+        );
+        assert_eq!(super::handler_program(r"C:\Tools\geolibre.exe %1"), None);
+        assert_eq!(super::handler_program(r#""" "%1""#), None);
+        assert_eq!(super::handler_program("   "), None);
+
+        assert!(super::scheme_handler_missing(None, |_| true));
+        assert!(super::scheme_handler_missing(Some(""), |_| true));
+        assert!(!super::scheme_handler_missing(Some(installed), |_| true));
+        assert!(super::scheme_handler_missing(Some(installed), |_| false));
+        assert!(!super::scheme_handler_missing(
+            Some(r#""%ProgramFiles%\GeoLibre Desktop\geolibre-desktop.exe" "%1""#),
+            |_| false
+        ));
+        // An unquoted path may hold spaces, so another app's handler is kept.
+        assert!(!super::scheme_handler_missing(
+            Some(r"C:\Program Files\Other App\app.exe %1"),
+            |_| false
+        ));
+        assert!(super::scheme_handler_missing(Some(r#""" "%1""#), |_| true));
+    }
+
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn msix_install_is_detected_by_windowsapps_path() {
+        assert!(super::is_msix_install(std::path::Path::new(
+            "/Program Files/WindowsApps/OpenGeospatialSolutions.GeoLibre_3.3.0.0_x64__abc/geolibre-desktop.exe"
+        )));
+        assert!(super::is_msix_install(std::path::Path::new(
+            "/program files/windowsapps/pkg/geolibre-desktop.exe"
+        )));
+        assert!(!super::is_msix_install(std::path::Path::new(
+            "/Users/me/Downloads/geolibre-desktop_windows_x64.exe"
+        )));
+        assert!(!super::is_msix_install(std::path::Path::new(
+            "/Users/me/MyWindowsAppsBackup/geolibre-desktop.exe"
+        )));
     }
 
     #[cfg(not(feature = "mas"))]
@@ -5867,6 +6202,81 @@ mod tests {
         assert!(error.contains("error: last line"), "got: {error}");
     }
 
+    // The sidecar probes must reach 127.0.0.1 directly. A corporate proxy picked
+    // up from the environment or the Windows system settings would otherwise
+    // answer them itself, so a healthy sidecar never reads as ready (#3003).
+    // reqwest reads the proxy env vars each time a client is built, so pointing
+    // them at a proxy that refuses everything shows whether the probes bypass it.
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn sidecar_probes_bypass_a_configured_proxy() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        /// Serves every connection with `response` and returns the server's
+        /// address plus a count of the requests it answered.
+        fn serve(response: &'static [u8]) -> (String, Arc<AtomicUsize>) {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+            let address = listener.local_addr().unwrap().to_string();
+            let hits = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&hits);
+            thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    let mut buffer = [0_u8; 1024];
+                    let _ = stream.read(&mut buffer);
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = stream.write_all(response);
+                }
+            });
+            (address, hits)
+        }
+
+        /// Restores the proxy env vars even when an assertion fails.
+        struct ProxyEnv(Vec<(&'static str, Option<OsString>)>);
+        impl Drop for ProxyEnv {
+            fn drop(&mut self) {
+                for (name, value) in &self.0 {
+                    match value {
+                        Some(value) => env::set_var(name, value),
+                        None => env::remove_var(name),
+                    }
+                }
+            }
+        }
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (sidecar, _) =
+            serve(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        let (proxy, proxy_hits) =
+            serve(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        let names = [
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ];
+        let saved = names.iter().map(|name| (*name, env::var_os(name)));
+        let _restore = ProxyEnv(saved.collect());
+        for name in names {
+            env::remove_var(name);
+        }
+        env::set_var("HTTP_PROXY", format!("http://{proxy}"));
+        env::set_var("http_proxy", format!("http://{proxy}"));
+
+        let base_url = format!("http://{sidecar}");
+        assert!(sidecar_health_is_ready(&base_url));
+        assert!(sidecar_accepts_token(&base_url, "token"));
+        let proxy_requests = proxy_hits.load(Ordering::SeqCst);
+        assert_eq!(proxy_requests, 0, "a probe went through the proxy");
+    }
+
     // A Martin that died or was killed from outside must not keep blocking new
     // starts with "already running"; a live one still must.
     #[cfg(all(unix, not(feature = "mas")))]
@@ -6192,5 +6602,35 @@ mod tests {
             std::path::Path::new(r"C:\anything"),
             std::path::Path::new("")
         ));
+    }
+
+    #[test]
+    fn recognizes_only_geolibre_sidecar_command_lines() {
+        // Windows: uv's uvicorn.exe trampoline hands the app spec to Python.
+        assert!(is_geolibre_sidecar_command_line(
+            r#""C:\Python312\python.exe" "C:\Users\me\AppData\Roaming\org.geolibre.desktop\runtime\sidecar-server\Scripts\uvicorn.exe" geolibre_server.app.main:app --host 127.0.0.1 --port 8765"#
+        ));
+        // Linux /proc cmdline (NUL-separated) and macOS ps output.
+        assert!(is_geolibre_sidecar_command_line(
+            "/runtime/sidecar-server/bin/python3\0/runtime/sidecar-server/bin/uvicorn\0geolibre_server.app.main:app\0"
+        ));
+        // The user's own server on the same port is left alone.
+        assert!(!is_geolibre_sidecar_command_line(
+            "python -m uvicorn myapp.main:app --port 8765"
+        ));
+        // A different server merely run from inside the package's directory is
+        // not the sidecar.
+        assert!(!is_geolibre_sidecar_command_line(
+            "python /src/geolibre_server/app/other_server.py --port 8765"
+        ));
+        assert!(!is_geolibre_sidecar_command_line(""));
+    }
+
+    // src/lib/sidecar.ts classifies the start failure by this phrase; if it
+    // drifts, a stale sidecar is ignored again and users get a bare 401.
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn stale_sidecar_error_keeps_the_phrase_the_frontend_matches() {
+        assert!(super::STALE_SIDECAR_ERROR.contains("does not accept this session's token"));
     }
 }

@@ -55,6 +55,7 @@ import {
   FolderPlus,
   LassoSelect,
   Library,
+  LineChart,
   Locate,
   Lock,
   MousePointerClick,
@@ -76,6 +77,8 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { isSpaceborneLidarLayer } from "../../../lib/along-track-profile";
+import { openAlongTrackProfile } from "../../../lib/along-track-profile-store";
 import { canOpenLayerAttributeTable } from "../../../lib/attribute-table-source";
 import type { CollaborationApi } from "../../../hooks/useCollaboration";
 import {
@@ -93,6 +96,7 @@ import { getLayerWatchConfig, isLocalFileLayer } from "../../../lib/local-file-w
 import { canRestoreLibraryLayer } from "../../../lib/restore-library-layer";
 import { getSqlQueryLayerConfig, isSqlQueryLayer } from "../../../lib/sql-query-layer";
 import { requestSqlWorkspaceQuery } from "../../../lib/sql-workspace-prefill";
+import { canExportLidarLayer, type LidarExportFormat } from "../../../lib/lidar-export";
 import { canExportRasterLayer } from "../../../lib/raster-export";
 import { canExtractRasterSubset } from "../../../lib/raster-subset-export";
 import { layerSupportsPolylineExport } from "../../../lib/vector-export";
@@ -105,6 +109,13 @@ import {
 import type { LayerActions } from "./useLayerActions";
 import type { LayerRefresh } from "./useLayerRefresh";
 import type { TimeSliderBinding } from "./useTimeSliderBinding";
+
+/** The LiDAR layer Export submenu, in menu order. */
+const LIDAR_EXPORT_ITEMS = [
+  { format: "las", labelKey: "layers.exportLas" },
+  { format: "laz", labelKey: "layers.exportLaz" },
+  { format: "copc", labelKey: "layers.exportCopc" },
+] as const satisfies ReadonlyArray<{ format: LidarExportFormat; labelKey: string }>;
 
 /**
  * What every row's actions menu shares: the panel-wide state the menu items
@@ -219,6 +230,7 @@ export function LayerActionsMenuItems({
     handleBindTemporalLayer,
     handleUnbindTimeSlider,
     handleExportRasterLayer,
+    handleExportLidarLayer,
   } = actions;
   const addLayerGroup = useAppStore((s) => s.addLayerGroup);
   const moveLayersToGroup = useAppStore((s) => s.moveLayersToGroup);
@@ -259,6 +271,7 @@ export function LayerActionsMenuItems({
   const canMaterializeDuckDB =
     isDuckDBQueryLayer(layer) && typeof layer.metadata.query === "string";
   const canOpenAttributeTable = canOpenLayerAttributeTable(layer);
+  const canOpenAlongTrackProfile = layer.type === "geojson" && isSpaceborneLidarLayer(layer);
   // The interactive selection dialogs (#1314) resolve selection ids
   // against in-store features, like the highlight overlay does, and
   // inspecting which features match is a read of the layer's data.
@@ -327,6 +340,9 @@ export function LayerActionsMenuItems({
   // Raster/COG layers backed by a downloadable file (a retained
   // local-bytes blob URL or a source URL) export to GeoTIFF.
   const canExportRaster = layerCaps.export && canExportRasterLayer(layer);
+  // Point clouds backed by one LAS/LAZ/COPC file (a URL, a picked file, or a
+  // tool output) export to any of the three, converted in the browser.
+  const canExportLidar = layerCaps.export && canExportLidarLayer(layer);
   // COG/WMS/XYZ layers can also export a bounding-box subset (a clip)
   // via the in-browser geolibre-wasm extractors, drawn on the map.
   // Gated on the engine's own drawing capability: the panel needs a
@@ -560,6 +576,12 @@ export function LayerActionsMenuItems({
         >
           <TableProperties className="me-2 h-3.5 w-3.5" />
           {t("layers.openAttributeTable")}
+        </DropdownMenuItem>
+      )}
+      {canOpenAlongTrackProfile && (
+        <DropdownMenuItem onSelect={() => openAlongTrackProfile(layer.id)}>
+          <LineChart className="me-2 h-3.5 w-3.5" />
+          {t("alongTrackProfile.menuItem")}
         </DropdownMenuItem>
       )}
       {canSelectFeatures && (
@@ -876,6 +898,7 @@ export function LayerActionsMenuItems({
             {canExportLayer && (
               <>
                 <DropdownMenuItem
+                  title={t("layers.exportGeoLibreStyleHint")}
                   onSelect={() => {
                     void handleExportGeoLibreStyle(layer);
                   }}
@@ -1077,6 +1100,26 @@ export function LayerActionsMenuItems({
                 {t("layers.extractSubset")}
               </DropdownMenuItem>
             )}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      )}
+      {canExportLidar && (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Download className="h-3.5 w-3.5" />
+            {t("layers.export")}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {LIDAR_EXPORT_ITEMS.map(({ format, labelKey }) => (
+              <DropdownMenuItem
+                key={format}
+                onSelect={() => {
+                  void handleExportLidarLayer(layer, format);
+                }}
+              >
+                {t(labelKey)}
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       )}

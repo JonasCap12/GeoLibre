@@ -75,6 +75,18 @@ at zoom >= 12 on Mesa GPUs without them). Before bumping it, confirm
   that tool's field offers metres and silently converts a dimensionless number as
   if it were a distance.
 
+### `geotiff` (`packages/processing/package.json`) — private `actualizedFields`
+
+`readRasterData` (`packages/processing/src/raster-client.ts`) pads a
+`SampleFormat` tag shorter than `SamplesPerPixel` so geotiff.js can decode
+band 2+ of such files (older geolibre-wasm COGs carry one). geotiff.js reads
+the tag from several places, so the pad replaces the parsed value in the
+image's private `fileDirectory.actualizedFields` map (keyed by tag number, 339).
+If a bump renames or reshapes that map, the pad stops working and those files
+fail again with "Unsupported data format/bitsPerSample";
+`readRasterData` warns when the map is missing, and
+`tests/upstream-contracts.test.ts` checks the map and key on a real image.
+
 ### `maplibre-gl`
 
 - **`GLOBE_CONTROL_TOGGLE_SELECTOR`** (`packages/map/src/globe-control-toggle.ts`)
@@ -260,6 +272,29 @@ black — it declines the stack.
   the deck.gl mirror has to repaint the same geometry in the same colour. Change
   one form and change the RGBA twin beside it;
   `tests/lidar-measure-mirror.test.ts` asserts the pair agrees.
+- **Theme defaults for GUI-created overlays** (`themeHtmlControlOutputs`,
+  `themeLegendControlOutputs`, `themeColorbarControlOutputs` in
+  `packages/plugins/src/plugins/components/{html,legend,colorbar}.ts`) wrap the
+  private factories `HtmlGuiControl._createHtmlControl`,
+  `LegendGuiControl._createLegend` and `ColorbarGuiControl._syncPositionControl`
+  (which keeps the per-corner outputs in the private `_positionControls` map),
+  then call each output's public `update({ backgroundColor, fontColor })` with
+  `var(--geolibre-bg)` / `var(--geolibre-fg)`. The GUI constructor's own
+  `backgroundColor`/`fontColor` options only style the editor panel and are not
+  forwarded, so this is the only way the on-map legend/colorbar/HTML surfaces
+  follow the app theme. A rename leaves the wrapper calling an undefined
+  function (the panel throws on Add) or skipping silently (the surface reverts
+  to upstream white). `createComponentsControl` (`maplibre-components.ts`)
+  applies the same wrappers, and adds the standalone `geolibre-*` theme class
+  plus `geolibre-grid-child` in each child's `onAdd`, to the ControlGrid's
+  internally created children. After a bump, toggle the app theme with a
+  legend, colorbar and HTML overlay on the map, from both the Controls menu and
+  the Components grid.
+- **Theme overrides in `index.css`** assume the component/Layer
+  Control/Street View stylesheets may load **after** `index.css` (they arrive
+  with lazily imported chunks), so a same-specificity override loses. Overrides
+  of single-class vendor rules are prefixed with `html` to win regardless of
+  order; keep that when adding new ones.
 
 ### `maplibre-gl-basemap-control` (`packages/plugins/package.json`)
 
@@ -460,6 +495,21 @@ checks the hook points in both nested copies' `dist/maplibre-geoman.es.js`
 right-click a MultiLineString vertex in Edit mode. If upstream adds MultiLineString support, delete the
 wrapper.
 
+### `@carbonplan/zarr-layer` — private `minZoom`
+
+The Dynamical plugin draws its regional datasets (analyses and ensembles, which
+pack long time series into each chunk) only from a minimum zoom, so a zoomed-out
+view cannot read gigabytes. MapLibre's layer zoom range covers every render, but
+zarr-layer also fetches once while it initializes, gated on its own private
+`minZoom` field (set from the constructor's `minzoom`, read by
+`isZoomInRange`). The Zarr control does not forward `minzoom`, so
+`applyRegionalZoomRange` in `packages/plugins/src/plugins/maplibre-dynamical.ts`
+writes the field on the live layer, guarded by a type check. If upstream renames
+it the write silently stops, and only that first fetch loses its gate (the panel
+also jumps the map to the minimum zoom before adding, which covers the common
+case). `tests/upstream-contracts.test.ts` checks the field and its use; on a
+bump, check whether the Zarr control now forwards `minzoom` so the write can go.
+
 ### `zarr-cesium` (`packages/map/package.json`) — private internals
 
 `packages/map/src/cesium-zarr-imagery.ts` draws Zarr layers on the globe and
@@ -490,7 +540,7 @@ rejects the preflight a JSON `POST /search` needs, so the library's own
 goes out as a `GET /search`, and the collection list falls back to the bundled
 `planetary-computer-collections.json` when the live one cannot be read. The
 subclass reuses the private `fetch` / `abortController` fields, and
-`maplibre-gl-planetary-computer.ts` swaps it into the control's private
+`maplibre-planetary-computer.ts` swaps it into the control's private
 `_stacClient` field before the control is added (collections load in `onAdd`).
 
 If upstream renames those fields, loads collections in its constructor, or adds
@@ -558,6 +608,33 @@ imports that way.
 `tests/raster-picker-mirror.test.ts` compares every value and both helpers with
 the package export, so a colormap added or renamed upstream fails
 `npm run test:frontend`. Regenerate the copy from the package when it does.
+
+### Datum shifts (`geotiff-geokeys-to-proj4`, `cog-tiler-wasm`, `maplibre-gl-raster`)
+
+The EPSG tables in `geotiff-geokeys-to-proj4` leave the datum shift
+(`+towgs84`) out for many national grids, and epsg.io's PROJJSON (the default
+resolver of the raster control's deck.gl engine) carries none either, so
+without help those rasters land 50 to 300 m off. `packages/core/src/datum-shift.ts`
+holds a small table of shifts and adds them wherever GeoLibre builds a
+projection from an EPSG code or GeoTIFF geokeys:
+
+- `cog-tiler-wasm` (the raster control's default engine) through its
+  `setSourceCrsResolver` hook (0.5.0 and later), installed by
+  `installCogTilerDatumShift` wherever GeoLibre imports the tiler and before
+  the raster control loads;
+- the deck.gl engine through the control's `epsgResolver` option
+  (`packages/plugins/src/plugins/epsg-datum-resolver.ts`);
+- `epsg-proj4.ts`, the OBIA `toPixel`, `polygonizeLabels` (which traces pixels
+  on a stand-in grid and places the vertices through the same definition),
+  the spectral profile, samgeo, point clouds and ArcGIS Zarr.
+
+`withDatumShift` leaves a definition that already names a transformation, so
+a `geotiff-geokeys-to-proj4` bump that adds shifts to its tables needs no
+change here. On a bump of any of the three packages, run
+`tests/datum-shift.test.ts`; it checks the British National Grid against a
+PROJ-computed point. Every entry in the table was checked against PROJ's best
+transformation for that code (within 2 m; 15 m for the NAD27 mean). Re-check
+any entry you add the same way.
 
 ### `tauri-plugin-persisted-scope` — private on-disk format
 
@@ -840,6 +917,29 @@ in the CI "Lint and type check" job) fails when a package declared in both
 manifests, in any dependency section, carries different ranges. Fix it by
 giving both the same range and refreshing `package-lock.json` in the same PR.
 
+### One shared `three`
+
+The app and its three-based plugins (`maplibre-gl-3d-tiles`, `maplibre-gl-splat`,
+`maplibre-gl-components`, deck.gl mesh layers) share one copy of three. Two things
+keep it that way:
+
+- The upstream opengeos packages keep three out of their ES `dist` and declare it as
+  a peer (`maplibre-gl-splat` >= 0.2.9, `maplibre-gl-3d-tiles` >= 0.5.11,
+  `maplibre-gl-components` >= 0.31.2). An older release inlines its own three again.
+- The root `package.json` `overrides` pins `three` to the app's range, because
+  `@dvt3d/maplibre-three-plugin` declares `three: ^0.178.0` (0.178.x only) and would
+  otherwise pull in a second, older copy. `mapillary-js` also declares an old three,
+  but its `dist` bundles its own copy and never imports it, so the override is
+  harmless there. Opening the Mapillary viewer still loads that bundled 0.134 copy,
+  the only remaining "Multiple instances of Three.js" warning.
+
+When bumping `three`, move the override with the app's range, then run
+`npm ls three`: it should list one version. If npm keeps a stale nested copy,
+follow the lockfile clean-up in
+[Dependency updates and the audit allowlist](#dependency-updates-and-the-audit-allowlist).
+Spark's `dist` embeds three inside its sort worker's source string. That copy runs in
+a Web Worker and never registers as a second main-thread instance.
+
 ## Adding a blend mode
 
 **Do not add a blend mode without checking it in the browser.** MapLibre's blend
@@ -1068,8 +1168,9 @@ the bundle report makes a second copy easy to spot.
 
 Dependencies are watched two ways: **Dependabot** (`.github/dependabot.yml`) opens
 grouped weekly update PRs for npm, pip (backend + `python/`), cargo, and Actions,
-and the CI **`audit` job** runs `npm run audit:ci` (blocking) plus a non-blocking
-`pip-audit` of the resolved backend environment.
+and CI runs `npm run audit:ci` (blocking, in the "Lint and type check" job) plus a
+non-blocking `pip-audit` of the resolved backend environment (in the "Backend
+tests" job).
 
 `audit:ci` is `scripts/audit-check.mjs`, a thin wrapper over `npm audit
 --omit=dev` that still fails on every high/critical advisory _except_ the ones
@@ -1165,10 +1266,11 @@ and every guard below blocks one of them.
    the one we cannot fix is `@clerk/shared`'s `getEnvVariable.mjs`, which does
    `import.meta.env[name]` with a computed name, so the inlined record lands in
    the `ClerkGate-*.js` chunk.
-3. `python/hatch_build.py` skips the JS build when `static/app` already exists
-   and `GEOLIBRE_FORCE_JS_BUILD` is unset. A local `python -m build` therefore
-   packages whatever an earlier `npm run build:embed` left staged, with no
-   JavaScript running at all.
+3. `python/hatch_build.py` skips each frontend build when its staged output
+   (`static/app/index.html` or `static/mcp/show-map.html`) already exists and
+   `GEOLIBRE_FORCE_JS_BUILD` is unset. A local `python -m build` can therefore
+   package assets left by earlier `npm run build:embed` / `npm run build:mcp-app`
+   runs, with no JavaScript running at all.
 
 ### The rules now
 

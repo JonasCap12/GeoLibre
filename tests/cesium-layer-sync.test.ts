@@ -7,6 +7,7 @@ import {
   type LayerStyle,
 } from "../packages/core/src/types";
 import { CesiumLayerSync, isCesiumSupportedLayerType } from "../packages/map/src/cesium-layer-sync";
+import { labelBaseColors } from "../packages/map/src/cesium-labels";
 
 // Verifies the store → Cesium reconciler against a fake Cesium namespace + viewer
 // (the real engine never loads here — its import in the module is type-only). It
@@ -270,6 +271,34 @@ function makeFakes() {
     Cesium3DTileStyle: class {
       constructor(public spec: unknown) {}
     },
+    // Just enough geodesy for the tileset altitude offset: a "cartesian" is
+    // the (lon, lat, height) it was made from, so a translation reads back as
+    // the height difference.
+    Cartographic: {
+      fromCartesian: () => ({ longitude: 0.1, latitude: 0.9, height: 0 }),
+    },
+    Cartesian3: Object.assign(
+      class {
+        constructor(
+          public x = 0,
+          public y = 0,
+          public z = 0,
+        ) {}
+      },
+      {
+        fromRadians: (x: number, y: number, z = 0) => ({ x, y, z }),
+        subtract: (
+          a: { x: number; y: number; z: number },
+          b: { x: number; y: number; z: number },
+          out: { x: number; y: number; z: number },
+        ) => Object.assign(out, { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }),
+      },
+    ),
+    Matrix4: {
+      IDENTITY: { identity: true },
+      clone: (m: object) => ({ ...m }),
+      fromTranslation: (translation: unknown) => ({ translation }),
+    },
     Color: {
       fromCssColorString: (css: string) => ({
         css,
@@ -471,6 +500,35 @@ describe("CesiumLayerSync", () => {
     assert.equal(isCesiumSupportedLayerType(layer), false);
   });
 
+  it("draws a deck.gl viz record through the GeoJSON path without reloading on opacity", async () => {
+    const sync = newSync(f);
+    const viz = mkLayer({
+      id: "viz",
+      type: "deckgl-viz",
+      source: { type: "deckgl-viz", data: [[-74, 40.7]] },
+      metadata: {
+        sourceKind: "deckgl-viz",
+        externalDeckLayer: true,
+        vizConfig: {
+          layerKind: "scatterplot",
+          format: "json-array",
+          fieldMapping: { lng: 0, lat: 1 },
+          style: { color: "#3b82f6", radius: 40 },
+        },
+      },
+    });
+
+    sync.sync([viz]);
+    await f.flush();
+    assert.equal(f.calls.geojsonLoads.length, 1);
+    assert.equal(f.calls.dataSourcesAdded.length, 1);
+
+    sync.sync([{ ...viz, opacity: 0.4 }]);
+    await f.flush();
+    assert.equal(f.calls.geojsonLoads.length, 1, "an opacity change reuses the data source");
+    assert.deepEqual(sync.getRenderStatus().errors, []);
+  });
+
   it("keeps ArcGIS vector tiles without a FeatureCollection marked 2D-only", () => {
     const layer = mkLayer({
       type: "arcgis",
@@ -609,6 +667,42 @@ describe("CesiumLayerSync", () => {
     assert.ok(Math.abs(label.outlineColor.value.alpha - 0.5) < 1e-9);
   });
 
+  it("fades a data-defined label opacity with a story fade", async () => {
+    const sync = newSync(f);
+    const fc = { type: "FeatureCollection", features: [{}] };
+    sync.sync([
+      mkLayer({
+        id: "fade",
+        type: "geojson",
+        geojson: fc as never,
+        opacity: 0.5,
+        style: { labels: { ...DEFAULT_LAYER_STYLE.labels } },
+      }),
+    ]);
+    await f.flush();
+    const ds = f.calls.dataSourcesAdded[0] as {
+      entities: { values: Array<{ label?: { fillColor: { value: { alpha: number } } } }> };
+    };
+    const entity = ds.entities.values[3];
+    const opaque = (css: string) => ({
+      alpha: 1,
+      withAlpha: (alpha: number) => ({ css, alpha }),
+    });
+    // As the labeler records a label with a data-defined opacity of 0.8.
+    labelBaseColors.set(entity as never, {
+      fill: opaque("#f00") as never,
+      outline: opaque("#fff") as never,
+      opacity: 0.8,
+    });
+    // Halfway from the layer's 0.5 down: the override fades by the same half.
+    sync.setStoryLayerOpacity("fade", 0.25);
+    assert.ok(Math.abs(entity.label!.fillColor.value.alpha - 0.4) < 1e-9);
+    sync.setStoryLayerOpacity("fade", 0);
+    assert.equal(entity.label!.fillColor.value.alpha, 0, "a fade to 0 hides it");
+    sync.restoreStoryLayerStyles();
+    assert.ok(Math.abs(entity.label!.fillColor.value.alpha - 0.8) < 1e-9);
+  });
+
   it("renders xyz/raster tiles as an imagery layer with opacity + visibility", () => {
     const sync = newSync(f);
     sync.sync([
@@ -674,6 +768,24 @@ describe("CesiumLayerSync", () => {
     sync.sync([{ ...base, metadata: { bounds: [0, 0, 2, 2] } }]);
     assert.equal(f.calls.urlProviders.length, 1);
     assert.equal(f.calls.imageryRemoved.length, 0);
+  });
+
+  it("draws a wms record whose tile is an ArcGIS REST export from that template", () => {
+    // Earthdata GIS records an ImageServer as `source.url`; GetMap against it
+    // returns no image, so the exportImage template is what draws.
+    const sync = newSync(f);
+    const tile =
+      "https://gis.example/rest/services/X/ImageServer/exportImage?bbox={bbox-epsg-3857}&bboxSR=3857&f=image";
+    sync.sync([
+      mkLayer({
+        id: "img",
+        type: "wms",
+        source: { url: "https://gis.example/rest/services/X/ImageServer", tiles: [tile] },
+      }),
+    ]);
+    assert.equal(f.calls.wmsProviders.length, 0);
+    assert.equal(f.calls.urlProviders.length, 1);
+    assert.equal(String(f.calls.urlProviders[0].url), tile);
   });
 
   it("treats a wms layer with only a service url as globe-supported", () => {
@@ -763,6 +875,38 @@ describe("CesiumLayerSync", () => {
     // draw its own colours again rather than keep the stale conditions.
     sync.sync([mkLayer({ id: "t", type: "3d-tiles", source: { url: "https://tiles/root.json" } })]);
     assert.equal(tileset.style, undefined);
+  });
+
+  it("moves a loaded tileset in place when its altitude offset changes", async () => {
+    const sync = newSync(f);
+    const layer = mkLayer({
+      id: "t",
+      type: "3d-tiles",
+      source: { url: "https://tiles/root.json", altitudeOffset: -43.5 },
+    });
+    sync.sync([layer]);
+    await f.flush();
+    const tileset = f.calls.primitivesAdded[0] as { modelMatrix: unknown };
+    const height = () => (tileset.modelMatrix as { translation: { z: number } }).translation.z;
+    assert.equal(height(), -43.5);
+
+    // The Style panel's height field (#3107): no reload, just a new matrix.
+    sync.sync([{ ...layer, source: { ...layer.source, altitudeOffset: 12 } }]);
+    assert.equal(f.calls.tilesetUrls.length, 1, "the tileset is not rebuilt");
+    assert.equal(f.calls.primitivesAdded.length, 1);
+    assert.equal(height(), 12);
+
+    // Back to zero restores the identity rather than leaving the last offset.
+    sync.sync([{ ...layer, source: { ...layer.source, altitudeOffset: 0 } }]);
+    assert.deepEqual(tileset.modelMatrix, { identity: true });
+    assert.equal(f.calls.tilesetUrls.length, 1);
+  });
+
+  it("leaves a tileset's model matrix alone when it has no altitude offset", async () => {
+    const sync = newSync(f);
+    sync.sync([mkLayer({ id: "t", type: "3d-tiles", source: { url: "https://tiles/root.json" } })]);
+    await f.flush();
+    assert.equal((f.calls.primitivesAdded[0] as { modelMatrix: unknown }).modelMatrix, null);
   });
 
   it("fades a tileset with the layer opacity without tinting it", async () => {
@@ -906,6 +1050,28 @@ describe("CesiumLayerSync", () => {
     sync.sync([mkLayer({ id: "x", type: "xyz", source: { tiles: ["u/{z}/{x}/{y}"] } })]);
     sync.sync([]);
     assert.equal(f.calls.imageryRemoved.length, 1);
+  });
+
+  it("reads a raster record's Esri-style tile template from source.url", async () => {
+    // The Esri Wayback control mirrors its release as a raster record whose
+    // `source.url` is a `{level}/{row}/{col}` template, as ArcGIS reads it.
+    const sync = newSync(f);
+    sync.sync([
+      mkLayer({
+        id: "wayback",
+        type: "raster",
+        source: {
+          type: "raster",
+          url: "https://wayback.example/tile/10/{level}/{row}/{col}",
+        },
+      }),
+    ]);
+    await f.flush();
+    assert.equal(f.calls.urlProviders.length, 1);
+    assert.equal(
+      String(f.calls.urlProviders[0].url),
+      "https://wayback.example/tile/10/{z}/{y}/{x}",
+    );
   });
 
   it("renders an arcgis MapServer layer via ArcGisMapServerImageryProvider.fromUrl", async () => {

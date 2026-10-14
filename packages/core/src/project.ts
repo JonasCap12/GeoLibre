@@ -1,5 +1,7 @@
 import { newProjectBasemapStyleUrl } from "./basemap-policy";
+import { normalizeArcgisWkid } from "./arcgis-projection";
 import { normalizeCesiumBasemap } from "./cesium-imagery";
+import { parseCesiumIonAssetId } from "./cesium-ion";
 import { redactUrlCredentials } from "./credentials";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -16,6 +18,8 @@ import {
   MIN_DASHBOARD_COLUMNS,
   PROJECT_VERSION,
   type DashboardWidget,
+  type ProjectBookmark,
+  type ProjectBookmarkGroup,
   type DashboardWidgetAggregation,
   type DashboardWidgetType,
   type GeoLibreLayer,
@@ -318,13 +322,73 @@ export function serializeProjectWithLayerCache(
   layerSources: readonly object[],
   cache: ProjectLayerSerializationCache,
 ): string {
+  const steps = serializeProjectWithLayerCacheSteps(project, layerSources, cache);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
+
+/** Time a main-thread serialization slice may run before it yields (ms). */
+const SERIALIZE_SLICE_MS = 8;
+
+/** Resolve on a macrotask, letting input and paint run in between slices. */
+function yieldToMainThread(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * {@link serializeProjectWithLayerCache} that hands the main thread back
+ * between layers, so autosave on a project with several large layers is many
+ * short tasks instead of one 300-400 ms freeze (GeoLibre#2869).
+ *
+ * The cache makes a camera move free, so the cost lands on the first autosave
+ * and on edits to a big layer: each layer that misses the cache is serialized
+ * in its own slice, and the thread is released once a slice has run longer than
+ * a few milliseconds. A single huge layer is still one slice. The result is
+ * identical to the synchronous call. `project` and `layerSources` must not be
+ * mutated while this runs; the store replaces records rather than editing them,
+ * so a snapshot taken from it stays valid.
+ *
+ * @param project Project to serialize, as built from `layerSources`.
+ * @param layerSources Immutable source record for each entry of
+ *   `project.layers`, in the same order, used as the cache key.
+ * @param cache Cache shared between calls.
+ * @param yieldFn Hands the thread back; replaced in tests.
+ * @returns The same text {@link serializeProject} returns for `project`.
+ */
+export async function serializeProjectWithLayerCacheAsync(
+  project: GeoLibreProject,
+  layerSources: readonly object[],
+  cache: ProjectLayerSerializationCache,
+  yieldFn: () => Promise<void> = yieldToMainThread,
+): Promise<string> {
+  const steps = serializeProjectWithLayerCacheSteps(project, layerSources, cache);
+  let sliceStart = Date.now();
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+    if (Date.now() - sliceStart >= SERIALIZE_SLICE_MS) {
+      await yieldFn();
+      sliceStart = Date.now();
+    }
+  }
+}
+
+/** Shared body of the sync and async serializers; yields once per layer text built. */
+function* serializeProjectWithLayerCacheSteps(
+  project: GeoLibreProject,
+  layerSources: readonly object[],
+  cache: ProjectLayerSerializationCache,
+): Generator<void, string, void> {
   if (layerSources.length !== project.layers.length) return serializeProject(project);
   const layers = project.layers.map(portableLayer);
   // Presets are keyed by layer object, so a record listed twice would get one
   // index's text in both places. The store never does that; bypass if it does.
   if (new Set(layers).size !== layers.length) return serializeProject(project);
   const presets = new Map<object, string>();
-  layers.forEach((layer, index) => {
+  for (let index = 0; index < layers.length; index += 1) {
+    const layer = layers[index];
     const source = layerSources[index];
     const cached = cache.get(source);
     // The layer is serialized under its array index as the key (a `toJSON`
@@ -334,9 +398,10 @@ export function serializeProjectWithLayerCache(
       // Depth 2: the root object is depth 0 and its `layers` array depth 1.
       text = serializeProjectValue(layer, 2, String(index), new Set()) ?? "null";
       cache.set(source, { index, text });
+      yield;
     }
     presets.set(layer, text);
-  });
+  }
   return serializeProjectValue({ ...project, layers }, 0, "", new Set(), presets) ?? "null";
 }
 
@@ -394,7 +459,9 @@ export function parseProject(json: string): GeoLibreProject {
     storymap: normalizeStoryMap(data.storymap) ?? undefined,
     models: normalizeModels(data.models) ?? undefined,
     processingHistory: normalizeProcessingHistory(data.processingHistory) ?? undefined,
+    obia: normalizeObiaWorkbench(data.obia) ?? undefined,
     widgets: normalizeWidgets(data.widgets) ?? undefined,
+    ...bookmarkFields(data.bookmarks, data.bookmarkGroups),
     ...(data.dashboardColumns === undefined
       ? {}
       : { dashboardColumns: normalizeDashboardColumns(data.dashboardColumns) }),
@@ -476,7 +543,7 @@ function normalizeLayerGroups(value: unknown): LayerGroup[] {
  * {@link LegendConfig}, dropping malformed entries. Returns undefined when no
  * usable config is present so the default is applied downstream.
  */
-function normalizeLegendConfig(legend: unknown): LegendConfig | undefined {
+export function normalizeLegendConfig(legend: unknown): LegendConfig | undefined {
   if (!legend || typeof legend !== "object") return undefined;
   const candidate = legend as Partial<LegendConfig>;
 
@@ -890,6 +957,26 @@ const LEGACY_H3_PROCESSING_TOOL_IDS: Readonly<Record<string, string>> = {
  * @param value Raw `processingHistory` value from the project JSON.
  * @returns Normalized runs, or `null` when none survive.
  */
+/**
+ * Accept the Object-Based Analysis workbench blob (`obia`) only as a plain,
+ * JSON-serializable object carrying a numeric `version`. Its fields are owned
+ * and validated by the desktop app, which treats anything it does not
+ * recognise as absent; core only guarantees the shape survives a round trip.
+ *
+ * @param value Raw `obia` value from the project JSON.
+ * @returns A detached copy, or `null` when absent or malformed.
+ */
+export function normalizeObiaWorkbench(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (typeof (value as { version?: unknown }).version !== "number") return null;
+  try {
+    const copy: unknown = JSON.parse(JSON.stringify(value));
+    return copy && typeof copy === "object" ? (copy as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeProcessingHistory(value: unknown): ProcessingRun[] | null {
   if (!Array.isArray(value)) return null;
   // Bound the work for a crafted or corrupted file (shared/collaboration
@@ -1154,6 +1241,106 @@ const INDICATOR_AGGREGATIONS: readonly IndicatorAggregation[] = [
   "median",
 ];
 
+/** Bookmarks kept per project, as the panel's own default limit allows. */
+export const MAX_PROJECT_BOOKMARKS = 500;
+
+/**
+ * Coerce an untrusted `bookmarkGroups` array into valid folders: drops entries
+ * without a string id and de-duplicates by id. A missing name becomes
+ * "Folder"; `collapsed` defaults to false.
+ *
+ * @param value Raw `bookmarkGroups` value from the project JSON.
+ * @returns The folders (possibly empty).
+ */
+export function normalizeBookmarkGroups(value: unknown): ProjectBookmarkGroup[] {
+  if (!Array.isArray(value)) return [];
+  const groups: ProjectBookmarkGroup[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    groups.push({
+      id,
+      name: typeof entry.name === "string" && entry.name.trim() ? entry.name : "Folder",
+      collapsed: entry.collapsed === true,
+    });
+  }
+  return groups;
+}
+
+/**
+ * Coerce an untrusted `bookmarks` array into valid saved views: drops entries
+ * without a string id or a finite, in-range camera, de-duplicates by id, wraps
+ * the bearing into 0-360, and drops a `groupId` that names no folder in
+ * `groups`. Keeps at most {@link MAX_PROJECT_BOOKMARKS}.
+ *
+ * @param value Raw `bookmarks` value from the project JSON.
+ * @param groups The project's (normalized) folders.
+ * @returns The bookmarks (possibly empty).
+ */
+export function normalizeBookmarks(
+  value: unknown,
+  groups: readonly ProjectBookmarkGroup[] = [],
+): ProjectBookmark[] {
+  if (!Array.isArray(value)) return [];
+  const groupIds = new Set(groups.map((group) => group.id));
+  const bookmarks: ProjectBookmark[] = [];
+  const seen = new Set<string>();
+  const finite = (input: unknown): number | null =>
+    typeof input === "number" && Number.isFinite(input) ? input : null;
+  for (const raw of value) {
+    if (bookmarks.length >= MAX_PROJECT_BOOKMARKS) break;
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    const lng = finite(entry.lng);
+    const lat = finite(entry.lat);
+    const zoom = finite(entry.zoom);
+    if (!id || seen.has(id) || lng === null || lat === null || zoom === null) continue;
+    if (lng < -180 || lng > 180 || lat < -90 || lat > 90 || zoom < 0 || zoom > 24) continue;
+    seen.add(id);
+    const pitch = Math.min(85, Math.max(0, finite(entry.pitch) ?? 0));
+    const bearing = (((finite(entry.bearing) ?? 0) % 360) + 360) % 360;
+    const bookmark: ProjectBookmark = {
+      id,
+      name: typeof entry.name === "string" ? entry.name : "",
+      lng,
+      lat,
+      zoom,
+      pitch,
+      bearing,
+      createdAt: finite(entry.createdAt) ?? 0,
+    };
+    // Folder ids are trimmed, so compare a trimmed groupId with them.
+    const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
+    if (groupId && groupIds.has(groupId)) bookmark.groupId = groupId;
+    if (entry.extra && typeof entry.extra === "object" && !Array.isArray(entry.extra)) {
+      bookmark.extra = entry.extra as Record<string, unknown>;
+    }
+    bookmarks.push(bookmark);
+  }
+  return bookmarks;
+}
+
+/**
+ * The `bookmarks`/`bookmarkGroups` project fields for normalized input, each
+ * omitted when empty so a bookmark-less project stays free of the keys.
+ */
+function bookmarkFields(
+  rawBookmarks: unknown,
+  rawGroups: unknown,
+): { bookmarks?: ProjectBookmark[]; bookmarkGroups?: ProjectBookmarkGroup[] } {
+  const bookmarkGroups = normalizeBookmarkGroups(rawGroups);
+  const bookmarks = normalizeBookmarks(rawBookmarks, bookmarkGroups);
+  return {
+    ...(bookmarks.length > 0 ? { bookmarks } : {}),
+    ...(bookmarkGroups.length > 0 ? { bookmarkGroups } : {}),
+  };
+}
+
 /**
  * Coerce an untrusted (possibly hand-edited) `widgets` array into valid
  * {@link DashboardWidget} records. Drops widgets without a usable id, layer id,
@@ -1356,6 +1543,8 @@ function normalizeProjectPreferences(preferences: unknown): ProjectPreferences {
         normalizeString((map as Partial<ProjectPreferences["map"]>).mapboxStyleUrl) || undefined,
       arcgisBasemap:
         normalizeString((map as Partial<ProjectPreferences["map"]>).arcgisBasemap) || undefined,
+      // Missing (every project before #2708) or Web Mercator is the default map.
+      arcgisWkid: normalizeArcgisWkid((map as Partial<ProjectPreferences["map"]>).arcgisWkid),
       // Missing means follow the saved project basemap, as it does for
       // `mapboxStyleUrl` above: a project written before this field existed
       // chose nothing, and reapplying the new-project default would repaint
@@ -1369,6 +1558,9 @@ function normalizeProjectPreferences(preferences: unknown): ProjectPreferences {
         (map as Partial<ProjectPreferences["map"]>).terrainEnabled,
         DEFAULT_PROJECT_PREFERENCES.map.terrainEnabled,
       ),
+      terrainIonAssetId:
+        parseCesiumIonAssetId((map as Partial<ProjectPreferences["map"]>).terrainIonAssetId) ??
+        undefined,
       // Kept as a free string here; the app coerces an unknown notation to
       // decimal degrees when it renders, so a hand-edited project cannot break
       // the readout.
@@ -1785,7 +1977,10 @@ export function projectFromStore(state: {
   storymap?: StoryMap | null;
   models?: ProcessingModel[] | null;
   processingHistory?: ProcessingRun[] | null;
+  obia?: Record<string, unknown> | null;
   widgets?: DashboardWidget[] | null;
+  bookmarks?: ProjectBookmark[] | null;
+  bookmarkGroups?: ProjectBookmarkGroup[] | null;
   dashboardColumns?: number;
   mapLayout?: MapGridLayout;
   secondaryMapViews?: SecondaryMapView[];
@@ -1798,8 +1993,9 @@ export function projectFromStore(state: {
   interaction?: ProjectInteraction | null;
   metadata: Record<string, unknown>;
 }): GeoLibreProject {
+  const layers = state.layers.filter((layer) => !isSessionOnlyLayer(layer));
   const styles: Record<string, LayerStyle> = {};
-  for (const layer of state.layers) {
+  for (const layer of layers) {
     styles[layer.id] = layer.style;
   }
   const plugins = normalizeProjectPlugins(state.plugins);
@@ -1810,6 +2006,7 @@ export function projectFromStore(state: {
   const storymap = normalizeStoryMap(state.storymap);
   const models = normalizeModels(state.models);
   const processingHistory = normalizeProcessingHistory(state.processingHistory);
+  const obia = normalizeObiaWorkbench(state.obia);
   const widgets = normalizeWidgets(state.widgets);
   const comments = normalizeProjectComments(state.comments);
   const interaction = normalizeProjectInteraction(state.interaction);
@@ -1837,7 +2034,7 @@ export function projectFromStore(state: {
     state.selectedLayerId === null
       ? null
       : typeof state.selectedLayerId === "string" &&
-          state.layers.some((layer) => layer.id === state.selectedLayerId)
+          layers.some((layer) => layer.id === state.selectedLayerId)
         ? state.selectedLayerId
         : undefined;
   return {
@@ -1848,7 +2045,7 @@ export function projectFromStore(state: {
     basemapVisible: state.basemapVisible,
     basemapOpacity: state.basemapOpacity,
     ...(state.blankBackgroundColor ? { blankBackgroundColor: state.blankBackgroundColor } : {}),
-    layers: state.layers.map(prepareLayerForSave),
+    layers: layers.map(prepareLayerForSave),
     ...(selectedLayerId !== undefined ? { selectedLayerId } : {}),
     ...(layerGroups.length > 0 ? { layerGroups } : {}),
     styles,
@@ -1859,7 +2056,9 @@ export function projectFromStore(state: {
     ...(storymap ? { storymap } : {}),
     ...(models ? { models } : {}),
     ...(processingHistory ? { processingHistory } : {}),
+    ...(obia ? { obia } : {}),
     ...(widgets ? { widgets } : {}),
+    ...bookmarkFields(state.bookmarks, state.bookmarkGroups),
     ...(dashboardColumns !== DEFAULT_DASHBOARD_COLUMNS ? { dashboardColumns } : {}),
     ...(persistGrid
       ? {
@@ -1896,6 +2095,20 @@ function hasRestorableSourceUrl(layer: GeoLibreLayer): boolean {
     (typeof sourceUrl === "string" && sourceUrl.trim() !== "") ||
     (typeof originalUrl === "string" && originalUrl.trim() !== "")
   );
+}
+
+/**
+ * Whether a layer lives only for the current session and is never written to a
+ * project file. A plugin sets `metadata.sessionOnly` on a store row that mirrors
+ * something it draws itself and cannot restore, such as a point cloud streamed
+ * from a short-lived signed URL, so the row shows in the Layers panel while the
+ * plugin runs but a reopened project carries no dead entry for it.
+ *
+ * @param layer - The layer to check.
+ * @returns `true` when the layer must be left out of saved projects.
+ */
+export function isSessionOnlyLayer(layer: GeoLibreLayer): boolean {
+  return layer.metadata.sessionOnly === true;
 }
 
 function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
@@ -2174,7 +2387,10 @@ export function applyProjectToStore(project: GeoLibreProject): {
   storymap: StoryMap | null;
   models: ProcessingModel[];
   processingHistory: ProcessingRun[];
+  obiaWorkbench: Record<string, unknown> | null;
   widgets: DashboardWidget[];
+  bookmarks: ProjectBookmark[];
+  bookmarkGroups: ProjectBookmarkGroup[];
   dashboardColumns: number;
   mapLayout: MapGridLayout;
   secondaryMapViews: SecondaryMapView[];
@@ -2247,6 +2463,7 @@ export function applyProjectToStore(project: GeoLibreProject): {
     orphanIds.size > 0 ? scrubCommentsForRemovedLayers(comments, orphanIds) : comments;
   const scrubbedLegend =
     orphanIds.size > 0 ? scrubLegendForRemovedLayers(legend, orphanIds) : legend;
+  const bookmarkGroups = normalizeBookmarkGroups(project.bookmarkGroups);
   // The composer's data/atlas blocks name a layer directly rather than through
   // `allReferencedIds`, so they are scrubbed against the surviving layer set.
   const printLayout = scrubPrintLayoutForLayers(
@@ -2270,7 +2487,10 @@ export function applyProjectToStore(project: GeoLibreProject): {
     storymap: normalizeStoryMap(project.storymap),
     models: normalizeModels(project.models) ?? [],
     processingHistory: normalizeProcessingHistory(project.processingHistory) ?? [],
+    obiaWorkbench: normalizeObiaWorkbench(project.obia),
     widgets: scrubbedWidgets,
+    bookmarkGroups,
+    bookmarks: normalizeBookmarks(project.bookmarks, bookmarkGroups),
     dashboardColumns: normalizeDashboardColumns(project.dashboardColumns),
     mapLayout,
     secondaryMapViews,

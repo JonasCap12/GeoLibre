@@ -1073,8 +1073,16 @@ export interface MssqlTableInfo {
   geometry_column: string;
   column_type: "geometry" | "geography";
   srid: number;
+  /** First geometry type in the bounded sample, or `Unknown`. */
   geometry_type: string;
+  /** Distinct sample types in probe order. */
+  geometry_types: string[];
+  mixed_geometry: boolean;
+  mixed_srid: boolean;
+  /** Single-column primary key; null when absent or composite. */
   primary_key: string | null;
+  /** Primary-key columns in key order; empty when the table has none. */
+  primary_key_columns: string[];
 }
 
 export interface ReadMssqlTableRequest {
@@ -1093,6 +1101,9 @@ export interface ReadMssqlTableResult {
   column_type: "geometry" | "geography";
   srid: number;
   primary_key: string | null;
+  primary_key_columns: string[];
+  mixed_geometry: boolean;
+  mixed_srid: boolean;
   feature_count: number;
 }
 
@@ -1104,9 +1115,16 @@ export interface WriteMssqlTableRequest {
   geojson: FeatureCollection;
   baseline_keys?: Array<string | number>;
   capabilities?: LayerCapabilities;
+  unchanged_geometry_keys?: Array<string | number>;
+  /** Per loaded row, the columns edited since load; limits that row's update. */
+  changed_columns?: Array<{ key: string | number; columns: string[] }>;
 }
 
 export type WriteMssqlTableResult = WritePostgisTableResult;
+
+export class MssqlWriteRejectedError extends Error {
+  override readonly name = "MssqlWriteRejectedError";
+}
 
 export class MssqlSessionExpiredError extends Error {
   override readonly name = "MssqlSessionExpiredError";
@@ -1135,19 +1153,34 @@ async function postMssql(
   try {
     res = await sidecarFetch(`${baseUrl}/mssql/${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        // The desktop diagnostics wrapper reads and strips this literal; packages cannot import from the app.
+        "x-geolibre-expected-status": "410",
+      },
       body: JSON.stringify(body),
     });
   } catch (error) {
     throw sidecarConnectionError(baseUrl, error);
   }
+
   if (res.status === 410) {
     throw new MssqlSessionExpiredError(
       await responseErrorMessage(res, "SQL Server session expired"),
     );
   }
   if (!res.ok) {
-    throw new Error(await responseErrorMessage(res, fallback));
+    const data = await responseErrorData(res);
+    const message = detailMessage(data, res.status, fallback);
+    if (
+      data !== null &&
+      typeof data === "object" &&
+      "rolled_back" in data &&
+      data.rolled_back === true
+    ) {
+      throw new MssqlWriteRejectedError(message);
+    }
+    throw new Error(message);
   }
   return res;
 }
@@ -1372,15 +1405,147 @@ export async function runSedonaSql(
   return (await res.json()) as SedonaSqlResult;
 }
 
-async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+async function responseErrorData(response: Response): Promise<unknown> {
   try {
-    const data = (await response.json()) as { detail?: unknown };
-    if (typeof data.detail === "string") return data.detail;
-    if (data.detail) return JSON.stringify(data.detail);
+    return await response.json();
   } catch {
-    // Use the fallback below when the response is not JSON.
+    return undefined;
   }
-  return `${fallback}: HTTP ${response.status}`;
+}
+
+function detailMessage(data: unknown, status: number, fallback: string): string {
+  const detail =
+    data !== null && typeof data === "object" && "detail" in data ? data.detail : undefined;
+  if (typeof detail === "string") return detail;
+  if (detail) return JSON.stringify(detail);
+  return `${fallback}: HTTP ${status}`;
+}
+
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  return detailMessage(await responseErrorData(response), response.status, fallback);
+}
+
+// --- Native object-based image analysis (OBIA) --------------------------------
+
+/** Native OBIA availability (scikit-image in the sidecar's runtime). */
+export interface ObiaNativeStatus {
+  available: boolean;
+  message: string;
+  /** Pixels a native run may read, per method. */
+  max_pixels?: Partial<Record<"slic" | "felzenszwalb", number>>;
+  /** scikit-image is being installed into the runtime; ask again later. */
+  installing?: boolean;
+}
+
+/** A native segmentation: the image, its bands and area, and the method. */
+export interface ObiaNativeSegmentation {
+  /** Local GeoTIFF path, within the sidecar's allowed roots. */
+  input_path: string;
+  bands: number[];
+  /** Full-resolution pixel window and level; the whole image when null. */
+  area: { level: number; window: [number, number, number, number] } | null;
+  method: "slic" | "felzenszwalb";
+  slic: { size: number; compactness: number } | null;
+  felzenszwalb: { scale: number; sigma: number; min_size: number } | null;
+}
+
+/** Which native object features to compute. */
+export interface ObiaNativeMeasureOptions {
+  spectral: boolean;
+  shape: boolean;
+  context: boolean;
+}
+
+/** The result files a native OBIA job writes. */
+export type ObiaNativeFile = "segments.tif" | "objects.geojson" | "features.csv";
+
+/**
+ * Whether the sidecar can segment natively. The first call installs
+ * scikit-image into the sidecar's runtime, which can take a minute.
+ */
+export async function fetchObiaNativeStatus(
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ObiaNativeStatus> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}/obia/status`);
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) throw new Error(`OBIA status failed: HTTP ${res.status}`);
+  return (await res.json()) as ObiaNativeStatus;
+}
+
+async function postObiaJob(path: string, body: unknown, baseUrl: string): Promise<ConversionJob> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) throw new Error(await responseErrorMessage(res, "Could not start the OBIA job"));
+  return (await res.json()) as ConversionJob;
+}
+
+/** Start a native segmentation job; poll it with {@link fetchConversionJob}. */
+export function startObiaNativeSegment(
+  segmentation: ObiaNativeSegmentation,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ConversionJob> {
+  return postObiaJob("/obia/segment", segmentation, baseUrl);
+}
+
+/**
+ * Start a native measurement job. It reuses the label raster of
+ * `segmentJobId` while the sidecar keeps it, and segments again otherwise.
+ */
+export function startObiaNativeMeasure(
+  segmentation: ObiaNativeSegmentation,
+  options: ObiaNativeMeasureOptions,
+  segmentJobId: string | null,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ConversionJob> {
+  return postObiaJob(
+    "/obia/measure",
+    { segmentation, options, segment_job_id: segmentJobId },
+    baseUrl,
+  );
+}
+
+/** Stop a native OBIA job. */
+export async function cancelObiaNativeJob(
+  jobId: string,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<void> {
+  try {
+    await sidecarFetch(`${baseUrl}/obia/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+    });
+  } catch {
+    // The job may already be gone; nothing to stop.
+  }
+}
+
+/** Download one result file of a finished native OBIA job. */
+export async function fetchObiaNativeFile(
+  jobId: string,
+  name: ObiaNativeFile,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<Uint8Array> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(
+      `${baseUrl}/obia/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(name)}`,
+    );
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) throw new Error(await responseErrorMessage(res, `Could not download ${name}`));
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 function sidecarConnectionError(baseUrl: string, error: unknown): Error {

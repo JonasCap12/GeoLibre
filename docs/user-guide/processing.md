@@ -40,6 +40,7 @@ Processing
 │   └─ Segment Everything
 ├─────────────────────────
 ├─ Model Builder
+├─ Object-Based Analysis
 ├─ SQL Workspace
 ├─ Python Console
 ├─ Jupyter Notebook
@@ -159,7 +160,7 @@ GeoLibre's own tools, under **Processing → GeoLibre Toolbox**.
 
 #### Engines
 
-Every vector tool can run on one of three engines, selectable in the dialog:
+The vector tools run on one of three engines, selectable in the dialog (a few, such as Reproject, need the Sidecar or Python engine):
 
 - **Client (Turf.js)**: runs entirely in the browser. No setup, works offline, and operates on the layer's GeoJSON.
 - **Sidecar (GeoPandas)**: runs on the optional Python sidecar for projection-aware results, backed by GeoPandas and Shapely. The dialog falls back to the client engine when the sidecar's optional `vector` extra is not installed.
@@ -221,7 +222,7 @@ Eight of them also offer a **Client (browser)** engine that computes on the load
 | **Mosaic / merge** | Combine several rasters into one. |
 | **Focal statistics** | Compute a moving-window statistic (mean, min, max, …) over a raster. |
 
-**Georeferencing** sits at the bottom of the same submenu: it pins a non-georeferenced image to the map with ground control points using a least-squares affine fit, reporting per-GCP and RMS residuals.
+**Download Global DEM** sits at the top of the same submenu: it downloads a DEM for the current map view or a box drawn on the map from the public AWS Terrain Tiles dataset (no API key needed), and opens in the Whitebox Toolbox dialog rather than the Raster tools dialog. **Georeferencing** sits at the bottom: it pins a non-georeferenced image to the map with ground control points using a least-squares affine fit, reporting per-GCP and RMS residuals.
 
 See the [Terrain Analysis tutorial](../tutorials/terrain-analysis.md).
 
@@ -269,7 +270,7 @@ The sidecar can also confine conversion inputs and outputs to an allowlist of di
 | **Getis-Ord Gi\* hotspots** | Per-feature hot and cold spots with significance levels. |
 | **Average nearest neighbor** | Whether a point pattern is more clustered or dispersed than random. |
 | **Kernel density (heatmap)** | A continuous density surface from a point layer. |
-| **Emerging Hot Spot** | Hot-spot trends over time from a space-time cube. |
+| **Emerging Hot Spot (space-time cube)** | Hot-spot trends over time from a space-time cube. |
 | **Composite score (suitability index)** | Normalize, weight, and combine several numeric fields into one index (0-100 by default, or 0-1), styled on the map by the score. |
 
 
@@ -344,7 +345,7 @@ Either way the tool list is the same; only the executing engine changes.
 - **Search** by name at the top of the tool list, or narrow with the **category** and **source** dropdowns.
 - **Browse by category** without opening the dialog at all: the Processing menu has a submenu per category (Conversion, Hydrology, LiDAR, Network, Projection, Raster, Remote Sensing, Terrain, Vector) with nested subcategory submenus, including the `GeoLibre (WASM)` subheading for GeoLibre's own tools. Picking a tool opens the dialog with it preselected. The catalog is bundled offline, so the menu works with no network.
 - **Fill in the form** — the dialog builds it from the tool's own parameter manifest, with a file picker for path inputs and an output-format dropdown for vector outputs. Parameters that are ground distances get a metric unit picker.
-- **Run**, and the output is added to the map. Raster outputs are Cloud Optimized GeoTIFFs. A LiDAR output from the in-browser (WASM) engine, such as a classified point cloud, is downloaded as a LAS file; load it with **Add Data → LiDAR Layer**.
+- **Run**, and the output is added to the map. Raster outputs are Cloud Optimized GeoTIFFs. A LiDAR output from the in-browser (WASM) engine, such as a classified point cloud, is added to the map as a point cloud layer (converted to COPC first when needed), and is downloaded as a file only if that fails. A LiDAR layer's **Export** menu saves it as LAS, LAZ, or COPC.
 
 ![The Whitebox Toolbox dialog, with the tool search on the left and the selected tool's generated form on the right](https://assets.geolibre.app/images/geolibre-whitebox-toolbox.webp)
 
@@ -367,6 +368,10 @@ Every run is recorded in **Processing → History**, newest first, with the tool
 - **Save** stores the model with the project, **Import** / **Export** move it between projects as a file, and **Copy Python script** puts the equivalent [`geolibre` Python](../python.md) code on the clipboard.
 
 See [Model Builder](model-builder.md) for the full guide, including node types, validation messages, how runs execute, the model file format, and Python export. The [AI Assistant](ai-assistant.md) can also author a model from a plain-language description and open it here for review before you run it.
+
+## Object-Based Analysis
+
+**Processing → Object-Based Analysis** opens a workbench in the right sidebar for object-based image analysis (OBIA). It segments a raster layer into image objects, adds them to the map as one polygon per object, and measures their spectral, shape, texture and neighborhood features, ready to label and classify. It runs entirely in the browser on the WASM engine, so it needs no sidecar. See [Object-Based Analysis](obia.md) for the full guide.
 
 ## Dashboard
 

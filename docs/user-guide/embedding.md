@@ -26,6 +26,7 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 | `loading`    | `loading=true` | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below. |
 | `data`       | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                           |
 | `style`      | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                            |
+| `dataType`   | `dataType=lidar`                                           | Marks a `data` URL whose path has no file extension as a LiDAR point cloud; pairs with `data` by position. See [Open remote data](#open-remote-data). |
 | `stac`       | `stac=https://earth-search.aws.element84.com/v1/collections/naip` | Opens the STAC Catalogs browser connected to a STAC catalog, API, or API collection. A collection URL is searched on load, so its item footprints appear as a layer. See [Open a STAC catalog](#open-a-stac-catalog). |
 | `layout`     | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
 | `toolbar`    | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`. |
@@ -34,7 +35,7 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 | `maponly`    | `maponly`                                                  | Hides all chrome (toolbar, panels, and status bar), leaving only the map. The bare flag or `true`, `1`, `yes`, `on` enable it.        |
 | `welcome`    | `welcome=0`                                                | Hides the first-launch welcome wizard. Accepts `0`, `false`, `off`, or `no`. A `url=` or `data=` deep link already suppresses it automatically. |
 | `theme`      | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.       |
-| `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`   | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. `settingUrl` is accepted as an alias. |
+| `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`   | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. A file exported from **Settings → Interface → Export...** works as-is. `settingUrl` is accepted as an alias. |
 | `tool`       | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool. |
 | `plugin`     | `plugin=swipe`                                             | Activates one or more built-in plugins, as if picked from the Plugins menu. See [Activate a plugin](#deep-linking-a-plugin). |
 
@@ -208,8 +209,8 @@ Read-only covers the keyboard too: the
 project shortcuts (Ctrl/Cmd+N, +O, +S) and the command palette (Ctrl/Cmd+K) go
 with the menus they belong to, while the View shortcuts (`[`, `]`, `n`, `u`,
 `r`) keep working since the View menu stays. Dropping a file onto the map
-imports nothing, and the plugins whose on-map control writes to the project —
-the geometry editor, Annotations, and GeoAgent — cannot be active, even if the
+imports nothing, and the plugins that write to the project — the geometry
+editor, Annotations, and GeoAgent — cannot be active, even if the
 loaded project saved them that way.
 So an embed cannot be steered into authoring by a key press, a drag, or a
 project file. Display plugins (layer control, basemaps, time slider, legend and
@@ -305,7 +306,7 @@ https://web.geolibre.app/?data=https://data.source.coop/giswqs/opengeos/dem.tif&
 
 For a ZIP containing files of the same geometry type, assign different styles by setting each Mapbox style layer's `source` to the corresponding filename stem. For example, `source: "parks"` targets `parks.geojson`, while `source: "counties"` targets `counties.geojson`. Style layers without a `source` are shared by every imported file. GeoLibre validates all filename/style matches before adding any ZIP layers.
 
-You do not need to author that JSON by hand. Open the vector layer's **Layer actions → Styles → Export GeoLibre URL style** menu. The downloaded `.geolibre.style.json` contains only symbology—not feature data—and its render-layer `source` is already set to the original GeoJSON filename stem. Host the file on a CORS-enabled server and pass its URL as `style` alongside the corresponding `data` URL. For a multi-file ZIP, export each layer's GeoLibre URL style and combine their `layers` and `sources` into one style document; layers without `source` can be used for rules shared by every ZIP member.
+You do not need to author that JSON by hand. Open the vector layer's **Layer actions → Styles → Export GeoLibre URL style** menu. The downloaded `.geolibre.style.json` contains only symbology—not feature data—and its render-layer `source` is already set to the original GeoJSON filename stem. Built-in fill patterns, their colors, and custom SVG fill patterns are preserved using GeoLibre layer metadata (see [style interchange](styling.md#style-interchange-and-url-styles)); externally hosted SVGs remain external dependencies. Host the file on a CORS-enabled server and pass its URL as `style` alongside the corresponding `data` URL. For a multi-file ZIP, export each layer's GeoLibre URL style and combine their `layers` and `sources` into one style document; layers without `source` can be used for rules shared by every ZIP member.
 
 The same file can be applied interactively to an existing vector layer through **Layer actions → Styles → Import style from file (GeoLibre URL / Mapbox GL / SLD / QML)…**. Interactive import ignores the file's query-param `source` binding and applies its supported symbology to the layer you selected, so the data filename does not need to match.
 
@@ -385,6 +386,15 @@ await map.setLayerVisibility("roads", false);
 const added = await map.addData("https://assets.geolibre.app/data/places.geojson");
 const layers = await map.listLayers();
 map.on("selectionChanged", ({ featureIds }) => console.log(featureIds));
+// Read back what the user drew or edited:
+map.on("featuresChanged", async ({ layerId, removed }) => {
+  if (removed) {
+    removeFromBackend(layerId); // the layer is gone; getLayerFeatures would reject
+    return;
+  }
+  const features = await map.getLayerFeatures(layerId);
+  saveToBackend(layerId, features);
+});
 ```
 
 ### Enabling it
@@ -407,7 +417,7 @@ For Docker, `GEOLIBRE_EMBED_ORIGINS` overrides the policy at container startup:
 ```bash
 docker run --rm -p 8080:80 \
   -e GEOLIBRE_EMBED_ORIGINS="https://portal.example.com,https://erp.example.com" \
-  geolibre-policy:local
+  ghcr.io/opengeos/geolibre:latest
 ```
 
 For a static build, the legacy `VITE_GEOLIBRE_EMBED_ORIGINS` build setting is
@@ -434,9 +444,10 @@ general-purpose data-fetching proxy — configure
 [deployment capabilities](../deployment-capabilities.md) in the runtime
 policy. A denied command rejects with `Missing <capability> capability` rather
 than silently doing nothing: `loadProject` needs `project:edit`, `addLayer` and
-`addData` need `data:add`, `openTool` needs `processing:run`, and `exportImage`
-needs `export:data`. The rest — `setView`, `highlight`, layer visibility — are
-unprivileged and always available.
+`addData` need `data:add`, `openTool` needs `processing:run`, and
+`exportImage`, `getLayerFeatures`, and `getDrawnFeatures` need `export:data`.
+The rest — `setView`, `highlight`, layer visibility — are unprivileged and
+always available.
 
 ### The typed client
 
@@ -476,10 +487,14 @@ other frame or origin is ignored. Pass the *app's* origin, not your own.
 | `setLayerVisibility(layerId, visible)` | `void`                  | Shows or hides a project layer.                                         |
 | `listLayers()`                         | `LayerSummary[]`        | `{ id, name, type, visible, opacity }` per layer.                       |
 | `setFilter(layerId, expression)`       | `void`                  | A MapLibre filter expression, or `null` to clear it.                    |
+| `setRenderer(renderer)`                | `void`                  | See [Switching renderers](#switching-renderers).                        |
+| `getRenderer()`                        | the active renderer     | `"maplibre"`, `"mapbox"`, `"cesium"`, or `"arcgis"`.                  |
 | `getViewport()`                        | `Viewport`              | `{ bbox, center, zoom, bearing, pitch }`.                               |
 | `addLayer(spec)`                       | the new layer's `id`    | Takes a project-format layer specification.                             |
 | `addData(url, options?)`               | the new layer `id`s     | Loads remote data like `?data=`; options are `{ styleUrl, fit }`.        |
 | `exportImage()`                        | a PNG `data:` URL       | The map as currently rendered.                                          |
+| `getLayerFeatures(layerId)`            | `Feature[]`             | A layer's features. See [Reading features back](#reading-features-back). |
+| `getDrawnFeatures()`                   | `Feature[]`             | The user's drawings (all Sketches layers). See [Reading features back](#reading-features-back). |
 | `on(event, listener)`                  | an unsubscribe function | Not a promise; events are the set the app posts (see below).            |
 | `disconnect()`                         | not a promise           | Removes the listener and rejects anything still in flight.              |
 
@@ -524,9 +539,13 @@ them out of the other `postMessage` traffic on your page.
 | `listLayers`       | `{}`                                                       | Returns layer summaries in the acknowledgement's `result`.                           |
 | `setFilter`        | `{ layerId, expression }`                                  | Applies a MapLibre filter expression; send `null` to clear it.                        |
 | `getViewport`      | `{}`                                                       | Returns the current camera and bounds in `result`.                                    |
+| `setRenderer`      | `{ renderer }`                                             | Switches the map renderer. See [Switching renderers](#switching-renderers).            |
+| `getRenderer`      | `{}`                                                       | Returns the active renderer in `result`.                                              |
 | `addLayer`         | `{ spec }`                                                 | Adds a project-format layer specification at runtime.                                 |
 | `addData`          | `{ url, styleUrl?, fit? }`                                 | Loads GeoJSON/API, ZIP, GeoParquet, PMTiles, or COG data without reloading the iframe. |
 | `exportImage`      | `{}`                                                       | Returns the rendered map as a PNG data URL in `result`.                               |
+| `getLayerFeatures` | `{ layerId }`                                              | Returns a layer's GeoJSON features as an array in `result`. See [Reading features back](#reading-features-back). |
+| `getDrawnFeatures` | `{}`                                                       | Returns the features of all Sketches layers as an array in `result`. See [Reading features back](#reading-features-back). |
 
 Send `{ layerId }` alone to `highlightFeature` to clear the highlight. A request
 that names features (or a filter) but matches none is rejected rather than
@@ -560,9 +579,71 @@ reporting whether it worked.
 | `ack`               | `{ requestId, ok, error, result }`                             | A message you sent with a `requestId` was applied (or rejected).  |
 | `projectLoaded`     | `{ url, name, layerIds }`                                      | A project finished loading, whoever started it.                   |
 | `selectionChanged`  | `{ layerId, featureIds }`                                      | The user (or your `highlightFeature`) changed the selection.      |
+| `rendererchange`    | `{ renderer }`                                                 | The map renderer changed.                                         |
 | `viewChanged`       | `{ bbox, center, zoom, bearing, pitch }`                       | The camera moved (throttled to about four events a second).       |
 | `toolCompleted`     | `{ id, name, status, engine, durationMs, outputLayerNames }`   | A processing run finished, successfully or not.                   |
 | `serverFileWritten` | `{ path, toolId }`                                             | A file-based tool wrote an output (conversion and raster tools).  |
+| `featuresChanged`   | `{ layerId, featureCount, removed? }`                          | A layer's features were replaced or removed (debounced, see below). |
+
+### Reading features back
+
+`addLayer` pushes features into the map; `getLayerFeatures` and
+`getDrawnFeatures` read them out again, so a host can store what the user drew
+or edited. They mirror the plugin API's read-only layer queries
+`getLayerFeatures` and `getDrawnFeatures` (see the [plugin API](../plugin-api.md))
+and the Python widget's `get_features` and `get_drawn_features`.
+
+- **Params:** the wire message `getLayerFeatures` takes `{ layerId }`, a
+  non-empty string (the typed client call is `getLayerFeatures(layerId)`).
+  `getDrawnFeatures` takes no parameters and returns the features of every
+  **Sketches** layer (where free drawings live) combined; if nothing has been
+  drawn yet the result is an empty array, not an error.
+- **Result:** an array of WGS84 GeoJSON features. Feature `id`s are returned
+  exactly as stored (strings stay strings, numbers stay numbers), so you can join
+  on them. It is a copy: nothing you do to it reaches the map. It is what the app
+  holds: for a layer that is itself a truncated subset (a SQL or Iceberg query
+  result, for example) that is the subset, not the full source.
+- **Drawings:** features in a Sketches layer carry the drawing editor's
+  bookkeeping properties (such as `__gm_shape`). Circles and text come back as
+  Point features with those properties as hints about the original shape.
+- **Errors:** an unknown `layerId` is rejected (`No layer with id "…"`). A layer
+  that holds no in-memory features, such as a raster, a tile or PMTiles layer, or
+  a remote vector source, returns an empty array. An empty array therefore
+  means "no in-memory features" (an empty layer, or a raster, tile or remote
+  source); the layer `type` from `listLayers` cannot tell these apart. A removed
+  layer is rejected like an unknown one.
+- **Capability:** `export:data`, because data leaves the app. A denied call
+  rejects with `Missing export:data capability`, like `exportImage`, and
+  `featuresChanged` is not sent either.
+
+`featuresChanged` tells you when to read. It fires when a layer's in-memory
+feature collection is replaced: drawings (including the first one, which creates
+the Sketches layer), edits, attribute edits, refreshes, and late-loaded data. It
+may fire without a content change, and it is not sent for whole project loads
+(use `projectLoaded`). It also fires for layers the host itself created with
+`addLayer` or `addData`, so do not write each event straight back as a new
+layer, or you will loop. When a layer that held features is removed it is sent at
+once as `{ layerId, featureCount: 0, removed: true }`, and a layer that stays but
+loses its in-memory features is reported with `featureCount: 0` (no `removed`).
+Events are **debounced per
+layer**: a burst of changes, such as dragging a vertex, produces one event 250 ms
+after the last change, so listen for it and then call `getLayerFeatures`. An edit made
+less than 250 ms before a renderer hand-off may be folded into the new baseline
+and not reported.
+
+```ts
+map.on("featuresChanged", async ({ layerId, featureCount, removed }) => {
+  if (removed) {
+    removeFromBackend(layerId); // the layer is gone; getLayerFeatures would reject
+    return;
+  }
+  console.log(`${layerId} now has ${featureCount} features`);
+  const features = await map.getLayerFeatures(layerId);
+  saveToBackend(layerId, features);
+});
+
+const drawings = await map.getDrawnFeatures(); // all Sketches layers, combined
+```
 
 ### A host page
 
@@ -623,10 +704,12 @@ See the [Sharing & Embedding tutorial](../tutorials/sharing-embedding.md) for a 
 
 ## Switching renderers
 
+With the [typed client](#the-typed-client):
+
 ```javascript
-client.on("rendererchange", ({ renderer }) => console.log(renderer));
-await client.setRenderer("cesium");
-const renderer = await client.getRenderer();
+map.on("rendererchange", ({ renderer }) => console.log(renderer));
+await map.setRenderer("cesium");
+const renderer = await map.getRenderer();
 ```
 
 Both methods accept or return `"maplibre"`, `"mapbox"`, `"cesium"`, or

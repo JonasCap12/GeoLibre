@@ -20,8 +20,8 @@ import {
   Grid2x2,
   Info,
   Keyboard,
-  LayoutTemplate,
   Layers,
+  LayoutTemplate,
   Link2,
   LocateFixed,
   MapPin,
@@ -32,8 +32,10 @@ import {
   Printer,
   RefreshCw,
   Save,
+  Shapes,
   Share2,
   ShieldAlert,
+  Signpost,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -53,7 +55,9 @@ import type { Command } from "../../../lib/commands";
 import { CVD_MODE_LABEL_KEYS, useCvdPreviewStore } from "../../../lib/cvd-preview-store";
 import { CVD_MODES } from "../../../lib/cvd-simulation";
 import { useLineOfSightTool } from "../../../lib/line-of-sight-store";
+import { useNavigationTool } from "../../../lib/navigation/store";
 import { masHidesDataSource } from "../../../lib/mas-build";
+import { openObiaWorkbench } from "../../../lib/obia/obia-panel";
 import { pluginDisplayName } from "../../../lib/plugin-display-name";
 import { IS_STORE_BUILD } from "../../../lib/updates";
 import type { AddDataKind } from "../AddDataDialog";
@@ -391,6 +395,12 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       run: addLayer.netcdf,
     },
     {
+      id: "add.spaceborne-lidar",
+      title: t("toolbar.command.addSpaceborneLidarLayer"),
+      group: t("toolbar.commandGroup.addData"),
+      run: addLayer.spaceborneLidar,
+    },
+    {
       id: "add.lidar",
       title: t("toolbar.command.addLidarLayer"),
       group: t("toolbar.commandGroup.addData"),
@@ -469,6 +479,15 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       keywords: "model builder pipeline chain modeler workflow graph canvas node",
       icon: Workflow,
       run: () => setModelBuilderOpen(true),
+    },
+    {
+      id: "proc.obiaWorkbench",
+      title: t("toolbar.command.obiaWorkbench"),
+      group: t("toolbar.commandGroup.processing"),
+      keywords:
+        "obia object based image analysis segmentation segment classify land cover ecognition",
+      icon: Shapes,
+      run: openObiaWorkbench,
     },
     {
       id: "proc.batchTools",
@@ -597,6 +616,20 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       group: t("toolbar.commandGroup.controls"),
       run: consent.handleToggleDirections,
     },
+    // Draws transient MapLibre style layers, so like Line of sight it is
+    // dropped where no MapLibre map exists rather than offered as a no-op.
+    ...(!capabilities.nativeMapInstance
+      ? []
+      : [
+          {
+            id: "control.turn-by-turn",
+            title: t("toolbar.item.navigation"),
+            group: t("toolbar.commandGroup.controls"),
+            keywords: "navigation turn by turn directions route routing gps drive walk bike voice",
+            icon: Signpost,
+            run: () => useNavigationTool.getState().openNavigation(),
+          },
+        ]),
     {
       id: "control.search",
       title: t("toolbar.command.toggleSearch"),
@@ -620,6 +653,12 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       title: t("toolbar.command.toggleHtmlPanel"),
       group: t("toolbar.commandGroup.controls"),
       run: panels.html.toggle,
+    },
+    {
+      id: "control.image",
+      title: t("toolbar.command.toggleImage"),
+      group: t("toolbar.commandGroup.controls"),
+      run: panels.image.toggle,
     },
     {
       id: "control.measure",

@@ -3,6 +3,7 @@
 // The EPSG tables come from geotiff-geokeys-to-proj4; both it and proj4 are
 // loaded on first use, so a session that never needs them never pays for them.
 
+import { withDatumShift } from "@geolibre/core";
 import type proj4Type from "proj4";
 
 /** A resolved EPSG CRS. */
@@ -21,8 +22,9 @@ const cache = new Map<number, Promise<EpsgProjection | null>>();
 
 /**
  * Resolve an EPSG code from the bundled tables, or null when the tables do not
- * know it. Results (including failures) are cached per code: both packages are
- * bundled, so an import error is not transient.
+ * know it or proj4 cannot build a converter for its definition. Results
+ * (including failures) are cached per code: both packages are bundled, so an
+ * import error is not transient.
  *
  * @param code - The numeric EPSG code, e.g. 2180.
  * @returns The projection, or null for an unknown code.
@@ -42,8 +44,20 @@ export function resolveEpsgProjection(code: number): Promise<EpsgProjection | nu
       const resolved = toProj4({ ProjectedCSTypeGeoKey: code });
       const raw = resolved.proj4 ?? "";
       if (!raw || resolved.errors?.CRSNotSupported) return null;
+      // The tables leave some datums' shifts out (the British National Grid,
+      // DHDN, Amersfoort...): add them, or data lands up to a few hundred
+      // metres off.
+      const definition = withDatumShift(raw.replace(/\+axis=\w+\s*/g, "").trim(), code);
+      // The tables also name projections proj4js does not implement
+      // (EPSG:6244 is +proj=col_urban), so build a converter once here. A WMS
+      // can advertise dozens of them, so this is unsupported, not a warning.
+      try {
+        proj4("EPSG:4326", definition);
+      } catch {
+        return null;
+      }
       return {
-        definition: raw.replace(/\+axis=\w+\s*/g, "").trim(),
+        definition,
         northFirst: /\+axis=ne/.test(raw),
         geographic: /\+proj=longlat\b/.test(raw),
         proj4,

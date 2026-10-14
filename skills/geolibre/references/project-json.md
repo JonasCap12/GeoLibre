@@ -81,6 +81,7 @@ reprojected.
 | `printLayout` | object | Print composer settings; omitted when default |
 | `storymap` | object | Scroll-driven chapters; omitted when there are none |
 | `widgets` / `dashboardColumns` | array / number | Dashboard charts |
+| `bookmarks` / `bookmarkGroups` | array / array | Saved views and their folders (Bookmarks panel) |
 | `styleLibrary` | array | Project-scoped Style Manager entries |
 | `metadata` | object | Free-form |
 
@@ -108,9 +109,9 @@ Useful style keys: `minZoom`, `maxZoom`, `fillColor`, `fillOpacity`,
 
 ### Layer types
 
-`geojson`, `xyz`, `raster`, `wms`, `vector-tiles`, `mbtiles`, `arcgis`,
+`geojson`, `xyz`, `raster`, `wms`, `wmts`, `vector-tiles`, `mbtiles`, `arcgis`,
 `pmtiles`, `cog`, `flatgeobuf`, `zarr`, `lidar`, `gaussian-splat`, `geoparquet`,
-`duckdb-query`, `3d-tiles`.
+`duckdb-query`, `3d-tiles`, `deckgl-viz`, `video`, `image`.
 
 ArcGIS FeatureServer layers are saved as `geojson`; MapServer and ImageServer as
 `raster`. GeoParquet imported from a local file becomes `geojson`.
