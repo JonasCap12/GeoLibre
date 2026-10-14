@@ -1,6 +1,7 @@
 import {
   BLANK_BASEMAP,
   createDefaultMapView,
+  createEmptyProject,
   detachProjectCopy,
   IMAGERY_BASEMAPS,
   newProjectBasemapStyleUrl,
@@ -21,6 +22,11 @@ import {
 import { planetaryBasemapLabel, planetaryBasemapSectionKey } from "../../lib/planetary-sections";
 import { buildRemotePmtilesBasemap, isPmtilesStyleUrl } from "../../lib/pmtiles-basemap-url";
 import { clearProjectSnapshots } from "../../lib/project-history-store";
+import {
+  fetchStartupLayerData,
+  startupLayerIds,
+  withStartupLayers,
+} from "../../lib/startup-layers";
 import { CollapsibleSection } from "../CollapsibleSection";
 import { ImageryBasemapSection } from "../panels/ImageryBasemapSection";
 import { RegionalBasemapSection } from "../panels/RegionalBasemapSection";
@@ -74,14 +80,22 @@ type BasemapChoice =
   | typeof CUSTOM_BASEMAP_ID
   | typeof BLANK_BASEMAP_ID;
 
+interface ResolvedBasemap {
+  styleUrl: string;
+  /** Celestial body for a planetary basemap; omitted for Earth. */
+  ellipsoidId?: string;
+}
+
 interface BasemapButtonProps {
   id: BasemapChoice;
   name: string;
   selected: boolean;
   onSelect: (id: BasemapChoice) => void;
+  /** Double-click selects and creates in one step, skipping the Create button. */
+  onActivate?: (id: BasemapChoice) => void;
 }
 
-function BasemapButton({ id, name, selected, onSelect }: BasemapButtonProps) {
+function BasemapButton({ id, name, selected, onSelect, onActivate }: BasemapButtonProps) {
   return (
     <button
       type="button"
@@ -94,6 +108,7 @@ function BasemapButton({ id, name, selected, onSelect }: BasemapButtonProps) {
           : "border-input bg-background",
       )}
       onClick={() => onSelect(id)}
+      onDoubleClick={onActivate ? () => onActivate(id) : undefined}
     >
       {name}
     </button>
@@ -147,7 +162,6 @@ export function NewProjectDialog({
   const customStyleUrl = customUrl.trim();
   const customIsPmtiles = isPmtilesStyleUrl(customStyleUrl);
   const isCustomSelected = selectedBasemapId === CUSTOM_BASEMAP_ID;
-  const isBlankSelected = selectedBasemapId === BLANK_BASEMAP_ID;
   // Protomaps styles need an API key (VITE_PROTOMAPS_API_KEY). It can come from
   // the build or from Settings → Environment variables, so re-resolve when the
   // dialog opens and whenever the runtime env changes; an absent key hides the
@@ -176,29 +190,25 @@ export function NewProjectDialog({
   useLayoutEffect(() => {
     if (open) setShowSavePrompt(useAppStore.getState().isDirty);
   }, [open]);
-  const selectedPreset = useMemo<PresetBasemap | undefined>(
-    () =>
-      [...OPENFREEMAP_BASEMAPS, ...protomapsPresets].find(
-        (basemap) => basemap.id === selectedBasemapId,
-      ),
-    [protomapsPresets, selectedBasemapId],
-  );
-  // Planetary basemaps are a separate list because selecting one also sets the
-  // project's celestial body (so measurements use that body's radius).
-  const selectedPlanetary = useMemo(
-    () => PLANETARY_BASEMAPS.find((basemap) => basemap.id === selectedBasemapId),
-    [selectedBasemapId],
-  );
-  // Regional basemaps are their own list too, but unlike the planetary ones
-  // they cover Earth, so selecting one leaves the project's ellipsoid alone.
-  const selectedRegional = useMemo(
-    () => REGIONAL_BASEMAPS.find((basemap) => basemap.id === selectedBasemapId),
-    [selectedBasemapId],
-  );
-  const selectedImagery = useMemo(
-    () => IMAGERY_BASEMAPS.find((basemap) => basemap.id === selectedBasemapId),
-    [selectedBasemapId],
-  );
+  // Resolves a non-custom basemap choice to what the new project needs. Both
+  // the Create button and a double-click go through here, so the basemap lists
+  // are searched in one place.
+  const resolveBasemap = (id: BasemapChoice): ResolvedBasemap | undefined => {
+    if (id === BLANK_BASEMAP_ID) return { styleUrl: BLANK_BASEMAP };
+    const preset = [...OPENFREEMAP_BASEMAPS, ...protomapsPresets].find((b) => b.id === id);
+    if (preset) return { styleUrl: preset.styleUrl };
+    // Planetary basemaps are a separate list because selecting one also sets the
+    // project's celestial body (so measurements use that body's radius).
+    const planetary = PLANETARY_BASEMAPS.find((b) => b.id === id);
+    if (planetary) return { styleUrl: planetary.styleUrl, ellipsoidId: planetary.ellipsoidId };
+    // Regional basemaps are their own list too, but unlike the planetary ones
+    // they cover Earth, so selecting one leaves the project's ellipsoid alone.
+    const regional = REGIONAL_BASEMAPS.find((b) => b.id === id);
+    if (regional) return { styleUrl: regional.styleUrl };
+    const imagery = IMAGERY_BASEMAPS.find((b) => b.id === id);
+    return imagery ? { styleUrl: imagery.styleUrl } : undefined;
+  };
+  const selectedBasemap = isCustomSelected ? undefined : resolveBasemap(selectedBasemapId);
   const isCustomUrlValid = useMemo(() => {
     if (!customStyleUrl) return false;
     try {
@@ -208,13 +218,7 @@ export function NewProjectDialog({
       return false;
     }
   }, [customStyleUrl]);
-  const canCreate = isCustomSelected
-    ? isCustomUrlValid
-    : isBlankSelected ||
-      Boolean(selectedPreset) ||
-      Boolean(selectedPlanetary) ||
-      Boolean(selectedRegional) ||
-      Boolean(selectedImagery);
+  const canCreate = isCustomSelected ? isCustomUrlValid : Boolean(selectedBasemap);
 
   const resetForm = () => {
     setSelectedBasemapId(defaultBasemapChoice());
@@ -235,23 +239,46 @@ export function NewProjectDialog({
   const createProject = () => {
     if (!canCreate) return;
 
-    const basemapStyleUrl = isCustomSelected
-      ? customIsPmtiles
+    if (isCustomSelected) {
+      const styleUrl = customIsPmtiles
         ? buildRemotePmtilesBasemap(customStyleUrl, customFlavor)
-        : customStyleUrl
-      : isBlankSelected
-        ? BLANK_BASEMAP
-        : (selectedPreset ?? selectedPlanetary ?? selectedRegional ?? selectedImagery)?.styleUrl;
-    if (basemapStyleUrl == null) return;
+        : customStyleUrl;
+      createWithBasemap(selectedBasemapId, { styleUrl });
+      return;
+    }
+    if (selectedBasemap) createWithBasemap(selectedBasemapId, selectedBasemap);
+  };
 
-    newProject({
-      name: projectName.trim() || DEFAULT_PROJECT_NAME,
-      basemapStyleUrl,
+  // Double-clicking a preset basemap creates the project straight away. The id
+  // is resolved here rather than read from state, so the result never depends
+  // on whether the first click's selection has re-rendered yet. Custom URL is
+  // excluded: it still needs a URL typed in before it can create anything.
+  const createWithBasemapId = (id: BasemapChoice) => {
+    if (id === CUSTOM_BASEMAP_ID) return;
+    const basemap = resolveBasemap(id);
+    if (basemap) createWithBasemap(id, basemap);
+  };
+
+  const createWithBasemap = (
+    basemapId: BasemapChoice,
+    { styleUrl, ellipsoidId }: ResolvedBasemap,
+  ) => {
+    const name = projectName.trim() || DEFAULT_PROJECT_NAME;
+    const options = {
+      basemapStyleUrl: styleUrl,
       // A planetary basemap seeds the matching celestial body; other basemaps
       // leave the project on the default Earth ellipsoid.
-      ellipsoidId: selectedPlanetary?.ellipsoidId,
-      mapView: selectedBasemapId === LIBERTY_3D_ID ? THREE_D_MAP_VIEW : createDefaultMapView(),
-    });
+      ellipsoidId,
+      mapView: basemapId === LIBERTY_3D_ID ? THREE_D_MAP_VIEW : createDefaultMapView(),
+    };
+    // The Startup setting's layers join every new project. Seeding the new
+    // project with them, rather than adding each layer, runs the restore
+    // passes an opened project gets (local files re-read from disk,
+    // plugin-painted layers replayed) for them too.
+    const seeded = withStartupLayers(createEmptyProject(name, options));
+    newProject({ name, ...options, layers: seeded.layers, layerGroups: seeded.layerGroups });
+    const seededIds = startupLayerIds(seeded);
+    if (seededIds.size > 0) void fetchStartupLayerData(seededIds);
     void clearProjectSnapshots().catch((error) =>
       console.error("Could not clear project history for the new project.", error),
     );
@@ -438,6 +465,7 @@ export function NewProjectDialog({
                         name={basemap.name}
                         selected={selectedBasemapId === basemap.id}
                         onSelect={setSelectedBasemapId}
+                        onActivate={createWithBasemapId}
                       />
                     ))}
                   </div>
@@ -456,6 +484,7 @@ export function NewProjectDialog({
                           name={basemap.name}
                           selected={selectedBasemapId === basemap.id}
                           onSelect={setSelectedBasemapId}
+                          onActivate={createWithBasemapId}
                         />
                       ))}
                     </div>
@@ -470,6 +499,7 @@ export function NewProjectDialog({
                 <RegionalBasemapSection
                   selectedId={selectedBasemapId}
                   onSelect={(basemap) => setSelectedBasemapId(basemap.id)}
+                  onActivate={(basemap) => createWithBasemapId(basemap.id)}
                 />
 
                 {PLANETARY_BASEMAP_GROUPS.map((group) => {
@@ -483,6 +513,7 @@ export function NewProjectDialog({
                           name={planetaryBasemapLabel(basemap, group.id)}
                           selected={selectedBasemapId === basemap.id}
                           onSelect={setSelectedBasemapId}
+                          onActivate={createWithBasemapId}
                         />
                       ))}
                     </div>
@@ -516,6 +547,7 @@ export function NewProjectDialog({
                       name="Blank"
                       selected={selectedBasemapId === BLANK_BASEMAP_ID}
                       onSelect={setSelectedBasemapId}
+                      onActivate={createWithBasemapId}
                     />
                     <BasemapButton
                       id={CUSTOM_BASEMAP_ID}

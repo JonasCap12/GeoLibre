@@ -87,6 +87,12 @@ export {
   type PluginTranslate,
   type PluginTranslateParams,
 } from "./plugin-i18n";
+export {
+  LocalizedError,
+  localizedMessage,
+  setLocalizedErrorTranslator,
+  type LocalizedErrorTranslator,
+} from "./localized-error";
 export { LAYER_CONTROL_PLUGIN_ID, maplibreLayerControlPlugin } from "./plugins/layer-control";
 export { getStyleMap } from "./plugins/style-map";
 export {
@@ -105,6 +111,7 @@ export {
 } from "./plugins/maplibre-basemap-control";
 export {
   addArcGISLayer,
+  arcGISAttributeConstraints,
   isArcGISWritableLayer,
   saveArcGISLayerEdits,
   arcGISLayerHasPendingEdits,
@@ -121,16 +128,51 @@ export {
   refreshArcGISFeatureLayer,
   reloadArcGISViewportLayer,
   restoreArcGISViewportLayers,
+  type ArcGISAttributeConstraints,
   type ArcGISLayerOptions,
   type ArcGISImageServiceRasterFunction,
   type ArcGISLayerType,
   type ArcGISMapServiceSublayer,
   type ArcGISSourceType,
 } from "./plugins/arcgis-layer";
+export type { ArcGISDomainDiagnostic } from "./plugins/arcgis-domains";
+export {
+  addArcGISAttachment,
+  arcGISAttachmentObjectId,
+  arcGISAttachmentSupport,
+  arcGISRelatedAttachmentSupport,
+  deleteArcGISAttachments,
+  downloadArcGISAttachment,
+  listArcGISAttachments,
+  updateArcGISAttachment,
+  type ArcGISAttachmentInfo,
+  type ArcGISAttachmentSource,
+  type ArcGISAttachmentSupport,
+} from "./plugins/arcgis-attachments";
+export {
+  addArcGISRelatedRecord,
+  arcGISRelatedEditSupport,
+  arcGISRelatedFields,
+  arcGISRelatedNewRecordDefaults,
+  arcGISRelatedParentKey,
+  arcGISRelatedParentObjectId,
+  arcGISRelationships,
+  deleteArcGISRelatedRecord,
+  fetchArcGISRelatedTableInfo,
+  queryArcGISRelatedRecords,
+  updateArcGISRelatedRecord,
+  type ArcGISRelatedEditSupport,
+  type ArcGISRelatedField,
+  type ArcGISRelatedRecord,
+  type ArcGISRelatedRecords,
+  type ArcGISRelatedTableInfo,
+  type ArcGISRelationship,
+} from "./plugins/arcgis-related-records";
 export {
   closeBookmarkPanel,
   closeColorbarPanel,
   closeHtmlPanel,
+  closeImagePanel,
   closeLegendPanel,
   closeMaplibreComponentControls,
   closeMeasurePanel,
@@ -142,6 +184,7 @@ export {
   isBookmarkPanelVisible,
   isColorbarPanelVisible,
   isHtmlPanelVisible,
+  isImagePanelVisible,
   isLegendPanelVisible,
   isMeasurePanelVisible,
   isMinimapPanelVisible,
@@ -156,10 +199,30 @@ export {
   openFlatGeobufAddVectorLayerPanel,
   openColorbarPanel,
   openHtmlPanel,
+  openHtmlPanelWithEntry,
+  setImageControl,
+  setImageLabels,
+  removeImageControl,
+  getImageControlStates,
+  MAX_IMAGE_CONTROLS,
+  subscribeImagePanel,
+  DEFAULT_IMAGE_STATE,
+  IMAGE_RATIO_MAX,
+  IMAGE_RATIO_MIN,
+  IMAGE_SIZE_MAX,
+  IMAGE_SIZE_MIN,
+  formatAspectRatio,
+  normalizeImageUrl,
+  isRatioHeightInRange,
+  ratioHeight,
+  parseAspectRatio,
+  type ComponentImageState,
+  type ImageSizeMode,
   openLegendPanel,
   openLegendPanelWithItems,
   LIDAR_SOURCE_KIND,
   openLidarLayerPanel,
+  addLidarLayerFromBytes,
   addLidarLayerFromUrl,
   restoreLidarLayers,
   openMeasurePanel,
@@ -245,6 +308,20 @@ export {
   type InlineZarrGrid,
 } from "./plugins/local-netcdf";
 export {
+  alongTrackKm,
+  detectSpaceborneLidarProduct,
+  openSpaceborneLidar,
+  SPACEBORNE_LIDAR_PRODUCTS,
+  type SpaceborneLidarBeam,
+  type SpaceborneLidarField,
+  type SpaceborneLidarFieldSpec,
+  type SpaceborneLidarFile,
+  type SpaceborneLidarFootprints,
+  type SpaceborneLidarProductId,
+  type SpaceborneLidarProductSpec,
+  type SpaceborneLidarReadOptions,
+} from "./plugins/spaceborne-lidar";
+export {
   closeDuckDBLayerPanel,
   getDuckDBFeatureBounds,
   getDuckDBLayerRows,
@@ -299,11 +376,15 @@ export {
   setLocalRasterPicker,
   setNonTiledRasterHandler,
   setRasterPixelInspect,
+  setUnrestorableRasterHandler,
   type LocalRasterFileReader,
   type LocalRasterPicker,
   type NonTiledRasterRequest,
   type PickedLocalRaster,
+  type UnrestorableRasterHandler,
 } from "./plugins/maplibre-raster";
+// Lets the save flow warn about local rasters a saved project cannot reload.
+export { isUnsavableLocalRaster } from "./plugins/raster-layer-sync";
 export { getSharedDeckLoadState } from "./plugins/shared-deck-overlay";
 export {
   RASTER_MAX_CLASSES,
@@ -485,6 +566,7 @@ export {
   startLayerGeometryEdit,
   endLayerGeometryEdit,
   getGeometryEditTargetLayerId,
+  selectGeometryEditFeature,
   isGeoEditorUsingRightClick,
   subscribeGeometryEdit,
   isGeoEditorAvailableForImport,
@@ -550,6 +632,15 @@ export {
   type EarthdataGisSearchResult,
   type EarthdataServiceKind,
 } from "./plugins/earthdata-gis-api";
+export { EARTHACCESS_PLUGIN_ID, maplibreEarthaccessPlugin } from "./plugins/maplibre-earthaccess";
+export {
+  CMR_SEARCH_URL,
+  EARTHDATA_PRESETS,
+  searchEarthdataCollections,
+  searchEarthdataGranules,
+  type EarthdataCollection,
+  type EarthdataGranule,
+} from "./plugins/earthaccess-api";
 export {
   DEFAULT_OPENAERIALMAP_LABELS,
   maplibreOpenAerialMapPlugin,
@@ -568,11 +659,17 @@ export {
   type FieldsOfTheWorldFileSaver,
 } from "./plugins/maplibre-fields-of-the-world";
 export {
+  SENTINEL2_EXPLORER_PLUGIN_ID,
+  maplibreSentinel2ExplorerPlugin,
+} from "./plugins/maplibre-sentinel2-explorer";
+export { registerSentinel2CompositeProtocol } from "./plugins/sentinel2-composite";
+export {
   OCEAN_DATA_PLATFORM_PLUGIN_ID,
   maplibreOceanDataPlatformPlugin,
   setOceanDataPlatformFileSaver,
   type OceanDataPlatformFileSaver,
 } from "./plugins/maplibre-ocean-data-platform";
+export { DYNAMICAL_PLUGIN_ID, maplibreDynamicalPlugin } from "./plugins/maplibre-dynamical";
 export {
   maplibreSatelliteEmbeddingsPlugin,
   SATELLITE_EMBEDDINGS_PLUGIN_ID,
@@ -623,6 +720,13 @@ export {
   type ArcGisHubPluginConfig,
   type ArcGisHubPluginInstance,
 } from "./plugins/maplibre-arcgis-hub";
+export {
+  ARCGIS_PORTAL_PLUGIN_ID,
+  maplibreArcGisPortalPlugin,
+  setArcGisPortalAuth,
+  type ArcGisPortalAuth,
+  type ArcGisPortalConnection,
+} from "./plugins/maplibre-arcgis-portal";
 export {
   DEFAULT_TENNESSEE_GIS_LABELS,
   maplibreTennesseeGisPlugin,

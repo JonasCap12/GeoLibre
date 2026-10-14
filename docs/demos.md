@@ -44,7 +44,7 @@ measurements match the body you are mapping. Switch bodies from the planet
 switcher in the Layers panel.
 
 The deep-space starfield behind each globe comes from the
-[Atmosphere Effects plugin](features.md#plugins).
+[Atmospheric Effects plugin](features.md#plugins).
 
 <table>
   <tr>
@@ -82,7 +82,7 @@ The deep-space starfield behind each globe comes from the
 ## Open data showcase
 
 <!-- demo-gallery-teaser:start -->
-100 interactive maps built from public open data, from air quality and
+105 interactive maps built from public open data, from air quality and
 earthquakes to Roman roads and the aurora, each a single `.geolibre.json`
 project you can open live, explore, and fork. A few highlights:
 

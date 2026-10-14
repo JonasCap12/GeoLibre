@@ -121,8 +121,10 @@ function isMapboxKindPluginLayer(layer: GeoLibreLayer): boolean {
       return sourceKind === "deckgl-viz";
     case "duckdb-query":
       return sourceKind === "duckdb-query";
+    // Both the shared LiDAR control and the USGS LiDAR plugin stream their
+    // point clouds through their own deck.gl overlay.
     case "lidar":
-      return external && sourceKind === "lidar-url";
+      return external && (sourceKind === "lidar-url" || sourceKind === "usgs-lidar");
     // @carbonplan/zarr-layer is a CustomLayerInterface implementation that
     // targets Mapbox GL as well as MapLibre; the Zarr control adds it to
     // whichever map hosts the control.
@@ -144,7 +146,7 @@ function isMapboxKindPluginLayer(layer: GeoLibreLayer): boolean {
       );
     case "cog":
       return external && sourceKind === "maplibre-gl-raster";
-    // OpenAerialMap's, Satellite Embeddings' and Fields of the World's search
+    // OpenAerialMap's, Satellite Embeddings', Fields of the World's and USGS 3DEP's search
     // footprints carry their GeoJSON (so the Layers panel can zoom to and
     // restyle them) but the plugin draws the fill and outline itself on
     // whichever map hosts it; compiling the record would paint them twice.
@@ -171,6 +173,8 @@ const PLUGIN_DRAWN_FOOTPRINT_KINDS = new Set([
   "openaerialmap-footprints",
   "satellite-embeddings-footprints",
   "fields-of-the-world-footprints",
+  "earthaccess-footprints",
+  "usgs-dem-footprints",
 ]);
 
 /** Whether the store record alone gives the engine something to draw. */

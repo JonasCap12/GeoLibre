@@ -23,18 +23,8 @@ import {
 import * as maplibregl from "maplibre-gl";
 import type { Feature } from "geojson";
 import { memo, useEffect, useMemo, useRef } from "react";
-import {
-  circleLayerId,
-  fillExtrusionLayerId,
-  fillLayerId,
-  lineLayerId,
-  markerLayerId,
-} from "./geojson-loader";
-import {
-  externalExtrusionLayerId,
-  mbtilesStyleLayerIds,
-  vectorTileStyleLayerIds,
-} from "./layer-sync";
+import { circleLayerId, markerLayerId } from "./geojson-loader";
+import { identifyStyleLayerIds } from "./identify-layer-ids";
 import {
   attachFeatureSelection,
   FEATURE_SELECTION_BEGIN_EVENT,
@@ -59,8 +49,12 @@ import {
   type GlobalIdentifyHit,
   type MapCanvasIdentifyAllLabels,
 } from "./identify-all-popup";
+import {
+  createIdentifyEditActionsElement,
+  type MapCanvasIdentifyEditActions,
+} from "./identify-edit-actions";
 
-export type { MapCanvasIdentifyAllLabels };
+export type { MapCanvasIdentifyAllLabels, MapCanvasIdentifyEditActions };
 import type { MapCanvasRasterIdentify } from "./raster-identify";
 export type { MapCanvasRasterIdentify, MapCanvasRasterIdentifyResult } from "./raster-identify";
 import { createMapController, type MapController } from "./map-controller";
@@ -74,7 +68,7 @@ import {
 } from "./map-identify-lifecycle";
 import { applySelectionHighlight, resolveHighlightIds, selectionFitKey } from "./map-selection";
 import { createMapResizeScheduler } from "./map-resize";
-import type { MapDiagnosticEvent } from "./map-diagnostic";
+import { type MapDiagnosticEvent, summarizeDiagnosticTile } from "./map-diagnostic";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "maplibre-gl-layer-control/style.css";
 import "./layer-control-overrides.css";
@@ -98,6 +92,11 @@ export interface MapCanvasProps {
   identifyAllLabels?: MapCanvasIdentifyAllLabels;
   /** Reads app-owned raster layers for the grouped, all-layer Identify popup. */
   identifyRasterLayerAt?: MapCanvasRasterIdentify;
+  /**
+   * Edit geometry / Edit attributes actions shown on vector Identify results
+   * (#2932). Omitted, Identify results offer no edit actions.
+   */
+  identifyEditActions?: MapCanvasIdentifyEditActions;
 }
 
 function setMapLibreIdentifyCursor(map: maplibregl.Map, active: boolean): void {
@@ -114,27 +113,6 @@ function setMapLibreIdentifyCursor(map: maplibregl.Map, active: boolean): void {
 
 function createIdentifyMessagePopupElement(layerName: string, message: string): HTMLElement {
   return createIdentifyPopupElement(layerName, { status: message });
-}
-
-function nativeIdentifyLayerIds(layer: GeoLibreLayer): string[] {
-  const nativeLayerIds = layer.metadata.nativeLayerIds;
-  return Array.isArray(nativeLayerIds)
-    ? nativeLayerIds.filter((id): id is string => typeof id === "string")
-    : [];
-}
-
-function identifyStyleLayerIds(layer: GeoLibreLayer): string[] {
-  return [
-    ...nativeIdentifyLayerIds(layer),
-    ...nativeIdentifyLayerIds(layer).map(externalExtrusionLayerId),
-    ...mbtilesStyleLayerIds(layer),
-    markerLayerId(layer.id),
-    circleLayerId(layer.id),
-    lineLayerId(layer.id),
-    fillExtrusionLayerId(layer.id),
-    fillLayerId(layer.id),
-    ...vectorTileStyleLayerIds(layer),
-  ];
 }
 
 function findFeatureId(layer: GeoLibreLayer, feature: maplibregl.MapGeoJSONFeature): string | null {
@@ -215,7 +193,7 @@ function mapErrorDiagnosticEvent(event: maplibregl.ErrorEvent): MapDiagnosticEve
       url,
       dataType: eventRecord?.dataType,
       sourceDataType: eventRecord?.sourceDataType,
-      tile: eventRecord?.tile,
+      tile: summarizeDiagnosticTile(eventRecord?.tile),
       error: event.error,
     }),
     source,
@@ -231,6 +209,7 @@ export const MapCanvas = memo(function MapCanvas({
   canUseRemoteElevation,
   identifyAllLabels = DEFAULT_IDENTIFY_ALL_LABELS,
   identifyRasterLayerAt,
+  identifyEditActions,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const controller = useRef<MapController | null>(null);
@@ -256,6 +235,9 @@ export const MapCanvas = memo(function MapCanvas({
   // Read by the photo-popup effect, which rebinds only on photo-layer changes.
   const identifyLabelsRef = useRef(identifyAllLabels);
   identifyLabelsRef.current = identifyAllLabels;
+  // Read at click time, so a new actions object does not rebind Identify.
+  const identifyEditActionsRef = useRef(identifyEditActions);
+  identifyEditActionsRef.current = identifyEditActions;
   layerGroupsRef.current = layerGroups;
   const selectedLayerId = useAppStore((s) => s.selectedLayerId);
   const selectedFeatureId = useAppStore((s) => s.selectedFeatureId);
@@ -383,6 +365,8 @@ export const MapCanvas = memo(function MapCanvas({
       // overwrite the project's saved view ~60 times a second.
       if (event?.flightCameraToken !== undefined) return;
       setMapView(mc.readView(), Boolean(event?.originalEvent));
+      // The store-sync effect below must not jump to this write (issue #3083).
+      mc.markStoreEcho(useAppStore.getState().mapView);
       // Same moveend cadence as zoom/bearing/pitch: a bar where one number is
       // live and the rest lag during a drag reads as broken.
       setCameraAltitude(mc.readCameraAltitude());
@@ -715,6 +699,11 @@ export const MapCanvas = memo(function MapCanvas({
             activate,
             identifyAllLabels,
             widest,
+            identifyEditActionsRef.current,
+            () => {
+              identifyPopup.current?.remove();
+              identifyPopup.current = null;
+            },
           );
           showPopup(content, identifyPopupShellMaxWidth(widest ? { maxWidth: widest } : undefined));
         };
@@ -1051,13 +1040,27 @@ export const MapCanvas = memo(function MapCanvas({
         }
 
         selectFeature(result.featureId);
-        showIdentifyPopup(
-          createIdentifyPopupElement(layer.name, result.properties, result.featureId, {
+        const content = createIdentifyPopupElement(
+          layer.name,
+          result.properties,
+          result.featureId,
+          {
             popup: layer.popup,
             fieldVisibility: layer.fieldVisibility,
             zoom: map.getZoom(),
-          }),
+          },
         );
+        // DuckDB rows are editable in the attribute table too, as in the
+        // grouped popup.
+        const editRow = createIdentifyEditActionsElement(
+          layer,
+          result.featureId,
+          identifyEditActionsRef.current,
+          identifyAllLabels,
+          () => removeIdentifyPopup(),
+        );
+        if (editRow) content.firstElementChild?.after(editRow);
+        showIdentifyPopup(content);
         return;
       }
 
@@ -1076,15 +1079,28 @@ export const MapCanvas = memo(function MapCanvas({
       }
 
       const featureId = findFeatureId(layer, feature);
-      showResolvedHitPopup(
-        createIdentifyPopupElement(layer.name, feature.properties ?? {}, featureId ?? feature.id, {
+      const content = createIdentifyPopupElement(
+        layer.name,
+        feature.properties ?? {},
+        featureId ?? feature.id,
+        {
           popup: layer.popup,
           fieldVisibility: layer.fieldVisibility,
           feature,
           zoom: map.getZoom(),
-        }),
-        featureId,
+        },
       );
+      const editRow = createIdentifyEditActionsElement(
+        layer,
+        featureId,
+        identifyEditActionsRef.current,
+        identifyAllLabels,
+        // Programmatic: the edit action owns the selection from here.
+        () => removeIdentifyPopup(),
+      );
+      // Under the title, above the attribute rows.
+      if (editRow) content.firstElementChild?.after(editRow);
+      showResolvedHitPopup(content, featureId);
     };
 
     map.on("click", handleIdentifyClick);
@@ -1397,8 +1413,11 @@ export const MapCanvas = memo(function MapCanvas({
     };
   }, [hoverTooltipKey]);
 
+  // applyStoreView, not applyView: the store's echo of a view the map itself
+  // wrote on moveend must not jump, or it stops any camera move a plugin or
+  // script started since (issue #3083).
   useEffect(() => {
-    controller.current?.applyView(mapView);
+    controller.current?.applyStoreView(mapView);
   }, [mapView.center[0], mapView.center[1], mapView.zoom, mapView.bearing, mapView.pitch]);
 
   // The map container sits inside a host element React owns. A control may

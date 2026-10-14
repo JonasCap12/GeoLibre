@@ -1,4 +1,13 @@
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
+import {
+  arcGISDomainError,
+  arcGISSubtypeField,
+  resolveArcGISFieldDomain,
+  type ArcGISDomain,
+  type ArcGISFeatureTemplate,
+  type ArcGISFeatureType,
+  type ArcGISSubtype,
+} from "./arcgis-domains";
 
 /** The subset of layer metadata needed to validate an edit before sending it. */
 export interface ArcGISEditInfo {
@@ -20,13 +29,42 @@ export interface ArcGISEditInfo {
   fields?: Array<{
     name: string;
     type: string;
+    alias?: string;
     editable?: boolean;
     nullable?: boolean;
     length?: number;
-    domain?: { type: string; codedValues?: Array<{ code: unknown }>; range?: number[] };
+    domain?: ArcGISDomain | null;
+    /** Value the service stores when an insert omits the field. */
+    defaultValue?: unknown;
   }>;
+  /** Field holding the service-assigned global ID, when the layer has one. */
+  globalIdField?: string;
+  /** Layer-level feature templates (layers without types). */
+  templates?: ArcGISFeatureTemplate[];
+  /** Subtype a new feature gets when none is chosen. */
+  defaultSubtypeCode?: unknown;
+  /** Field whose value selects an entry of {@link types}. */
+  typeIdField?: string;
+  /** Feature types, each optionally overriding field domains. */
+  types?: ArcGISFeatureType[];
+  /** Field whose value selects an entry of {@link subtypes}. */
+  subtypeField?: string;
+  /** Subtypes, each optionally overriding field domains. */
+  subtypes?: ArcGISSubtype[];
 }
 
+/**
+ * The edit operations GeoLibre can save to a layer, given what the service
+ * allows and what GeoLibre can represent faithfully.
+ *
+ * An M-aware layer (`hasM`) stays editable for attributes and deletes, but not
+ * for inserts: features load as GeoJSON, which has no measure values, so a new
+ * shape would be stored without the measures the layer is built around.
+ * Geometry updates on such a layer are refused by {@link planArcGISEdits}.
+ *
+ * @param info - The layer's `?f=json` metadata.
+ * @returns Which of create, update and delete may be saved.
+ */
 export function arcGISEditCapabilities(info: ArcGISEditInfo) {
   const caps = new Set(
     info.capabilities
@@ -38,20 +76,45 @@ export function arcGISEditCapabilities(info: ArcGISEditInfo) {
     info.objectIdField &&
     info.fields?.length &&
     !info.isDataVersioned &&
-    !info.hasM &&
     !info.datesInUnknownTimezone,
   );
   return {
-    create: supported && caps.has("create"),
+    create: supported && !info.hasM && caps.has("create"),
     update: supported && caps.has("update"),
     delete: supported && caps.has("delete"),
   };
 }
 
+/** A database refusing the service's own account, as SQL Server, Oracle and PostgreSQL word it. */
+const DATABASE_PERMISSION_ERROR =
+  /permission was denied|permission denied|insufficient privileges|ORA-01031|ORA-00942/i;
+
+/**
+ * Explain an edit the service's database refused.
+ *
+ * Inserting into an enterprise geodatabase runs the object ID allocation
+ * procedure (`i<n>_get_ids` on SQL Server) as the database user the service
+ * connects with, not as the signed-in ArcGIS user. Without EXECUTE on it every
+ * insert fails, whichever client sends it and however privileged the ArcGIS
+ * account, so the error is not something GeoLibre can retry around.
+ *
+ * @param description - The `error.description` of a failed edit result.
+ * @returns The description, followed by the cause when it is a database permission.
+ */
+export function describeArcGISEditError(description: string): string {
+  if (!DATABASE_PERMISSION_ERROR.test(description)) return description;
+  return `${description} The service's database account lacks a permission this edit needs. This is set in the geodatabase, not in ArcGIS: your ArcGIS sign-in does not change it, and the same edit fails from any client. Ask the data owner or DBA to grant the service's database user its edit privileges, including EXECUTE on the object ID allocation procedure that inserts use.`;
+}
+
+/** Whether a value can be an ArcGIS object ID: a non-negative safe integer. */
+function isArcGISObjectIdValue(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 export function arcGISObjectId(feature: Feature, field: string): number | undefined {
   const value = feature.properties?.[field];
   if (value == null) return undefined;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+  if (!isArcGISObjectIdValue(value)) {
     throw new Error(`Invalid ArcGIS object ID in ${field}.`);
   }
   return value;
@@ -88,17 +151,59 @@ export function reconcileArcGISRefresh(
   };
 }
 
-/** Assign stable local identities only to features freshly read from the service. */
+/**
+ * The object ID of a record freshly read from the service, recovered when the
+ * response does not carry it under the exact `objectIdField` name: from a
+ * property whose name differs only in case, or from the GeoJSON feature `id`,
+ * which ArcGIS fills from the object ID.
+ */
+function recoveredArcGISObjectId(
+  feature: Feature,
+  field: string,
+): { id: number; key?: string } | undefined {
+  const properties = feature.properties ?? {};
+  const lower = field.toLowerCase();
+  const key = Object.keys(properties).find(
+    (name) => name !== field && name.toLowerCase() === lower && properties[name] != null,
+  );
+  const value = key === undefined ? feature.id : properties[key];
+  return isArcGISObjectIdValue(value) ? { id: value, key } : undefined;
+}
+
+/**
+ * Prepare features freshly read from the service for editing: each keeps its
+ * object ID under the layer's `objectIdField` and gets it as a stable local
+ * identity, and a record the service returned twice is kept once.
+ *
+ * @param data - The downloaded features.
+ * @param field - The layer's object ID field, if it names one.
+ * @returns The features, ready to serve as an edit baseline.
+ */
 export function identifyArcGISFeatures(data: FeatureCollection, field?: string): FeatureCollection {
   if (!field) return data;
-  return {
-    ...data,
-    features: data.features.map((feature) => {
-      if (feature.id !== undefined) return feature;
-      const id = arcGISObjectId(feature, field);
-      return id === undefined ? feature : { ...feature, id };
-    }),
-  };
+  const seen = new Set<number>();
+  const features: Feature[] = [];
+  for (let feature of data.features) {
+    if (feature.properties?.[field] == null) {
+      const recovered = recoveredArcGISObjectId(feature, field);
+      if (recovered !== undefined) {
+        // Move a case-variant ID rather than copy it, so the table shows one ID column.
+        const properties = { ...feature.properties, [field]: recovered.id };
+        if (recovered.key !== undefined) delete properties[recovered.key];
+        feature = { ...feature, properties };
+      }
+    }
+    // Loading never fails on an odd ID; saving validates it with a clear error.
+    const value = feature.properties?.[field];
+    const id = isArcGISObjectIdValue(value) ? value : undefined;
+    if (id !== undefined) {
+      // Overlapping pages can repeat a record; the first copy is kept.
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    features.push(feature.id !== undefined || id === undefined ? feature : { ...feature, id });
+  }
+  return { ...data, features };
 }
 
 /** Match downloaded records by object ID so sorting never pins a viewport. */
@@ -205,13 +310,29 @@ export function arcGISGeometry(geometry: Geometry | null, info: ArcGISEditInfo):
   }
 }
 
-function attributes(
-  feature: Feature,
-  previous: Feature | undefined,
+/** Numeric text that converts to a number at save: plain decimals only. */
+const DECIMAL_TEXT = /^\s*[-+]?(\d+\.?\d*|\.\d+)\s*$/;
+
+/**
+ * The attributes an edit sends, validated against the layer's fields and
+ * domains: every attribute of a new record, or only the changed ones of an
+ * existing record. Server-managed values on a new record are left to the
+ * service; changing one on an existing record is refused.
+ *
+ * @param feature - The record as edited.
+ * @param previous - The record as last read from the service, or `undefined` for an insert.
+ * @param info - The layer or table's `?f=json` metadata.
+ * @returns The attributes to send, normalized to the fields' types.
+ */
+export function arcGISEditAttributes(
+  feature: Pick<Feature, "properties">,
+  previous: Pick<Feature, "properties"> | undefined,
   info: ArcGISEditInfo,
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const fields = new Map(info.fields?.map((f) => [f.name, f]));
+  // Domains follow the record's own (possibly just edited) type or subtype.
+  const candidate = feature.properties ?? {};
   for (const name of new Set([
     ...Object.keys(feature.properties ?? {}),
     ...Object.keys(previous?.properties ?? {}),
@@ -242,8 +363,13 @@ function attributes(
           "esriFieldTypeDate",
         ].includes(field.type)
       ) {
-        if (field.type === "esriFieldTypeDate" && typeof normalized === "string")
+        if (field.type === "esriFieldTypeDate" && typeof normalized === "string") {
           normalized = Date.parse(normalized);
+        } else if (typeof normalized === "string" && DECIMAL_TEXT.test(normalized)) {
+          // A value typed into a column that held no numbers can arrive as text.
+          // Only plain decimals convert; "0x1A" or "1e3" stay text and are rejected.
+          normalized = Number(normalized);
+        }
         if (typeof normalized !== "number" || !Number.isFinite(normalized))
           throw new Error(`Field ${name} requires a number or valid date.`);
         if (
@@ -256,23 +382,38 @@ function attributes(
       } else if (typeof normalized !== "string") throw new Error(`Field ${name} requires text.`);
       if (typeof normalized === "string" && field.length && normalized.length > field.length)
         throw new Error(`Field ${name} exceeds its maximum length.`);
-      if (
-        field.domain?.type === "codedValue" &&
-        !field.domain.codedValues?.some((entry) => entry.code === normalized)
-      )
-        throw new Error(`Field ${name} is outside its coded value domain.`);
-      if (
-        field.domain?.type === "range" &&
-        field.domain.range &&
-        typeof normalized === "number" &&
-        (normalized < field.domain.range[0] || normalized > field.domain.range[1])
-      )
-        throw new Error(`Field ${name} is outside its allowed range.`);
+      const error = arcGISDomainError(
+        name,
+        normalized,
+        resolveArcGISFieldDomain(info, name, candidate),
+      );
+      if (error) throw new Error(error);
     }
     result[name] = normalized;
   }
+  // A changed type or subtype revalidates every field whose domain it governs,
+  // including values the edit did not touch: they are never cleared or
+  // replaced, but must be corrected before the change can be saved.
+  const selector = arcGISSubtypeField(info);
+  if (previous && selector && !same(candidate[selector], previous.properties?.[selector])) {
+    for (const field of info.fields ?? []) {
+      if (field.name === selector || Object.hasOwn(result, field.name)) continue;
+      // A value the user cannot write cannot be corrected, so it cannot block the save.
+      if (field.editable === false || field.name === info.objectIdField) continue;
+      if (!Object.hasOwn(candidate, field.name)) continue;
+      const error = arcGISDomainError(
+        field.name,
+        candidate[field.name],
+        resolveArcGISFieldDomain(info, field.name, candidate),
+      );
+      if (error) throw new Error(`${error} It does not fit the new ${selector} value.`);
+    }
+  }
   return result;
 }
+
+const M_AWARE_GEOMETRY_ERROR =
+  "This ArcGIS layer stores measure (M) values, which GeoLibre cannot edit. Attribute edits and deletions can be saved; add or reshape features in ArcGIS.";
 
 export interface ArcGISEditPlan {
   adds: Array<{ feature: Feature; index: number; payload: unknown }>;
@@ -294,8 +435,12 @@ export function planArcGISEdits(
   );
   for (const feature of baseline.features) {
     const id = arcGISObjectId(feature, field);
-    if (id === undefined || previous.has(id))
-      throw new Error("ArcGIS baseline has missing or duplicate object IDs. Reload the layer.");
+    if (id === undefined)
+      throw new Error(
+        `A downloaded ArcGIS record has no ${field} value. Check that the service returns its object ID field, then reload the layer.`,
+      );
+    if (previous.has(id))
+      throw new Error(`ArcGIS returned ${field} ${id} more than once. Reload the layer.`);
     previous.set(id, feature);
   }
   const plan: ArcGISEditPlan = { adds: [], updates: [], deletes: [] };
@@ -310,7 +455,7 @@ export function planArcGISEdits(
         feature,
         index,
         payload: {
-          attributes: attributes(feature, undefined, info),
+          attributes: arcGISEditAttributes(feature, undefined, info),
           geometry: arcGISGeometry(feature.geometry, info),
         },
       });
@@ -327,6 +472,7 @@ export function planArcGISEdits(
     const geometryChanged = !same(feature.geometry, prior.geometry);
     if (geometryChanged && info.allowGeometryUpdates === false)
       throw new Error("This ArcGIS layer does not allow geometry updates.");
+    if (geometryChanged && info.hasM) throw new Error(M_AWARE_GEOMETRY_ERROR);
     if (geometryChanged && info.geometryGeneralized)
       throw new Error(
         "This layer's shapes are simplified at the current zoom. Zoom in to edit their geometry.",
@@ -335,12 +481,13 @@ export function planArcGISEdits(
       feature,
       objectId: id,
       payload: {
-        attributes: { ...attributes(feature, prior, info), [field]: id },
+        attributes: { ...arcGISEditAttributes(feature, prior, info), [field]: id },
         ...(geometryChanged ? { geometry: arcGISGeometry(feature.geometry, info) } : {}),
       },
     });
   });
   plan.deletes = [...previous.keys()].filter((id) => !seen.has(id));
+  if (plan.adds.length && info.hasM) throw new Error(M_AWARE_GEOMETRY_ERROR);
   const caps = arcGISEditCapabilities(info);
   if (
     (plan.adds.length && !caps.create) ||

@@ -489,6 +489,12 @@ function collectionAssetItem(document: Record<string, unknown>, url: string): St
         ...(start && start === end ? { datetime: start } : {}),
         ...(start && start !== end ? { start_datetime: start } : {}),
         ...(end && start !== end ? { end_datetime: end } : {}),
+        // A collection-level Zarr asset (dynamical.org) lists its variables on the collection, and
+        // zarrTargets reads them off the item.
+        ...("cube:dimensions" in document
+          ? { "cube:dimensions": document["cube:dimensions"] }
+          : {}),
+        ...("cube:variables" in document ? { "cube:variables": document["cube:variables"] } : {}),
       },
       assets,
       links: document.links as StacLink[] | undefined,
@@ -934,7 +940,7 @@ export function itemBbox(item: StacItem): [number, number, number, number] | und
 }
 
 /** A format {@link assetFormat} recognizes, and {@link visualizeAsset} knows how to add. */
-export type StacAssetFormat = "pmtiles" | "geojson" | "cog" | "parquet" | "zarr";
+export type StacAssetFormat = "pmtiles" | "geojson" | "cog" | "parquet" | "zarr" | "pointcloud";
 export type StacAssetDisplayFormat = StacAssetFormat;
 
 interface AssetFormatRule {
@@ -952,6 +958,13 @@ const ASSET_FORMATS: readonly AssetFormatRule[] = [
   { format: "cog", mediaType: "geotiff", extension: /\.tiff?($|\?)/i },
   { format: "parquet", mediaType: "parquet", extension: /\.parquet($|\?)/i },
   { format: "zarr", mediaType: "zarr", extension: /\.zarr(\/|$|\?)/i },
+  // An Icechunk repository is a Zarr hierarchy behind a manifest; isIcechunkAsset routes it to its
+  // own reader.
+  { format: "zarr", mediaType: "x-icechunk", extension: /\.icechunk(\/|$|\?)/i },
+  // LAS/LAZ/COPC (`application/vnd.laszip+copc`, `application/vnd.laszip`, `application/vnd.las`)
+  // and Entwine Point Tiles, whose root is an `ept.json` catalogs type as plain JSON or not at all
+  // (USGS 3DEP on AWS). The LiDAR control streams COPC and EPT by URL.
+  { format: "pointcloud", mediaType: "vnd.las", extension: /(\.(laz|las)|\/ept\.json)($|\?)/i },
 ];
 
 export function assetDisplayFormat(asset: StacAsset): StacAssetDisplayFormat | null {
@@ -1320,7 +1333,15 @@ export function isIcechunkAsset(asset: StacAsset, item?: StacItem): boolean {
   // Presence, not usability: naming the field at all declares the format, and an empty or
   // malformed value means no branch was named rather than that this is a plain store. Falling back
   // to the URL reader would give 404s and "unavailable"; the default branch gives the layer.
-  return "icechunk:branch" in asset || "icechunk:branch" in (item?.properties ?? {});
+  if ("icechunk:branch" in asset || "icechunk:branch" in (item?.properties ?? {})) return true;
+  // dynamical.org names no branch, only the media type (`application/x-icechunk`) and a
+  // `.icechunk` repository path.
+  if ((asset.type ?? "").toLowerCase().includes("x-icechunk")) return true;
+  try {
+    return /\.icechunk\/?$/i.test(new URL(asset.href).pathname);
+  } catch {
+    return false;
+  }
 }
 
 /**

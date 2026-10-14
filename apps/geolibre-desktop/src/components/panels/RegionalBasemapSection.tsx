@@ -8,6 +8,8 @@ interface RegionalBasemapSectionProps {
   /** Id of the currently selected basemap, so one button highlights. */
   selectedId?: string;
   onSelect: (basemap: RegionalBasemap) => void;
+  /** Double-click handler, for panels where a double-click also confirms. */
+  onActivate?: (basemap: RegionalBasemap) => void;
 }
 
 /**
@@ -29,7 +31,11 @@ interface RegionalBasemapSectionProps {
  * note go with the entries. A project that already stores the sentinel still
  * opens; this only changes what the picker offers.
  */
-export function RegionalBasemapSection({ selectedId, onSelect }: RegionalBasemapSectionProps) {
+export function RegionalBasemapSection({
+  selectedId,
+  onSelect,
+  onActivate,
+}: RegionalBasemapSectionProps) {
   const { t } = useTranslation();
   const groups = visibleRegionalBasemapGroups();
   if (groups.length === 0) return null;
@@ -62,6 +68,7 @@ export function RegionalBasemapSection({ selectedId, onSelect }: RegionalBasemap
                       : "border-input bg-background",
                   )}
                   onClick={() => onSelect(basemap)}
+                  onDoubleClick={onActivate ? () => onActivate(basemap) : undefined}
                 >
                   {basemap.name}
                 </button>

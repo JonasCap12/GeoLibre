@@ -46,6 +46,7 @@ import {
   sourceId,
   textLayerId,
 } from "./geojson-loader";
+import { loadedVectorTileFeatureBounds } from "./loaded-feature-bounds";
 import { BASEMAP_LABEL_KEY, clearLayerLabels, publishLayerLabels } from "./layer-labels";
 import {
   mbtilesStyleLayerIds,
@@ -228,6 +229,11 @@ export class MapController implements MapEngine {
   private map: maplibregl.Map | null = null;
   /** Whether {@link clampViewToPreferences} has a clamp queued on `moveend`. */
   private pendingViewClamp = false;
+  /**
+   * The store `mapView` objects {@link markStoreEcho} recorded, until their
+   * store sync reaches {@link applyStoreView} (issue #3083).
+   */
+  private storeEchoes = new WeakSet<MapViewState>();
   private navigationControl: maplibregl.NavigationControl | null = null;
   private fullscreenControl: maplibregl.FullscreenControl | null = null;
   private compassControl: ResetBearingControl | null = null;
@@ -971,6 +977,32 @@ export class MapController implements MapEngine {
   }
 
   /**
+   * Record `storeView`, the store's `mapView` object right after the map wrote
+   * its own view into the store, as an echo for {@link applyStoreView} to
+   * skip. Identity, not camera values, marks the echo: any other store write
+   * makes a new object, so a view set from outside always jumps even when its
+   * values match one the map reported.
+   */
+  markStoreEcho(storeView: MapViewState): void {
+    this.storeEchoes.add(storeView);
+  }
+
+  /**
+   * Apply a store view change to the map, except an echo recorded by
+   * {@link markStoreEcho}.
+   *
+   * The map was already at an echoed view, so the jump would do nothing but
+   * stop a camera move started since: a plugin's `fitBounds` begun in (or
+   * shortly after) the `moveend` that wrote it was cancelled a render later,
+   * where it stood (issue #3083). Views set from outside (project load, undo,
+   * collaboration, a synced pane) still jump.
+   */
+  applyStoreView(view: MapViewState): void {
+    if (this.storeEchoes.delete(view)) return;
+    this.applyView(view);
+  }
+
+  /**
    * Like {@link applyView} but animates the camera (MapLibre `easeTo`) instead
    * of jumping, for browser-style back/forward viewport navigation.
    *
@@ -1352,7 +1384,7 @@ export class MapController implements MapEngine {
     }
   }
 
-  fitLayer(layer: GeoLibreLayer): void {
+  fitLayer(layer: GeoLibreLayer): boolean {
     if (layer.type === "3d-tiles" && this.map) {
       const center = layer.metadata.center;
       if (
@@ -1371,13 +1403,12 @@ export class MapController implements MapEngine {
           pitch: Math.max(this.map.getPitch(), 60),
           zoom: Math.max(this.map.getZoom(), 14),
         });
-        return;
+        return true;
       }
     }
 
-    const bounds =
-      getLayerBounds(layer) ?? getLayerMetadataBounds(layer) ?? this.getLayerSourceBounds(layer);
-    if (!bounds || !this.map) return;
+    const bounds = this.resolveLayerBounds(layer);
+    if (!bounds || !this.map) return false;
     const box: [[number, number], [number, number]] = [
       [bounds[0], bounds[1]],
       [bounds[2], bounds[3]],
@@ -1407,7 +1438,7 @@ export class MapController implements MapEngine {
           zoom: minRenderZoom,
           duration: 800,
         });
-        return;
+        return true;
       }
     }
     // A glTF scenegraph model (e.g. a KML `<Model>`) is a 3D object: viewed
@@ -1424,10 +1455,26 @@ export class MapController implements MapEngine {
           pitch: 60,
           duration: 800,
         });
-        return;
+        return true;
       }
     }
     this.fitBounds(bounds);
+    return true;
+  }
+
+  /**
+   * A layer's extent: its own features or advertised bounds first, then its
+   * live source's bounds (TileJSON), then, for a vector-tile layer with none of
+   * those (a bare `{z}/{x}/{y}` template), the extent of the features loaded so
+   * far.
+   */
+  private resolveLayerBounds(layer: GeoLibreLayer): [number, number, number, number] | null {
+    return (
+      getLayerBounds(layer) ??
+      getLayerMetadataBounds(layer) ??
+      this.getLayerSourceBounds(layer) ??
+      loadedVectorTileFeatureBounds(this.map, layer, this.getLayerSourceIds(layer))
+    );
   }
 
   /** The layer's minimum render zoom (its tile source `minzoom`), if advertised

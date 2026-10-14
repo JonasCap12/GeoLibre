@@ -60,6 +60,7 @@ export function usePluginLabelSync(): void {
       noAddress: t("geocode.reverseNoAddress"),
       copyAddress: t("geocode.reverseCopyAddress"),
       failed: t("geocode.reverseFailed"),
+      closePopup: t("geocode.reverseClosePopup"),
     });
     setBasemapControlLabels({
       confirmStyleReplace: (name, count) => t("basemaps.confirmStyleReplace", { name, count }),
@@ -388,6 +389,11 @@ export function usePluginLabelSync(): void {
       setDefault: t("s3Browser.setDefault"),
       isDefault: t("s3Browser.isDefault"),
       pointCloud: t("s3Browser.pointCloud"),
+      project: t("s3Browser.project"),
+      openProject: t("s3Browser.openProject"),
+      openingProject: t("s3Browser.openingProject"),
+      openProjectUnsupported: t("s3Browser.openProjectUnsupported"),
+      openProjectFailed: (name, message) => t("s3Browser.openProjectFailed", { name, message }),
       select: t("s3Browser.select"),
       selectAll: t("s3Browser.selectAll"),
       addSelected: (count) => t("s3Browser.addSelected", { count }),
@@ -1019,6 +1025,7 @@ export function usePluginLabelSync(): void {
       formatPmtiles: t("stacPlugin.formatPmtiles"),
       formatParquet: t("stacPlugin.formatParquet"),
       formatZarr: t("stacPlugin.formatZarr"),
+      formatPointCloud: t("stacPlugin.formatPointCloud"),
       formatUnknown: t("stacPlugin.formatUnknown"),
       addNoTarget: t("stacPlugin.addNoTarget"),
       addIcechunkFailed: t("stacPlugin.addIcechunkFailed"),

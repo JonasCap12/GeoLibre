@@ -137,6 +137,9 @@ export function LayerPanel({
     (s) => activeInterfaceProfile(s.desktopSettings.uiProfile) === "beginner",
   );
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
+  const compactLayerList = useDesktopSettingsStore(
+    (s) => s.desktopSettings.layout.compactLayerList,
+  );
   // Same visibility rules the Add Data menu applies (profile, Mac App Store,
   // and the mobile-only database rule); the user agent is stable for the
   // session, so evaluate it once.
@@ -499,7 +502,7 @@ export function LayerPanel({
     // second in-flow position.
     <aside
       aria-label={t("sharedRail.layers")}
-      className="relative grid max-h-[min(24rem,42vh)] supports-[max-height:1dvh]:max-h-[min(24rem,42dvh)] w-full shrink-0 grid-rows-[auto_minmax(0,1fr)] border-b bg-card max-md:absolute max-md:inset-x-0 max-md:top-0 max-md:z-30 max-md:shadow-xl md:max-h-none md:w-[var(--layer-panel-width)] md:border-b-0 md:border-e"
+      className="relative grid max-h-[min(24rem,42vh)] supports-[max-height:1dvh]:max-h-[min(24rem,42dvh)] w-full shrink-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] border-b bg-card max-md:absolute max-md:inset-x-0 max-md:top-0 max-md:z-30 max-md:shadow-xl md:max-h-none md:w-[var(--layer-panel-width)] md:border-b-0 md:border-e"
     >
       <div
         role="separator"
@@ -546,7 +549,7 @@ export function LayerPanel({
           data-layer-list=""
           role="list"
           aria-label={t("sharedRail.layers")}
-          className="w-full min-w-0 space-y-1 p-2"
+          className={`w-full min-w-0 p-2 ${compactLayerList ? "space-y-0.5" : "space-y-1"}`}
         >
           {visibleLayers.map((layer, displayIndex) => {
             const group = layer.groupId ? groupById.get(layer.groupId) : undefined;

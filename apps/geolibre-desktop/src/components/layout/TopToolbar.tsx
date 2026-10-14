@@ -18,7 +18,7 @@ import {
 } from "@geolibre/plugins";
 import { Button, cn, Input } from "@geolibre/ui";
 import { Map, Moon, Sun } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useConsentGatedActions } from "../../hooks/useConsentGatedActions";
 import type { CollaborationApi } from "../../hooks/useCollaboration";
@@ -58,6 +58,7 @@ import {
   AboutDialog,
   AddDataDialog,
   AddNetcdfDialog,
+  AddSpaceborneLidarDialog,
   CommandPalette,
   GeoreferencerDialog,
   GpsTrackingDialog,
@@ -237,6 +238,7 @@ export function TopToolbar({
     isActive,
     toggle,
     setNetcdfDialogOpen: dialogs.setNetcdfDialogOpen,
+    setSpaceborneLidarDialogOpen: dialogs.setSpaceborneLidarDialogOpen,
   });
   const handleOpenPlanetaryComputer = () => openPlanetaryComputerPanel(appApi);
 
@@ -268,11 +270,13 @@ export function TopToolbar({
     addDataReady,
     ...dialogs,
   });
+  const [processingMenuOpen, setProcessingMenuOpen] = useState(false);
   // The palette lists what the menus would show under the active UI profile and
-  // platform, plus one entry per processing tool (loaded on first open).
+  // platform, plus one entry per processing tool (loaded when either searchable
+  // surface first opens).
   const paletteCommands = usePaletteCommands({
     commands: allowedCommands,
-    open: dialogs.commandPaletteOpen,
+    open: dialogs.commandPaletteOpen || processingMenuOpen,
     openNetworkTool: consent.openNetworkTool,
   });
 
@@ -339,6 +343,7 @@ export function TopToolbar({
             onShare={() => dialogs.setShareDialogOpen(true)}
             onExportHtml={() => void projectFiles.handleExportHtml()}
             onExportLayerStyles={() => void projectFiles.handleExportLayerStyles()}
+            onExportLayers={() => void projectFiles.handleExportLayers()}
             onCollaborate={() => setCollaborateDialogOpen(true)}
             onPrintLayout={() => dialogs.setPrintLayoutOpen(true)}
             onOpenOfflineBasemap={onOpenBasemapExtract}
@@ -413,7 +418,10 @@ export function TopToolbar({
             onSaveCurrentProject={projectFiles.handleSave}
             onProjectCreated={handleNewProjectCreated}
             onOpenExample={(url, signal) =>
-              projectFiles.openProjectFromShareUrl(url, { asCopy: true, signal })
+              projectFiles.openProjectFromShareUrl(url, {
+                asCopy: true,
+                signal,
+              })
             }
           />
         </MountWhenOpened>
@@ -438,7 +446,10 @@ export function TopToolbar({
           deploymentCapabilities.has("processing:run") && (
             <ProcessingMenu
               chrome={chrome}
+              commands={paletteCommands.processingCommands}
               earthEnginePanel={panels.earthEngine}
+              open={processingMenuOpen}
+              onOpenChange={setProcessingMenuOpen}
               onOpenNetworkTool={consent.openNetworkTool}
               onOpenPlanetaryComputer={handleOpenPlanetaryComputer}
               onOpenGeoreferencer={() => dialogs.setGeoreferencerOpen(true)}
@@ -634,7 +645,10 @@ export function TopToolbar({
             open={dialogs.galleryDialogOpen}
             onOpenChange={dialogs.setGalleryDialogOpen}
             onOpenProject={(url, authToken, options) =>
-              projectFiles.openProjectFromShareUrl(url, { authToken, ...options })
+              projectFiles.openProjectFromShareUrl(url, {
+                authToken,
+                ...options,
+              })
             }
           />
         </MountWhenOpened>
@@ -672,6 +686,13 @@ export function TopToolbar({
             open={dialogs.netcdfDialogOpen}
             appApi={appApi}
             onOpenChange={dialogs.setNetcdfDialogOpen}
+          />
+        </MountWhenOpened>
+        <MountWhenOpened open={dialogs.spaceborneLidarDialogOpen}>
+          <AddSpaceborneLidarDialog
+            open={dialogs.spaceborneLidarDialogOpen}
+            appApi={appApi}
+            onOpenChange={dialogs.setSpaceborneLidarDialogOpen}
           />
         </MountWhenOpened>
         <ProjectFileDialogs projectFiles={projectFiles} />

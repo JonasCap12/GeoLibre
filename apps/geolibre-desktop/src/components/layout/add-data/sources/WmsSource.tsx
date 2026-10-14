@@ -8,6 +8,8 @@ import {
   DEFAULT_WMS_LAYERS,
   GEBCO_WMS_ENDPOINT,
   GEBCO_WMS_LAYERS,
+  NLCD_WMS_ENDPOINT,
+  NLCD_WMS_LAYERS,
 } from "../constants";
 import {
   fetchWmsCapabilities,
@@ -25,7 +27,7 @@ import {
 } from "../helpers";
 import { routeWmsLayerThroughNativeProtocol } from "../../../../lib/xyz-url";
 import { isHttpWmsUrl } from "../../../../lib/native-wms-url";
-import { canReprojectWmsCrs, reprojectableWmsCrs } from "../../../../lib/wms-projected";
+import { reprojectableWmsCodes, reprojectableWmsCrs } from "../../../../lib/wms-projected";
 import { isTauri } from "../../../../lib/tauri-io";
 import { ServiceLibrarySection } from "../ServiceLibrarySection";
 import { serviceFieldBoolean, serviceFieldString, type ServiceFields } from "../service-library";
@@ -49,12 +51,6 @@ interface WmsFormCache {
   options: WmsLayerOption[];
 }
 let wmsFormCache: WmsFormCache | null = null;
-
-/** The codes among `codes` the desktop tile protocol can reproject. */
-async function reprojectableCodes(codes: string[]): Promise<string[]> {
-  const supported = await Promise.all(codes.map(canReprojectWmsCrs));
-  return codes.filter((_, index) => supported[index]);
-}
 
 export function WmsSource({
   initialUrl = "",
@@ -148,7 +144,7 @@ export function WmsSource({
   useEffect(() => {
     if (!checkedKey) return;
     let cancelled = false;
-    void reprojectableCodes(checkedKey.split(",")).then((codes) => {
+    void reprojectableWmsCodes(checkedKey.split(",")).then((codes) => {
       if (!cancelled) setReprojectable({ key: checkedKey, codes: new Set(codes) });
     });
     return () => {
@@ -301,7 +297,7 @@ export function WmsSource({
   // requests a CRS the selected layers do not offer.
   const submittedCrs = async (): Promise<string | undefined> => {
     if (!isTauri()) return undefined;
-    const choices = reprojectableReady ? crsChoices : await reprojectableCodes(advertisedCrs);
+    const choices = reprojectableReady ? crsChoices : await reprojectableWmsCodes(advertisedCrs);
     return reprojectableWmsCrs(pickWmsCrs(choices, wmsCrsPick, wmsVersion, layersAdvertiseCrs));
   };
 
@@ -557,6 +553,10 @@ export function WmsSource({
                 layers: GEBCO_WMS_LAYERS,
                 version: "1.3.0",
               },
+            },
+            {
+              label: t("addData.wms.sampleLabelNlcd"),
+              value: { endpoint: NLCD_WMS_ENDPOINT, layers: NLCD_WMS_LAYERS },
             },
           ]}
           onSelect={applyFields}

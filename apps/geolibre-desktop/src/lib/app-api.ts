@@ -25,9 +25,11 @@ import {
 import type { CesiumEngine, getPrimaryCesiumControlHost, MapEngine } from "@geolibre/map";
 import type * as GeoLibrePlugins from "@geolibre/plugins";
 import type {
+  GeoLibreActiveMapTool,
   GeoLibreCogLayerOptions,
   GeoLibreCogRenderEngine,
   GeoLibreDeckGL,
+  GeoLibreDownloadFolder,
   GeoLibreExternalNativeLayerRegistration,
   GeoLibreFileDialogOptions,
   GeoLibreRasterWindowOptions,
@@ -40,6 +42,7 @@ import type {
   PluginManager,
   TemporalLayerAdapter,
 } from "@geolibre/plugins";
+import { GEO_EDITOR_PLUGIN_ID } from "@geolibre/plugins/plugin-ids";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readDir, readFile } from "@tauri-apps/plugin-fs";
@@ -55,6 +58,7 @@ import { cogEngineDefaults } from "./cog-render-engine";
 import { appendDiagnostic } from "./diagnostics";
 import { createExternalNativeStoreLayer } from "./external-native-layer";
 import { resolvePluginAssetUrlForLoadedPlugin } from "./external-plugins";
+import { isDesktopRuntime } from "./is-mobile";
 import { fetchNativeWithWebviewFallback } from "./native-fetch-fallback";
 import { fetchUrlBytes } from "./native-http";
 import { nativeWmsTileUrl } from "./native-wms-url";
@@ -66,6 +70,9 @@ import { createPluginLayerQueries } from "./plugin-layer-queries";
 import { createPluginLayerStyleActions } from "./plugin-layer-style";
 import { createPluginLocaleApi, type PluginLocaleI18n } from "./plugin-locale";
 import { createPluginHttpSend, createPluginNativeFetch } from "./plugin-native-fetch";
+import { openProjectFromUrlForPlugin } from "./plugin-open-project";
+import { createRemoteDownload, type RemoteDownloadProgress } from "./remote-download";
+import { requestSpaceborneLidarGranule } from "./spaceborne-lidar-handoff";
 import { addPluginWfsLayer } from "./plugin-wfs-layer";
 import {
   browserSaveFallsBackToDownload,
@@ -121,9 +128,13 @@ export interface AppApiHost extends Pick<
   | "openFloatingPanel"
   | "closeFloatingPanel"
   | "getOpenFloatingPanels"
+  | "getGeometryEditTargetLayerId"
 > {
   /** The shared plugin manager, for `activatePlugin`/`deactivatePlugin`. */
-  plugins: Pick<PluginManager, "activate" | "deactivate" | "isActive" | "applyPluginState">;
+  plugins: Pick<
+    PluginManager,
+    "activate" | "deactivate" | "isActive" | "applyPluginState" | "subscribe"
+  >;
   /** The project's plugin state as it would be persisted right now. */
   projectPluginStateSnapshot: () => unknown;
   /** Writes the plugin state to the project when it differs from `previousJson`. */
@@ -191,6 +202,26 @@ function effectiveBasemapUrl(
 }
 
 /**
+ * The host tool that owns map clicks right now.
+ *
+ * Feature selection wins over Identify, and both win over the GeoEditor, which
+ * counts as active for as long as its plugin is on (its toolbar is on the map
+ * and any click may place a vertex or pick a feature to edit).
+ *
+ * @param state - The store fields Identify and feature selection live in.
+ * @param plugins - The plugin manager, read for the GeoEditor's active state.
+ * @returns The active tool, or null for ordinary map interaction.
+ */
+function activeMapTool(
+  state: Pick<AppState, "identifyLayerId" | "featureSelectionActive">,
+  plugins: Pick<PluginManager, "isActive">,
+): GeoLibreActiveMapTool {
+  if (state.featureSelectionActive) return "feature-selection";
+  if (state.identifyLayerId !== null) return "identify";
+  return plugins.isActive(GEO_EDITOR_PLUGIN_ID) ? "geo-editor" : null;
+}
+
+/**
  * Builds the {@link GeoLibreAppAPI} object handed to plugins.
  *
  * Each call returns a fresh object; members read the store and the map engine
@@ -228,7 +259,46 @@ export function createAppAPI(
       const id = store.addGeoJsonLayer(name, data, sourcePath);
       return id;
     },
+    updateGeoJsonLayer: (layerId: string, data: GeoJSON.FeatureCollection) => {
+      const state = useAppStore.getState();
+      const layer = state.layers.find((candidate) => candidate.id === layerId);
+      // Replacing the features under an open GeoEditor session would lose the
+      // edits on save, so the plugin must wait for the session to end.
+      if (layer?.type !== "geojson" || host.getGeometryEditTargetLayerId() === layerId) {
+        return false;
+      }
+      state.updateLayer(layerId, { geojson: data });
+      return true;
+    },
+    removeLayer: (layerId: string) => {
+      const state = useAppStore.getState();
+      if (state.layers.some((layer) => layer.id === layerId)) {
+        // A plugin-painted native layer's bridge lives outside the store.
+        clearExternalNativePaintBridge(layerId);
+        state.removeLayer(layerId);
+      }
+    },
     ...createPluginLayerQueries(),
+    getActiveMapTool: () => activeMapTool(useAppStore.getState(), manager),
+    onActiveMapToolChange: (callback: (tool: GeoLibreActiveMapTool) => void) => {
+      let previousTool = activeMapTool(useAppStore.getState(), manager);
+      const emitIfChanged = () => {
+        // Renderer subscriptions can cancel selection in a nested store
+        // update. Read the live state and remember the delivered value so
+        // the outer update cannot emit a stale or duplicate notification.
+        const tool = activeMapTool(useAppStore.getState(), manager);
+        if (tool === previousTool) return;
+        previousTool = tool;
+        callback(tool);
+      };
+      // The GeoEditor's on/off state lives in the plugin manager, not the store.
+      const unsubscribeStore = useAppStore.subscribe(emitIfChanged);
+      const unsubscribePlugins = manager.subscribe(emitIfChanged);
+      return () => {
+        unsubscribeStore();
+        unsubscribePlugins();
+      };
+    },
     addTileLayer: (name: string, url: string, options?: GeoLibreTileLayerOptions) =>
       store.addTileLayer(
         name,
@@ -423,6 +493,16 @@ export function createAppAPI(
       }),
     fetchArrayBuffer: fetchRemoteArrayBuffer,
     nativeFetch: isTauriRuntime() ? pluginNativeFetch() : undefined,
+    downloadRemoteFile: isDesktopRuntime()
+      ? createRemoteDownload(invoke, () => new Channel<RemoteDownloadProgress>())
+      : undefined,
+    pickDownloadFolder: isDesktopRuntime()
+      ? () => invoke<GeoLibreDownloadFolder | null>("pick_download_folder")
+      : undefined,
+    openSpaceborneLidarUrl: (url: string, fileName: string, headers?: Record<string, string>) =>
+      requestSpaceborneLidarGranule({ url, fileName, ...(headers ? { headers } : {}) }),
+    openSpaceborneLidarGranule: (data: ArrayBuffer, fileName: string) =>
+      requestSpaceborneLidarGranule({ data, fileName }),
     resolvePluginAssetUrl: resolvePluginAssetUrlForLoadedPlugin,
     activatePlugin: async (pluginId: string, state?: unknown) => {
       const activated = await manager.activate(pluginId, api);
@@ -474,6 +554,15 @@ export function createAppAPI(
         ? engine.getControlMap()
         : null;
     },
+    getCesiumControlMap: () => {
+      const engine = mapControllerRef?.current;
+      // eslint-disable-next-line local/no-renderer-kind-checks -- reaches that engine's own handle
+      return engine?.kind === "cesium" &&
+        "getControlMap" in engine &&
+        typeof engine.getControlMap === "function"
+        ? engine.getControlMap()
+        : null;
+    },
     getMapboxMap: () => {
       const engine = mapControllerRef?.current;
       // eslint-disable-next-line local/no-renderer-kind-checks -- reaches that engine's own handle
@@ -504,6 +593,12 @@ export function createAppAPI(
     getCesiumScene: () => host.getCesiumScene(mapControllerRef?.current),
     getProjectSnapshot: () => host.buildProjectSnapshot(mapControllerRef ?? { current: null }),
     openExternalUrl: (url: string) => void openExternalLink(url),
+    openProjectFromUrl: (url: string, signal?: AbortSignal) =>
+      openProjectFromUrlForPlugin(
+        url,
+        (key, fallback, params) => host.i18n.t(key as never, { defaultValue: fallback, ...params }),
+        signal,
+      ),
     pickLocalDirectoryFiles,
     // Present only on desktop (filesystem access); the Vector panel keys off its
     // presence to auto-discover shapefile sidecars instead of forcing the user

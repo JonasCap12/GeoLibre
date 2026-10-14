@@ -1,9 +1,10 @@
 // @refresh reset
-import { useAppStore } from "@geolibre/core";
+import { shouldZoomToNewLayers, useAppStore } from "@geolibre/core";
 import type { MapDiagnosticEvent, MapEngine } from "@geolibre/map";
 import { MapCanvas, rendererCapabilities } from "@geolibre/map";
 import { useTranslation } from "react-i18next";
 import {
+  addLidarLayerFromBytes,
   addRasterToMap,
   getGeometryEditTargetLayerId,
   openRasterLayerPanel,
@@ -18,11 +19,11 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { createPortal } from "react-dom";
 import { BROWSER_PANEL_ID, useRegisterBrowserPanel } from "../../hooks/useRegisterBrowserPanel";
 import { COMMENTS_PANEL_ID, useRegisterCommentsPanel } from "../../hooks/useRegisterCommentsPanel";
+import { useRegisterObiaPanel } from "../../hooks/useRegisterObiaPanel";
 import { MountWhenOpened } from "./MountWhenOpened";
-import { CommentsPanel } from "../comments/CommentsPanel";
+import { RightDockPortals } from "./RightDockPortals";
 import { CommentMapOverlay } from "../comments/CommentMapOverlay";
 import { useCommentTool } from "../comments/useCommentTool";
 import { AddCommentDialog } from "../comments/AddCommentDialog";
@@ -42,6 +43,7 @@ import {
 } from "../../hooks/usePlugins";
 import type { DataUrlLoadState } from "../../hooks/useDataUrlLoader";
 import { wikipediaLang } from "../../lib/knowledge";
+import { lidarOutputForMap } from "../../lib/lidar-export";
 import { useLineOfSightTool } from "../../lib/line-of-sight-store";
 import { projectUrlFromLocation } from "../../lib/project-url";
 import { useEmbedBridge } from "../../hooks/useEmbedBridge";
@@ -71,12 +73,14 @@ import { NetcdfSampleMarkers } from "./NetcdfSampleMarkers";
 import { NetcdfCubeSetupDialog } from "./NetcdfCubeSetupDialog";
 import { NetcdfCubeWindow } from "./NetcdfCubeWindow";
 import { NetcdfProfileWindow } from "./NetcdfProfileWindow";
+import { AlongTrackProfileWindow } from "./AlongTrackProfileWindow";
 import { hasElevationConsent } from "../../lib/elevation-consent";
 import { MapLegendPanel } from "../legend/MapLegendPanel";
 import { RasterSubsetPanel } from "./RasterSubsetPanel";
 import { BasemapExtractPanel } from "./BasemapExtractPanel";
 import { TerrainSettingsDialog } from "./TerrainSettingsDialog";
 import { LineOfSightPanel } from "./LineOfSightPanel";
+import { NavigationPanel } from "../navigation/NavigationPanel";
 import { MapContextMenu } from "./MapContextMenu";
 import { KnowledgeCardPanel } from "./KnowledgeCardPanel";
 import { KnowledgeCardConsentDialog } from "./KnowledgeCardConsentDialog";
@@ -95,11 +99,11 @@ import {
   useDiagnosticsSnapshot,
 } from "../../lib/diagnostics";
 import { createLayerFailureNotifier } from "../../lib/layer-failure-notifier";
+import { mapDiagnosticLevel } from "../../lib/map-error-notification";
 import { useCredentialStorageStatus } from "../../lib/credential-store";
 import { SectionErrorBoundary, SilentErrorBoundary } from "../common/error-boundaries";
 import { AttributeTable } from "../panels/AttributeTable";
 import { RasterAttributeTable } from "../panels/RasterAttributeTable";
-import { BrowserPanel } from "../panels/BrowserPanel";
 import { LayerPanel } from "../panels/LayerPanel";
 import { useLayerRefresh } from "../panels/layer-panel/useLayerRefresh";
 import { ViewerLayerPanel } from "../panels/ViewerLayerPanel";
@@ -152,15 +156,18 @@ import { useCollabShareLinkAutoOpen } from "../../hooks/desktop-shell/useCollabS
 import { useDataUrlFit } from "../../hooks/desktop-shell/useDataUrlFit";
 import { useDropStatus } from "../../hooks/desktop-shell/useDropStatus";
 import { useUrlLoadErrorNotices } from "../../hooks/desktop-shell/useUrlLoadErrorNotices";
+import { useWebglContextLossNotice } from "../../hooks/desktop-shell/useWebglContextLossNotice";
 import { useFileDrop } from "../../hooks/desktop-shell/useFileDrop";
 import { useKnowledgeCard } from "../../hooks/desktop-shell/useKnowledgeCard";
 import { useLayerEditActions } from "../../hooks/desktop-shell/useLayerEditActions";
+import { useIdentifyEditActions } from "../../hooks/desktop-shell/useIdentifyEditActions";
 import { useLayerImport } from "../../hooks/desktop-shell/useLayerImport";
 import { useMapControlLabels } from "../../hooks/desktop-shell/useMapControlLabels";
 import { useMapFullscreenAttribute } from "../../hooks/desktop-shell/useMapFullscreenAttribute";
 import { useNativeProjectOpenListener } from "../../hooks/desktop-shell/useNativeProjectOpenListener";
 import { usePanelResize } from "../../hooks/desktop-shell/usePanelResize";
 import { usePluginStateRestore } from "../../hooks/desktop-shell/usePluginStateRestore";
+import { useStartupPanels } from "../../hooks/desktop-shell/useStartupPanels";
 import { fetchPluginRegistry } from "../../lib/plugin-registry";
 import { usePluginDeepLink } from "../../hooks/desktop-shell/usePluginDeepLink";
 import { useRasterFileHandlers } from "../../hooks/desktop-shell/useRasterFileHandlers";
@@ -210,6 +217,8 @@ export function DesktopShell({
       pixelReadFailed: t("map.identifyAll.pixelReadFailed"),
       wmsFailed: t("map.identifyAll.wmsFailed"),
       wmsNotQueryable: t("map.identifyAll.wmsNotQueryable"),
+      editGeometry: t("map.identifyAll.editGeometry"),
+      editAttributes: t("map.identifyAll.editAttributes"),
       photo: {
         photo: t("map.identifyAll.photo"),
         noPreview: t("map.identifyAll.photoNoPreview"),
@@ -264,6 +273,7 @@ export function DesktopShell({
   // into a dedicated content host (below) that the dock slots adopt.
   useRegisterBrowserPanel();
   useRegisterCommentsPanel();
+  useRegisterObiaPanel();
   // One shared project-file-actions instance for both the toolbar and the
   // Browser panel, so their "open recent" calls coordinate their aborts (two
   // instances would race). Lifted here for the same reason as `collaboration`.
@@ -300,6 +310,7 @@ export function DesktopShell({
     browserContentEl,
     commentsContentEl,
     dockContentEl,
+    obiaContentEl,
     pluginPanelWidth,
     replaceLayersPanelIds,
     replaceStylePanelIds,
@@ -315,6 +326,8 @@ export function DesktopShell({
   const cloudWorkspace = useCloudWorkspace(mapControllerRef, mapReadyGeneration > 0);
   const { clearDropMessageLater, setCrsWarning, setDropError, setDropMessage } = useDropStatus();
   useUrlLoadErrorNotices(projectUrlLoadState?.error, dataUrlLoadState?.error);
+  const mapAreaRef = useRef<HTMLElement>(null);
+  useWebglContextLossNotice(mapAreaRef);
   const credentialStorageError = useCredentialStorageStatus((s) => s.error);
   const credentialStorageRevision = useCredentialStorageStatus((s) => s.revision);
   // A new failure bumps the revision, which re-shows a dismissed warning.
@@ -374,14 +387,22 @@ export function DesktopShell({
   }, []);
   const { shellStyle, startLayerPanelResize, startNotebookPanelResize, startStylePanelResize } =
     usePanelResize({ shellRef, verticalResizeGuideRef, layoutOptions, notebookOpen });
-  const { handleCancelGeometryEdit, handleMaterializeDuckDBLayer, handleToggleGeometryEdit } =
-    useLayerEditActions({
-      mapControllerRef,
-      setDropError,
-      setDropMessage,
-      clearDropMessageLater,
-      t,
-    });
+  const {
+    handleCancelGeometryEdit,
+    handleEditFeatureGeometry,
+    handleMaterializeDuckDBLayer,
+    handleToggleGeometryEdit,
+  } = useLayerEditActions({
+    mapControllerRef,
+    setDropError,
+    setDropMessage,
+    clearDropMessageLater,
+    t,
+  });
+  const identifyEditActions = useIdentifyEditActions({
+    canEditLayer: collaboration.canEditLayer,
+    editFeatureGeometry: handleEditFeatureGeometry,
+  });
   useTileProtocols();
   useRasterFileHandlers(mapControllerRef, t);
   // Fetching the registry also tells the credential redaction which external
@@ -440,6 +461,12 @@ export function DesktopShell({
       projectUrlLoadState?.status === "loaded" ||
       projectUrlLoadState?.status === "error",
   });
+  useStartupPanels({
+    mapControllerRef,
+    viewer: layoutOptions.viewer,
+    externalPluginsReady,
+    mapReadyGeneration,
+  });
 
   const handleMapControllerReady = useCallback(() => {
     setMapReadyGeneration((generation) => generation + 1);
@@ -497,7 +524,7 @@ export function DesktopShell({
     (event: MapDiagnosticEvent) => {
       const record = appendDiagnostic({
         category: "map",
-        level: "error",
+        level: mapDiagnosticLevel(event),
         message: event.message,
         detail: event.detail,
         source: event.source,
@@ -568,33 +595,24 @@ export function DesktopShell({
         </SectionErrorBoundary>
       ) : null}
       <div data-workspace-row="" className="relative flex min-h-0 flex-1 flex-col md:flex-row">
-        {/* The Browser panel body is portaled into its dedicated content host
-            (which the dock slots relocate between positions), so it shares the
-            app's React context and the shell owns its dock chrome. */}
-        {activePanelId === BROWSER_PANEL_ID && !layoutOptions.panelsHidden && !layoutOptions.viewer
-          ? createPortal(
-              <BrowserPanel
-                mapControllerRef={mapControllerRef}
-                onOpenRecentProject={projectFiles.handleOpenRecent}
-                onAddFilePath={addFilePath}
-              />,
-              browserContentEl,
-            )
-          : null}
-        {activePanelId === COMMENTS_PANEL_ID && !layoutOptions.panelsHidden
-          ? createPortal(
-              <CommentsPanel
-                mapControllerRef={mapControllerRef}
-                collaboration={collaboration}
-                onActivateCommentTool={commentTool.toggleTool}
-                isCommentToolActive={commentTool.isActive}
-                onShowResolvedChange={setShowResolvedComments}
-                selectedCommentId={selectedCommentId}
-                onClearSelectedComment={() => setSelectedCommentId(null)}
-              />,
-              commentsContentEl,
-            )
-          : null}
+        <RightDockPortals
+          activePanelId={activePanelId}
+          layoutOptions={layoutOptions}
+          mapControllerRef={mapControllerRef}
+          hosts={{ browser: browserContentEl, comments: commentsContentEl, obia: obiaContentEl }}
+          browser={{
+            onOpenRecentProject: projectFiles.handleOpenRecent,
+            onAddFilePath: addFilePath,
+          }}
+          comments={{
+            collaboration,
+            onActivateCommentTool: commentTool.toggleTool,
+            isCommentToolActive: commentTool.isActive,
+            onShowResolvedChange: setShowResolvedComments,
+            selectedCommentId,
+            onClearSelectedComment: () => setSelectedCommentId(null),
+          }}
+        />
         {/* Map-only / hidden-panels embeds show nothing but the map: skip the
             whole left side-dock (Layers, plugin panels, and the shared rail that
             hosts the Browser entry), not just the built-in Layers panel. */}
@@ -722,6 +740,7 @@ export function DesktopShell({
           </>
         )}
         <main
+          ref={mapAreaRef}
           // `isolate` creates a stacking context so map-panel z-indexes (up to 10000) stay below body-portaled dialogs. See #451.
           className={`relative isolate min-w-0 flex-1 overflow-hidden ${
             layoutOptions.compact ? "min-h-0" : "min-h-72 md:min-h-0"
@@ -761,6 +780,7 @@ export function DesktopShell({
                     engineRef={mapControllerRef}
                     identifyAllLabels={identifyAllLabels}
                     identifyRasterLayerAt={identifyRasterLayerAt}
+                    identifyEditActions={identifyEditActions}
                     onEngineReady={handleMapControllerReady}
                     onMapDiagnosticEvent={handleMapDiagnosticEvent}
                   />
@@ -786,6 +806,7 @@ export function DesktopShell({
                       controllerRef={mapControllerRef}
                       identifyAllLabels={identifyAllLabels}
                       identifyRasterLayerAt={identifyRasterLayerAt}
+                      identifyEditActions={identifyEditActions}
                       onMapDiagnosticEvent={handleMapDiagnosticEvent}
                       onControllerReady={handleMapControllerReady}
                     />
@@ -855,6 +876,10 @@ export function DesktopShell({
                   mapControllerRef={mapControllerRef}
                   mapReadyGeneration={mapReadyGeneration}
                 />
+                <NavigationPanel
+                  mapControllerRef={mapControllerRef}
+                  mapReadyGeneration={mapReadyGeneration}
+                />
                 <KnowledgeCardPanel
                   place={knowledgePlace}
                   lang={wikipediaLang(i18n.language)}
@@ -882,6 +907,7 @@ export function DesktopShell({
                 <BoundsRestrictionIndicator />
                 <QuickAnalysisBanner />
                 <NetcdfProfileWindow />
+                <AlongTrackProfileWindow mapControllerRef={mapControllerRef} />
                 <MountWhenOpened isOpen={(ui) => ui.styleManagerOpen}>
                   <Suspense fallback={null}>
                     <StyleManagerPanel />
@@ -1086,7 +1112,7 @@ export function DesktopShell({
           label="Attribute table"
           displayName={t("shell.section.attributeTable")}
         >
-          <AttributeTable mapControllerRef={mapControllerRef} />
+          <AttributeTable mapControllerRef={mapControllerRef} refresh={layerRefresh} />
         </SectionErrorBoundary>
       ) : null}
       {layoutOptions.attributePanelVisible ? (
@@ -1161,7 +1187,7 @@ export function DesktopShell({
         restoreError={projectHistory.restoreError}
         onRestore={projectHistory.restore}
         onRestoreLayer={projectHistory.restoreLayer}
-        getCurrentProject={projectHistory.currentProject}
+        getCurrentProjectContent={projectHistory.currentProjectContent}
       />
       <ProjectRecoveryDialog
         snapshot={projectHistory.recoverySnapshot}
@@ -1201,6 +1227,26 @@ export function DesktopShell({
               await addRasterToMap(createAppAPI(mapControllerRef), file, {
                 name,
               });
+            }}
+            onAddLidar={async (bytes, name, fileName) => {
+              try {
+                const cloud = await lidarOutputForMap(bytes, fileName);
+                const id = await addLidarLayerFromBytes(
+                  createAppAPI(mapControllerRef),
+                  cloud.bytes,
+                  {
+                    name,
+                    fileName: cloud.fileName,
+                    fit: shouldZoomToNewLayers(),
+                  },
+                );
+                return id !== null;
+              } catch (error) {
+                // Too large to convert, or unreadable by the viewer: the dialog
+                // downloads the output instead.
+                console.warn("[lidar] could not add tool output to the map", error);
+                return false;
+              }
             }}
           />
         </Suspense>

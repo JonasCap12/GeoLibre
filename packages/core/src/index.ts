@@ -8,6 +8,7 @@ export * from "./regional-basemaps";
 export * from "./imagery-basemaps";
 export * from "./basemap-policy";
 export * from "./cesium-imagery";
+export * from "./arcgis-projection";
 export * from "./geojson-z";
 export * from "./color-ramp";
 export * from "./paths";
@@ -40,6 +41,7 @@ export * from "./layer-library";
 export * from "./layer-defaults";
 export * from "./layer-style-clipboard";
 export * from "./layer-style-file";
+export * from "./layers-file";
 export * from "./layer-groups";
 export * from "./pixel-format";
 export * from "./s3";
@@ -65,6 +67,7 @@ export {
 } from "./storymap-io";
 export {
   clearHistory,
+  withoutHistory,
   canRedoProjectRestore,
   canUndoProjectRestore,
   DEFAULT_COLLABORATION_STATE,
@@ -263,3 +266,16 @@ export {
   type CesiumKmlLayerOptions,
 } from "./cesium-kml";
 export { localFileName, uniqueImportedLayerName } from "./file-name";
+export {
+  datumShiftFor,
+  installCogTilerDatumShift,
+  withDatumShift,
+  withGeoKeysDatumShift,
+} from "./datum-shift";
+
+export {
+  convertTiffYCbCrToRgb,
+  isAbbreviatedJpegCompression,
+  patchJpegCogSource,
+  withJpegTablesPatch,
+} from "./cog-jpeg-tables";

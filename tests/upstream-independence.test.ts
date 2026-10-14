@@ -237,6 +237,9 @@ describe("upstream independence", () => {
       "packages/plugins/src/plugins/gods-eye-view-global-feeds.ts",
       "packages/plugins/src/plugins/gods-eye-view-transit-feeds.ts",
       "packages/plugins/src/plugins/ocean-data-platform-api.ts",
+      // The Earthdata download relay upstream added, which also arrived naming
+      // the upstream tiles host directly.
+      "packages/plugins/src/plugins/earthdata-relay.ts",
     ];
     for (const file of callers) {
       const source = stripComments(readFileSync(join(REPO_ROOT, file), "utf8"));

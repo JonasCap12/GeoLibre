@@ -1347,6 +1347,64 @@ describe("MapController camera and query helpers", () => {
     assert.deepEqual((jump.args[0] as { center: [number, number] }).center, [12, 48]);
   });
 
+  // Issue #3083: the store's echo of the view the map wrote on moveend must
+  // not jump, or it stops a camera move started in between.
+  const storeView = (lng: number) => ({
+    center: [lng, 0] as [number, number],
+    zoom: 4,
+    bearing: 0,
+    pitch: 0,
+  });
+
+  it("does not jump to a store echo of the map's own view", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const echo = storeView(1);
+    controller.markStoreEcho(echo);
+    controller.applyStoreView(echo);
+
+    assert.ok(!fake.calls.some((c) => c.method === "jumpTo"));
+  });
+
+  it("skips each echo even when a later moveend overtook an earlier one", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const a = storeView(1);
+    const b = storeView(2);
+    controller.markStoreEcho(a);
+    controller.markStoreEcho(b);
+    controller.applyStoreView(a);
+    controller.applyStoreView(b);
+
+    assert.ok(!fake.calls.some((c) => c.method === "jumpTo"));
+  });
+
+  it("jumps to a view set from outside even when it equals an echo", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const echo = storeView(1);
+    controller.markStoreEcho(echo);
+    controller.markStoreEcho(storeView(2));
+    controller.applyStoreView({ ...echo });
+
+    assert.ok(fake.calls.some((c) => c.method === "jumpTo"));
+  });
+
+  it("skips an echo only once", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const echo = storeView(1);
+    controller.markStoreEcho(echo);
+    controller.applyStoreView(echo);
+    controller.applyStoreView(echo);
+
+    assert.equal(fake.calls.filter((c) => c.method === "jumpTo").length, 1);
+  });
+
   it("normalizes the projection to globe/mercator", () => {
     const { map } = makeFakeMap();
     const controller = controllerWith(map);
@@ -1469,6 +1527,68 @@ describe("MapController camera and query helpers", () => {
     const fit = fake.calls.find((c) => c.method === "fitBounds");
     assert.ok(fit, "zoom-to-layer fits the bounds");
     assert.ok(typeof (fit.args[1] as { maxZoom?: number }).maxZoom === "number");
+  });
+
+  it("fits a bare vector tile template to its loaded features' extent", () => {
+    const { map, fake } = makeFakeMap();
+    (map as { querySourceFeatures: unknown }).querySourceFeatures = () => [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Point", coordinates: [-74.01, 40.71] },
+      },
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Point", coordinates: [-73.97, 40.76] },
+      },
+    ];
+    (map as { getSource: unknown }).getSource = () => ({});
+    const controller = controllerWith(map);
+    const layer = pointLayer("xyz-tiles", {
+      type: "vector-tiles",
+      source: {
+        type: "vector",
+        tiles: ["https://example.com/{z}/{x}/{y}.pbf"],
+        sourceLayer: "data.buildings",
+      },
+      geojson: undefined,
+      metadata: {},
+    });
+
+    assert.equal(controller.fitLayer(layer), true);
+    const fit = fake.calls.find((c) => c.method === "fitBounds");
+    assert.ok(fit, "fits the loaded features");
+    assert.deepEqual(fit.args[0], [
+      [-74.01, 40.71],
+      [-73.97, 40.76],
+    ]);
+  });
+
+  it("reports a layer with no known extent instead of moving the camera", () => {
+    const { map, fake } = makeFakeMap();
+    // The source exists but has no features loaded yet.
+    let queried = 0;
+    (map as { querySourceFeatures: unknown }).querySourceFeatures = () => {
+      queried += 1;
+      return [];
+    };
+    (map as { getSource: unknown }).getSource = () => ({});
+    const controller = controllerWith(map);
+    const layer = pointLayer("xyz-tiles", {
+      type: "vector-tiles",
+      source: {
+        type: "vector",
+        tiles: ["https://example.com/{z}/{x}/{y}.pbf"],
+        sourceLayer: "data.buildings",
+      },
+      geojson: undefined,
+      metadata: {},
+    });
+
+    assert.equal(controller.fitLayer(layer), false);
+    assert.ok(!fake.calls.some((c) => c.method === "fitBounds" || c.method === "flyTo"));
+    assert.ok(queried > 0, "queried the loaded features before giving up");
   });
 
   it("frames a scenegraph model layer at a tilt so it is not edge-on", () => {

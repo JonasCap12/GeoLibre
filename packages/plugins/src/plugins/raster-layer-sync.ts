@@ -140,6 +140,25 @@ export function isRasterControlStoreLayer(layer: GeoLibreLayer): boolean {
 }
 
 /**
+ * Detects a raster read from a local file that a saved project cannot reload:
+ * its bytes live only behind a session blob URL (stripped on save) and it has
+ * no remote URL, nor a recorded file path the host can reopen. The browser
+ * build can never reopen a path, so every local raster qualifies there; on
+ * desktop only one added without a path (a tool output, a conversion) does.
+ * Such a layer is dropped when the project is reopened (GeoLibre#3120).
+ *
+ * @param layer - A store layer.
+ * @param canReloadPaths - Whether the host can reopen a recorded local path.
+ * @returns True when the layer's data will not survive a save and reopen.
+ */
+export function isUnsavableLocalRaster(layer: GeoLibreLayer, canReloadPaths: boolean): boolean {
+  if (!isRasterControlStoreLayer(layer) || layer.metadata.rasterSource !== "file") return false;
+  if (typeof layer.source.url === "string" && layer.source.url) return false;
+  const path = layer.metadata.localFilePath;
+  return !(canReloadPaths && typeof path === "string" && path.length > 0);
+}
+
+/**
  * Builds the store layer mirroring a control raster snapshot.
  *
  * The deck.gl COGLayer renders through the control's shared overlay, so the
@@ -268,9 +287,10 @@ export function syncRasterLayersToStore(control: RasterSyncableControl): void {
  * #1307), and `localBytesUrl` (a blob URL retaining a File-loaded raster's
  * bytes for in-browser tools). The store sync rebuilds a raster layer's
  * metadata wholesale from the control's `RasterLayerInfo` on every control
- * event, so any key not listed here is silently wiped by the next opacity
- * drag or visibility toggle — add new GeoLibre-owned raster metadata keys to
- * this list.
+ * event. Keys outside {@link CONTROL_METADATA_KEYS} survive that rebuild
+ * anyway; this list matters for a key the control can also write (kept when the
+ * control no longer reports it) or one, like STAC access, that needs its own
+ * carry-forward rule.
  */
 export const GEOLIBRE_OWNED_METADATA_KEYS = [
   "rasterSymbology",
@@ -278,6 +298,32 @@ export const GEOLIBRE_OWNED_METADATA_KEYS = [
   "localBytesUrl",
   STAC_ASSET_ACCESS_METADATA_KEY,
 ] as const;
+
+/**
+ * Every metadata key {@link createRasterStoreLayer} can write. The sync owns
+ * these and rebuilds them from the control on every event; any other key on an
+ * existing layer was put there by someone else (a plugin tagging the layer it
+ * added, e.g. the Sentinel-2 Explorer's scene id) and is carried forward.
+ */
+const CONTROL_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "customLayerType",
+  "externalDeckLayer",
+  "externalNativeLayer",
+  "identifiable",
+  "nativeLayerIds",
+  "panelCollapsed",
+  "rasterOverlayMode",
+  "rasterSource",
+  "rasterState",
+  "bandCount",
+  "bandNames",
+  "sourceIds",
+  "sourceKind",
+  "localBytesUrl",
+  "localFilePath",
+  "bounds",
+  "error",
+]);
 
 export function syncRasterLayersToStoreWithOptions(
   control: RasterSyncableControl,
@@ -323,6 +369,10 @@ export function syncRasterLayersToStoreWithOptions(
       // wholesale metadata rebuild instead of letting every control event
       // wipe them.
       const preserved: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(existing.metadata)) {
+        if (CONTROL_METADATA_KEYS.has(key) || key === STAC_ASSET_ACCESS_METADATA_KEY) continue;
+        if (value !== undefined) preserved[key] = value;
+      }
       for (const key of GEOLIBRE_OWNED_METADATA_KEYS) {
         if (key === STAC_ASSET_ACCESS_METADATA_KEY) {
           const sourceUrl = typeof layer.source.url === "string" ? layer.source.url : undefined;

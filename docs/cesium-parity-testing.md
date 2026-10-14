@@ -16,30 +16,38 @@ plugin engine declarations and menu gating have also landed.
 The baseline browser reproduction of #2275 left the status bar at `Coords: —`
 while pointing at the globe. The corrected browser reports longitude/latitude
 and clears the readout on exit. The real US cities dataset produces 109 entities
-and 109 labels. Label collision avoidance and the advanced label data-defined
-appearance fields are outside this batch, and so are the `LabelStyle` placement
-fields the globe does not read yet: `anchor`, `rotation`, `placement` (line
-placement along a path), `maxWidth`, and `allowOverlap`. A label styled with
-them on the 2D map renders centred and unrotated on the globe; #2279 is not
-complete until they are honoured. Scene-mode persistence is also not added
-here; #2291 describes it as a possible follow-up.
+and 109 labels. Since #3088 the globe also reads `anchor` (Cesium origins;
+centred for line placement, as on the 2D map), `maxWidth` (word wrapping at
+the em width, measured on a canvas), and the data-defined size, colour,
+opacity and visibility overrides, which the in-place opacity restyle
+preserves. Cesium labels have no rotation and no collision pass, so `rotation`,
+`allowOverlap` (the globe always overlaps), the priority override, and text
+along a line's path are not drawn; a line label sits at the line's midpoint.
+Store points and labels also stop drawing through the Earth: their depth-test
+distance follows the horizon (`cesium-horizon.ts`), verified with Natural Earth
+populated places over East Asia, where the Americas' cities used to show
+through. Scene-mode persistence is also not added here; #2291 describes it as
+a possible follow-up.
 
 ## Remaining work and ordering
 
 September 11 audit: the open Cesium trackers are #2259, #2261, and #2262.
 The tileset styling requirement of #2290 landed in #2337 and native CZML in
 #2350. Although #2350 closed #2290, several requirements remain.
-Clipping polygons, terrain sampling in the measurement tools, and
-Ion terrain assets (#2552) remain outstanding; Google Photorealistic 3D Tiles
+Clipping polygons and terrain sampling in the measurement tools remain outstanding;
+Ion terrain assets (#2552) are implemented as project-persisted terrain sources; Google Photorealistic 3D Tiles
 and the Asset Depot samples are now Ion quick picks in the Add Data dialog.
 The layer-format gaps listed below also remain, including ArcGIS vector tiles,
 drape picking, raw point clouds and splats, and deck.gl visualizations.
 Zarr layers render on the globe since #2261's zarr-cesium follow-up.
 
 The control host now forwards camera and geographic pointer events and reports
-the actual canvas container dimensions. It rejects source mutations as well as
-style-layer mutations. This fixes the facade contract but does not make controls
-that paint through MapLibre compatible; their engine declarations remain gated.
+the actual canvas container dimensions. Since #3088 it records source and
+style-layer mutations into a shadow style, as the ArcGIS host does, instead of
+rejecting them: mirrored store layers draw through the layer sync and other
+GeoJSON overlays as ground-clamped entities. Custom layers are still refused,
+so controls that paint through MapLibre's WebGL context stay unmountable, and
+plugins still opt in through their engine declarations.
 
 The Vite audit also found that excluding `lerc` from dependency optimization
 externalized Cesium's LERC 2 import to the top-level LERC 4 package, preventing
@@ -65,8 +73,22 @@ layers.
 | #2287 (implemented) | Native environment plugins | Sun clock and lighting on/off, atmosphere/sky box on/off and restore, spin start/stop, cloud imagery add/remove, and flight take-over/teardown verified in the real app in both themes; unit tests cover each Cesium branch against the real Cesium maths with a faked widget |
 | #2288, #2262 | Enforce declared support in activation, URL dispatch, project restore, delayed controls, and command palette | Tests cover unsupported callbacks, renderer round trips, saved settings, and compatible-control remounting. The wider control facade and native plugin implementations remain separate work. |
 | #2289 | Python/MCP/embed renderer authoring | Project round trips, renderer events, pane kinds, invalid inputs, and docs examples |
-| #2290 (Ion assets implemented) | Cesium-native authoring features | Ion assets: Cesium OSM Buildings (asset 96188) and Bing Aerial (asset 2) added from the Add Data dialog on the globe in both themes, the same project reopened on the 2D map showing the "3D only" badge, a missing token surfacing as a layer error; unit tests cover the layer builder, the asset-id parser, the globe's tileset/imagery routing through `IonResource`/`IonImageryProvider`, rebuild on asset change, and the Python/MCP builders. Tileset styling and CZML have merged. Native KML/KMZ and elevation profiles are implemented: a real San Francisco landmarks KMZ retains its billboard styles and labels in both themes; a drawn 3.43 km profile samples World Terrain from -27 m to 74 m. Tests cover document loading, cancellation, opacity, cleanup, Python serialization, and terrain-provider replacement. Google Photorealistic 3D Tiles (asset 2275207) is one of the Ion quick picks, verified loading over San Francisco with the Google Maps credit in the Cesium attribution bar; the dropdown also carries six Asset Depot samples (Japan 3D Building Data, Melbourne Photogrammetry, Melbourne Point Cloud, Montreal Point Cloud, New York City 3D Buildings, Washington DC 2017), with New York City verified rendering over Manhattan and a depot asset the account has not added reported as a load error. Clipping polygons, Terrain Measure, and Ion terrain assets remain follow-ups. |
+| #2290 (Ion assets implemented) | Cesium-native authoring features | Ion assets: Cesium OSM Buildings (asset 96188) and Bing Aerial (asset 2) added from the Add Data dialog on the globe in both themes, the same project reopened on the 2D map showing the "3D only" badge, a missing token surfacing as a layer error; unit tests cover the layer builder, the asset-id parser, the globe's tileset/imagery routing through `IonResource`/`IonImageryProvider`, rebuild on asset change, and the Python/MCP builders. Tileset styling and CZML have merged. Native KML/KMZ and elevation profiles are implemented: a real San Francisco landmarks KMZ retains its billboard styles and labels in both themes; a drawn 3.43 km profile samples World Terrain from -27 m to 74 m. Tests cover document loading, cancellation, opacity, cleanup, Python serialization, and terrain-provider replacement. Google Photorealistic 3D Tiles (asset 2275207) is one of the Ion quick picks, verified loading over San Francisco with the Google Maps credit in the Cesium attribution bar; the dropdown also carries six Asset Depot samples (Japan 3D Building Data, Melbourne Photogrammetry, Melbourne Point Cloud, Montreal Point Cloud, New York City 3D Buildings, Washington DC 2017), with New York City verified rendering over Manhattan and a depot asset the account has not added reported as a load error. Clipping polygons and Terrain Measure remain follow-ups; Ion terrain assets are implemented in #2552. |
 | #2261, #2259 | Update umbrella completion only after child requirements are verified | Accurate supported-layer predicates and an explicit record of remaining gaps |
+
+## Recording control facade (#3088)
+
+| Change | Verification |
+| --- | --- |
+| Shadow-style recording, layer events, overlay entities, rhumb arcs, horizon culling, text anchor/offset, store-derived style-layer ids, suppressed mouse-event re-dispatch, custom-layer refusal | Unit tests drive the host with real Cesium entities and data sources: per-graphic entity output, mirrored-layer suppression, layer-scoped picks through the engine's identify, `dragPan` restoring prior inputs, `fitBounds`, the recorded style round trip, and the custom-layer throw |
+| Gridlines and the DGGS grids | H3 cells at resolutions 0 and 3 with labels and click-to-identify highlight; DGGAL ISEA3H and DGGRID grids; a world graticule whose ±180° parallels draw only as rhumb ground polylines, and screen-edge labels at zoom 5 |
+| Store-mirrored web services | FEMA NFHL flood zones over New Orleans at zoom 15 (the service draws nothing at zoom 11); USGS Topo over Rocky Mountain NP; EnviroAtlas MSPA2011 across CONUS with the panel opacity reaching the imagery alpha; NASA GIBS Blue Marble bathymetry; Esri Wayback 2014 versus latest over Mission Rock |
+| STAC | Earth Search Sentinel-2 C1 L2A: bbox drawn by drag with the camera held, 20 footprints, click-to-select highlight, and a true-color COG imported as a store `cog` record (mounting the raster control previously hung the page) |
+| Catalogs | Ocean Data Platform vector tiles and 3,397 features in view; Earthdata GIS GPWv4 population density from an ImageServer `exportImage` template (a `wms` record the globe had sent to `WebMapServiceImageryProvider`); GeoLens signed IBTrACS vector tiles and Natural Earth GeoJSON; Hugging Face `aerial.tif` and a GeoJSON |
+
+Known limits: a striped (non-tiled) GeoTIFF reports an error through the
+store import, as on ArcGIS, where the MapLibre raster control offers a
+conversion; the LiDAR and splat panels stay disabled on the globe.
 
 ## Test gates
 

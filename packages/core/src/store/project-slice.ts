@@ -18,7 +18,9 @@ import {
 import { reapplyLayerJoins } from "../joins";
 import {
   DEFAULT_LEGEND_CONFIG,
+  type GeoLibreLayer,
   type GeoLibreProject,
+  type LayerGroup,
   type LegendConfig,
   type ProjectPluginState,
   type RecentProjectEntry,
@@ -74,7 +76,17 @@ export interface ProjectSlice {
    */
   setPrintLayout: (printLayout: PrintLayoutConfig) => void;
   setProjectPlugins: (projectPlugins: ProjectPluginState | null, shouldMarkDirty?: boolean) => void;
-  newProject: (options?: CreateProjectOptions & { name?: string }) => void;
+  /**
+   * Start a new, untitled project. `layers` and `layerGroups` seed it with
+   * layers (the Startup setting's default layers).
+   */
+  newProject: (
+    options?: CreateProjectOptions & {
+      name?: string;
+      layers?: GeoLibreLayer[];
+      layerGroups?: LayerGroup[];
+    },
+  ) => void;
   loadProject: (
     project: GeoLibreProject,
     path?: string | null,
@@ -135,7 +147,11 @@ export const createProjectSlice: SliceCreator<ProjectSlice> = (set, get) => ({
   markSaved: () => set({ isDirty: false }),
 
   newProject: (options = {}) => {
-    const project = createEmptyProject(options.name, options);
+    const project = {
+      ...createEmptyProject(options.name, options),
+      ...(options.layers ? { layers: options.layers } : {}),
+      ...(options.layerGroups ? { layerGroups: options.layerGroups } : {}),
+    };
     const applied = applyProjectToStore(project);
     set((s) => ({
       ...applied,
@@ -148,6 +164,7 @@ export const createProjectSlice: SliceCreator<ProjectSlice> = (set, get) => ({
       selectedFeatureIds: [],
       identifyLayerId: null,
       identifyLayerIds: null,
+      featureSelectionActive: false,
       // The copied style names a layer from the previous project, so a
       // paste in the new one would apply an orphaned entry.
       copiedLayerStyle: null,
@@ -206,6 +223,7 @@ export const createProjectSlice: SliceCreator<ProjectSlice> = (set, get) => ({
       selectedLayerId,
       selectedFeatureId: null,
       selectedFeatureIds: [],
+      featureSelectionActive: false,
       // A project that saved an Identify target (issue #2688) opens with it
       // armed; any other load disarms Identify, since the previous target
       // named a layer of the project being replaced.

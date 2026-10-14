@@ -9,8 +9,8 @@ Paste your token into **Settings → Environment Variables → Mapbox token** an
 click **Save Settings**. Like the Cesium token, it is stored on this device,
 outside the project file. Existing enabled Mapbox environment-variable rows
 move into this field when settings are saved; Cancel leaves them unchanged.
-Alternatively, launch the development server with `MAPBOX_TOKEN` in its environment. Token changes
-recreate Mapbox maps. A missing token displays setup instructions; map loading
+Alternatively, launch the development server with `MAPBOX_TOKEN` in its
+environment. Token changes recreate Mapbox maps. A missing token displays setup instructions; map loading
 errors redact access tokens. Use a public Mapbox token appropriate for your
 application. Mapbox use is associated with that token's account and is subject
 to Mapbox's terms and usage pricing.
@@ -97,6 +97,14 @@ browser against an authenticated Mapbox map):
   GeoLens _private_ rasters need a per-request API key that only MapLibre's
   `setTransformRequest` can inject; the panel reports that they need the
   MapLibre renderer, while public rasters and vector data work.
+- **USGS 3DEP** also declares Mapbox (October 2026). It reads the map through
+  the same control-map path as the catalogs above and is covered by the engine
+  tests, but has not been checked in a browser against a Mapbox map.
+- **Reverse Geocode** also declares Mapbox, and USGS NLDI's hover popup no
+  longer uses MapLibre's `Popup`, which cannot be added to a mapbox-gl map. Both
+  open their popups through `createMapPopup` (`map-popup.ts`), the same
+  `project()`-placed markup `annotation-marker.ts` uses for markers. Checked on
+  ArcGIS and the globe, not yet in a browser against a Mapbox map.
 - **Gridlines** and the **DGGS** grids (H3, S2, A5, DGGRID, DGGAL, OLC,
   Geohash, Tilecode), including cell labels and click identification. Mapbox
   Standard's root style carries no symbol layer to borrow a font from, so
@@ -161,8 +169,8 @@ browser against an authenticated Mapbox map):
 - **Layer Swipe** for native style layers. The control drives both maps only
   through the surface the two engines share, so the one map it constructed
   itself — the clipped comparison pane, until now always a MapLibre one — comes
-  from `maplibre-gl-swipe` 0.13.0's `createMap`, fed mapbox-gl's `Map`. Two Mapbox specifics come with it: the
-  pane is handed the access token explicitly (mapbox-gl reads its token from a
+  from `maplibre-gl-swipe`'s `createMap` option (added in 0.13.0), fed
+  mapbox-gl's `Map`. Two Mapbox specifics come with it: the pane is handed the access token explicitly (mapbox-gl reads its token from a
   global the app never sets, so a second map built without it renders nothing),
   and the basemap grouping is seeded with `basemapLayerIds` because a
   `mapbox://` style URL cannot be fetched — the same reason the layer control
@@ -247,15 +255,18 @@ has no `addProtocol` hook, but its source already tiles the data in a worker
 with geojson-vt. With 200,000 points, adding the layer took about 2.1 s on
 Mapbox against 1.5 s on MapLibre, a restyle 0.9 s against 0.8 s, and a data
 edit 2.1 s against 1.2 s, with a shorter longest main-thread stall on Mapbox
-(0.8 s against 0.85 s). Mapbox Standard is loaded as a local style import with a shared opacity setting.
-The Background card fades its land and water colors, labels (including ocean labels),
-3D objects, and atmosphere while preserving project layers and Standard's configuration.
+(0.8 s against 0.85 s).
+
+Mapbox Standard is loaded as a local style import with a shared opacity
+setting. The Background card fades its land and water colors, labels
+(including ocean labels), 3D objects, and atmosphere while preserving project
+layers and Standard's configuration.
 
 ## License and terms
 
 GeoLibre itself is MIT licensed, but the Mapbox renderer depends on
 [Mapbox GL JS](https://github.com/mapbox/mapbox-gl-js) v3 (`mapbox-gl`
-3.30.0 at the time of writing), which is **not** open source. Mapbox GL JS v3
+3.32.0 at the time of writing), which is **not** open source. Mapbox GL JS v3
 is distributed under the
 [Mapbox Terms of Service](https://www.mapbox.com/legal/tos) and its
 [license](https://github.com/mapbox/mapbox-gl-js/blob/main/LICENSE.txt);

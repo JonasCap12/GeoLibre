@@ -1,10 +1,11 @@
 import {
+  cascadeLayerJoinRefresh,
   createProjectLayerSerializationCache,
   parseProject,
   registerProjectRestoreHistory,
   serializeProjectWithLayerCache,
+  serializeProjectWithLayerCacheAsync,
   useAppStore,
-  type GeoLibreProject,
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
@@ -35,7 +36,10 @@ import {
   SESSION_HEARTBEAT_MS,
   shouldOfferProjectRecovery,
 } from "../lib/project-history-session";
-import { restoreLayerFromSnapshot } from "../lib/snapshot-layer-restore";
+import {
+  restoreLayerFromSnapshot,
+  restoreLayerReferencesFromSnapshot,
+} from "../lib/snapshot-layer-restore";
 import { notify } from "../lib/notify";
 const AUTOSAVE_DELAY_MS = 3_000;
 
@@ -162,13 +166,10 @@ export function useProjectHistory(mapControllerRef: RefObject<MapEngine | null>)
           if (autosaveStatus.isCurrent(attempt)) noticeAutosaveOutcome(outcome);
           autosaveStatus.settle(attempt, outcome, useAppStore.getState().isDirty);
         };
-        // Serialization runs synchronously, so its failure cannot be caught
-        // by the promise chain below. A project embedding a large vector layer
-        // serializes to more than V8's 536,870,888-byte string cap and throws
-        // `RangeError: Invalid string length`, which previously escaped as an
-        // unhandled error on every autosave tick. Autosave is best-effort — a
-        // project too large to snapshot must degrade to "no crash recovery",
-        // never to a crash.
+        // A project embedding a large vector layer serializes to more than V8's
+        // 536,870,888-byte string cap and throws `RangeError: Invalid string
+        // length`. Autosave is best-effort — a project too large to snapshot
+        // must degrade to "no crash recovery", never to a crash.
         // Built and serialized in separate steps so the two failures are not
         // conflated: a snapshot that cannot be constructed is a genuine error,
         // while one too large to stringify is an expected limit.
@@ -183,26 +184,39 @@ export function useProjectHistory(mapControllerRef: RefObject<MapEngine | null>)
           settle("failed");
           return;
         }
-        let content: string;
-        try {
-          content = serializeProjectWithLayerCache(snapshot, layerSources, layerCacheRef.current);
-        } catch (error) {
-          // Only the string-length cap means "too large"; anything else is a
-          // real serialization bug and must not be filed under a size problem,
-          // or that class of failure becomes invisible in the wild.
-          if (error instanceof RangeError) {
-            console.warn("Project autosave skipped: the project is too large to serialize.", error);
-            settle("unserializable");
-          } else {
-            console.error("Could not autosave the project.", error);
-            settle("failed");
-          }
-          return;
-        }
-        void addProjectSnapshot(content, currentProjectKey()).then(settle, (error) => {
-          console.error("Could not autosave the project.", error);
-          settle("failed");
-        });
+        // Serialized in slices that hand the main thread back between layers,
+        // so a large project is not one long freeze. The key is read now: the
+        // project may be switched while the slices run.
+        // The timestamp is taken now too, so a slow serialization cannot file
+        // an older edit as newer than a later autosave.
+        const projectKey = currentProjectKey();
+        const createdAt = new Date().toISOString();
+        void serializeProjectWithLayerCacheAsync(
+          snapshot,
+          layerSources,
+          layerCacheRef.current,
+        ).then(
+          (content) =>
+            addProjectSnapshot(content, projectKey, createdAt).then(settle, (error) => {
+              console.error("Could not autosave the project.", error);
+              settle("failed");
+            }),
+          (error) => {
+            // Only the string-length cap means "too large"; anything else is a
+            // real serialization bug and must not be filed under a size problem,
+            // or that class of failure becomes invisible in the wild.
+            if (error instanceof RangeError) {
+              console.warn(
+                "Project autosave skipped: the project is too large to serialize.",
+                error,
+              );
+              settle("unserializable");
+            } else {
+              console.error("Could not autosave the project.", error);
+              settle("failed");
+            }
+          },
+        );
       }, AUTOSAVE_DELAY_MS);
     });
     return () => {
@@ -239,16 +253,16 @@ export function useProjectHistory(mapControllerRef: RefObject<MapEngine | null>)
   );
 
   /**
-   * The current project in the shape a snapshot is read back in (serialized
-   * and re-parsed), so comparing it with a snapshot reports real edits rather
-   * than in-memory versus on-disk shape differences.
+   * The current project serialized the way a snapshot is stored, so comparing
+   * it with a snapshot (after both are parsed the same way, in the compare
+   * worker) reports real edits rather than in-memory versus on-disk shape
+   * differences. Reuses the autosave layer cache, so unchanged layers are not
+   * re-serialized.
    */
-  const currentProject = useCallback((): GeoLibreProject => {
+  const currentProjectContent = useCallback((): string => {
     const layerSources = useAppStore.getState().layers;
     const snapshot = buildProjectSnapshot(mapControllerRef);
-    return parseProject(
-      serializeProjectWithLayerCache(snapshot, layerSources, layerCacheRef.current),
-    );
+    return serializeProjectWithLayerCache(snapshot, layerSources, layerCacheRef.current);
   }, [mapControllerRef]);
 
   /**
@@ -260,14 +274,26 @@ export function useProjectHistory(mapControllerRef: RefObject<MapEngine | null>)
       setRestoreError(null);
       try {
         const state = useAppStore.getState();
-        const layers = restoreLayerFromSnapshot(
+        const project = parseProject(snapshot.content);
+        const restoredLayers = restoreLayerFromSnapshot(
           { layers: state.layers, layerGroups: state.layerGroups },
-          parseProject(snapshot.content),
+          project,
           layerId,
         );
-        if (!layers) throw new Error(`Snapshot has no layer ${layerId}.`);
+        if (!restoredLayers) throw new Error(`Snapshot has no layer ${layerId}.`);
+        // Layers that join on the restored one re-derive their columns from it,
+        // as they do after any change to a join source.
+        const layers = cascadeLayerJoinRefresh(restoredLayers, layerId);
+        // Deleting a layer scrubbed every reference to it, so a re-inserted
+        // layer also gets back its widgets, comments, legend entries,
+        // story-map rows, pane visibility and Print Layout blocks. A layer
+        // that still exists kept its references; leave those as they are.
+        const wasDeleted = !state.layers.some((layer) => layer.id === layerId);
+        const references = wasDeleted
+          ? restoreLayerReferencesFromSnapshot(state, project, layerId)
+          : {};
         // One store write, so one Undo step reverts the whole restore.
-        useAppStore.setState({ layers, isDirty: true });
+        useAppStore.setState({ layers, ...references, isDirty: true });
         return true;
       } catch (error) {
         console.error("Could not restore the layer from the snapshot.", error);
@@ -299,7 +325,7 @@ export function useProjectHistory(mapControllerRef: RefObject<MapEngine | null>)
     refresh,
     restore,
     restoreLayer,
-    currentProject,
+    currentProjectContent,
     discardRecovery,
     dismissRecovery,
     clearRestoreError,

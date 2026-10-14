@@ -4,11 +4,13 @@
 
 import type { ColorbarGuiControl, HtmlGuiControl, LegendGuiControl } from "maplibre-gl-components";
 import type { GeoLibreMapControlPosition } from "../../types";
+import { type ComponentImageState, normalizeImageStates } from "./image-model";
 
 export interface ComponentsProjectState {
   colorbar?: ComponentColorbarGuiState;
   legend?: ComponentLegendGuiState;
   html?: ComponentHtmlGuiState;
+  images?: ComponentImageState[];
 }
 
 interface ComponentColorbarGuiEntryState {
@@ -120,7 +122,7 @@ const DEFAULT_LEGEND_GUI_ENTRY: ComponentLegendGuiEntryState = {
 
 const DEFAULT_HTML_GUI_ENTRY: ComponentHtmlGuiEntryState = {
   title: "Info",
-  html: '<div style="padding: 4px;">\n  <h4 style="margin: 0 0 8px 0;">Welcome</h4>\n  <p style="margin: 0; color: #666;">This is a custom HTML control.</p>\n</div>',
+  html: '<div style="padding: 4px;">\n  <h4 style="margin: 0 0 8px 0;">Welcome</h4>\n  <p style="margin: 0;">This is a custom HTML control.</p>\n</div>',
   htmlPosition: "top-left",
   collapsible: true,
 };
@@ -148,6 +150,7 @@ export function normalizeComponentsProjectState(state: unknown): ComponentsProje
     colorbar: normalizeColorbarState(candidate.colorbar),
     legend: normalizeLegendState(candidate.legend),
     html: normalizeHtmlState(candidate.html),
+    images: normalizeImageStates(candidate.images),
   };
 }
 

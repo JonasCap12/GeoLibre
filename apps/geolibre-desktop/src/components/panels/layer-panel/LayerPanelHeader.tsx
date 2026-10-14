@@ -17,6 +17,7 @@ import {
   Eye,
   EyeOff,
   FolderPlus,
+  ListCollapse,
   Map as MapIcon,
   MousePointerClick,
   Orbit,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import { createAppAPI, usePluginRegistry } from "../../../hooks/usePlugins";
 import { PLANET_SWITCHER_LABEL_KEYS } from "../../../lib/planet-labels";
+import { useCompactLayerList } from "./useCompactLayerList";
 
 type PluginRegistry = ReturnType<typeof usePluginRegistry>;
 
@@ -60,12 +62,15 @@ export function LayerPanelHeader({
 }: LayerPanelHeaderProps) {
   const { t } = useTranslation();
   const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
+  const [compactLayerList, setCompactLayerList] = useCompactLayerList();
   return (
     <div className="flex items-center justify-between border-b px-3 py-1.5">
-      <span className="border-s-[3px] border-primary ps-2 text-xs font-semibold uppercase tracking-wide text-primary">
+      {/* Fork: the accent bar sits on the panel edge (-ms-3 cancels the row's
+          px-3), so it costs the button row no width. */}
+      <span className="-ms-3 min-w-0 truncate border-s-[3px] border-primary ps-[9px] text-xs font-semibold uppercase tracking-wide text-primary">
         {t("sharedRail.layers")}
       </span>
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-0.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -131,6 +136,17 @@ export function LayerPanelHeader({
           onClick={onCreateGroup}
         >
           <FolderPlus className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          title={t("layers.compactViewHint")}
+          aria-label={t("layers.compactView")}
+          aria-pressed={compactLayerList}
+          onClick={() => setCompactLayerList(!compactLayerList)}
+        >
+          <ListCollapse className={cn("h-4 w-4", compactLayerList && "text-primary")} />
         </Button>
         <Button
           variant="ghost"

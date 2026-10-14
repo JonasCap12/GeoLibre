@@ -5,6 +5,7 @@ import type { RasterLayerInfo, RasterLayerState } from "maplibre-gl-raster";
 import {
   createRasterStoreLayer,
   isRasterControlStoreLayer,
+  isUnsavableLocalRaster,
   localRasterPath,
   rememberLocalRasterPath,
   removeRasterStoreLayers,
@@ -302,6 +303,36 @@ describe("createRasterStoreLayer", () => {
   });
 });
 
+// GeoLibre#3120: the save flow warns about rasters whose data a project file
+// cannot reload, rather than letting them vanish on reopen.
+describe("isUnsavableLocalRaster", () => {
+  const fileInfo = rasterInfo({
+    source: { kind: "file", fileName: "local.tif", objectUrl: "blob:x" },
+  });
+
+  it("flags a browser-file raster on every host", () => {
+    const layer = createRasterStoreLayer(fileInfo);
+    assert.equal(isUnsavableLocalRaster(layer, false), true);
+    assert.equal(isUnsavableLocalRaster(layer, true), true);
+  });
+
+  it("flags a raster with a recorded path only where paths cannot be reopened", () => {
+    rememberLocalRasterPath("raster-1", "/data/local.tif");
+    try {
+      const layer = createRasterStoreLayer(fileInfo);
+      assert.equal(isUnsavableLocalRaster(layer, true), false);
+      assert.equal(isUnsavableLocalRaster(layer, false), true);
+    } finally {
+      rememberLocalRasterPath("raster-1", undefined);
+    }
+  });
+
+  it("never flags a remote raster or a non-raster layer", () => {
+    assert.equal(isUnsavableLocalRaster(createRasterStoreLayer(rasterInfo()), false), false);
+    assert.equal(isUnsavableLocalRaster(otherStoreLayer(), false), false);
+  });
+});
+
 describe("syncRasterLayersToStore", () => {
   beforeEach(() => {
     useAppStore.setState({ layers: [] });
@@ -358,6 +389,26 @@ describe("syncRasterLayersToStore", () => {
     } finally {
       rememberLocalRasterPath("raster-1", undefined);
     }
+  });
+
+  // A plugin tags the layer addCogLayer returned (the Sentinel-2 Explorer's
+  // scene id drives its Add/Remove button); the header-load sync that follows
+  // must not wipe the tag, while control-owned keys still rebuild.
+  it("keeps metadata keys the control does not own across repeated syncs", () => {
+    syncRasterLayersToStore(fakeControl([rasterInfo({ error: new Error("stale") })]).control);
+    const layer = useAppStore.getState().layers[0];
+    useAppStore.getState().updateLayer(layer.id, {
+      metadata: { ...layer.metadata, sentinel2Scene: "S2B_10SEG", attribution: "ESA" },
+    });
+
+    // The header load: the error clears and the band count arrives.
+    syncRasterLayersToStore(fakeControl([rasterInfo({ bandCount: 1 })]).control);
+
+    const synced = useAppStore.getState().layers[0];
+    assert.equal(synced.metadata.bandCount, 1);
+    assert.equal(synced.metadata.sentinel2Scene, "S2B_10SEG");
+    assert.equal(synced.metadata.attribution, "ESA");
+    assert.equal(synced.metadata.error, undefined);
   });
 
   it("keeps STAC access metadata across repeated syncs", () => {

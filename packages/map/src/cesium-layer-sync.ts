@@ -1,4 +1,9 @@
-import { cesiumKmlSource, isCesiumKmlLayer } from "@geolibre/core";
+import {
+  cesiumKmlSource,
+  isCesiumKmlLayer,
+  installCogTilerDatumShift,
+  withJpegTablesPatch,
+} from "@geolibre/core";
 import { bindDocumentOpacity } from "./cesium-document-opacity";
 import { imageryColorAdjustments } from "./raster-color-adjustments";
 import {
@@ -33,6 +38,11 @@ import {
 } from "./cesium-cog-imagery";
 import { drapeSignature, isDrapedLayer, MapLibreDrape } from "./cesium-drape";
 import {
+  DECK_VIZ_GLOBE_METADATA_KEY,
+  deckVizGlobeLayer,
+  isGlobeDeckVizLayer,
+} from "./cesium-deck-viz";
+import {
   applyZarrRender,
   createZarrImageryProvider,
   isZarrImageryProvider,
@@ -40,15 +50,21 @@ import {
   type ZarrCesiumModule,
 } from "./cesium-zarr-imagery";
 import { getZarrStore } from "./zarr-source";
+import { PointCloudStreamer } from "./cesium-point-cloud-stream";
 import { createFeatureStyleResolver, type FeatureStyleResolver } from "./feature-style";
-import { createCesiumLabeler, pickLabelPart } from "./cesium-labels";
+import { createCesiumLabeler, labelBaseColors, pickLabelPart } from "./cesium-labels";
+import { horizonDepthDistance } from "./cesium-horizon";
 import {
   buildPointCloudCollection,
   isSplatTilesetUrl,
-  loadCopcPointCloud,
+  openCopcSource,
+  openEptSource,
+  loadLasPointCloud,
   pointCloudSourceKind,
   setPointCloudOpacity,
-  type LoadCopcOptions,
+  type OpenCopcOptions,
+  type LoadEptOptions,
+  type LoadLasOptions,
 } from "./cesium-point-cloud";
 import {
   buildPointBatch,
@@ -90,19 +106,22 @@ import type {
   BoundingSphere,
   Cartesian2,
   Cartesian3,
+  Cartographic,
+  Color,
+  DistanceDisplayCondition,
+  Rectangle,
+} from "@cesium/core";
+import type {
   Cesium3DTileset,
   CesiumWidget,
-  Color,
   Credit,
   DataSource,
-  DistanceDisplayCondition,
   Entity,
   I3SDataProvider,
   ImageryLayer,
   ImageryProvider,
   PointPrimitiveCollection,
   PointPrimitive,
-  Rectangle,
   Resource,
   TilingScheme,
 } from "@cesium/engine";
@@ -275,9 +294,14 @@ function isTilesetLayer(layer: GeoLibreLayer): boolean {
   return false;
 }
 
-/** A COPC point cloud the globe decodes itself (issue #2285). */
+/**
+ * A point cloud the globe decodes itself: a COPC archive (issue #2285), or a
+ * plain LAS/LAZ file or an EPT dataset (issue #2261).
+ */
 function isDecodedPointCloudLayer(layer: GeoLibreLayer): boolean {
-  return layer.type === "lidar" && pointCloudSourceKind(pointCloudUrl(layer)) === "copc";
+  if (layer.type !== "lidar") return false;
+  const kind = pointCloudSourceKind(pointCloudUrl(layer));
+  return kind === "copc" || kind === "las" || kind === "ept";
 }
 
 interface LayerEntry {
@@ -294,6 +318,8 @@ interface LayerEntry {
     | null;
   /** Aborts a decoded point cloud's download when the entry goes. */
   abort?: AbortController;
+  /** Streams an EPT cloud by view; destroyed with the entry. */
+  streamer?: PointCloudStreamer;
   /** Removes the one-shot tile listener that reads a tileset's attribute names. */
   fieldsListener?: () => void;
   /** Stops counting an imagery entry's tile loads and failures. */
@@ -318,6 +344,8 @@ interface LayerEntry {
    */
   added?: boolean;
   loadError?: string;
+  /** The tileset altitude offset (metres) last applied as a model matrix. */
+  appliedAltitude?: number;
   /** Last opacity key applied in place to a geojson entry (skips redundant restyles). */
   appliedAlpha?: string;
   /** Last filter expression key applied in place (skips redundant filter evaluations). */
@@ -453,9 +481,30 @@ const CREDENTIAL_PROXY = {
   },
 };
 
+/** An ArcGIS REST export template (`MapServer/export?`, `ImageServer/exportImage?`). */
+const ARCGIS_REST_EXPORT = /\/(?:Map|Image)Server\/export(?:Image)?\?/i;
+
+/** A `{z}`/`{level}` placeholder: a `source.url` that is a tile template. */
+const TILE_TEMPLATE = /\{(?:z|level)\}/;
+
+/**
+ * A raster layer's first tile template, in the `{z}/{x}/{y}` form Cesium's
+ * template provider reads.
+ *
+ * `source.tiles` is the usual home. A raster record whose `source.url` is
+ * itself a template is read too, as the ArcGIS renderer reads it: the Esri
+ * Wayback control mirrors its release that way, with Esri's
+ * `{level}/{row}/{col}` placeholders, which are rewritten here.
+ */
 function firstTile(layer: GeoLibreLayer): string | undefined {
   const tiles = layer.source.tiles;
-  return Array.isArray(tiles) ? str(tiles[0]) : undefined;
+  const tile = Array.isArray(tiles) ? str(tiles[0]) : undefined;
+  const url = layer.type === "raster" ? str(layer.source.url) : undefined;
+  const template = tile ?? (url && TILE_TEMPLATE.test(url) ? url : undefined);
+  return template
+    ?.replaceAll("{level}", "{z}")
+    .replaceAll("{row}", "{y}")
+    .replaceAll("{col}", "{x}");
 }
 
 function tilesetUrl(layer: GeoLibreLayer): string | undefined {
@@ -585,11 +634,12 @@ function wmtsCapabilities(
 
 /**
  * What the globe's kind dispatch ({@link isCesiumSupportedLayerType}) does with
- * each layer kind. The globe has no plugin controls, so every kind it draws is
- * `"native"` (some only for certain data: a raster archive, a draped style, a
- * tileset URL). The `"unsupported"` kinds stay in the 2D panes, unless their
- * record carries a FeatureCollection, CZML or KML, which the globe draws
- * whatever the kind.
+ * each layer kind. The globe has no plugin controls, so almost every kind it
+ * draws is `"native"` (some only for certain data: a raster archive, a draped
+ * style, a tileset URL). `deckgl-viz` is `"plugin"`: only the records the
+ * Deck.gl Layer builder wrote are drawn, rewritten from its config. The
+ * `"unsupported"` kinds stay in the 2D panes, unless their record carries a
+ * FeatureCollection, CZML or KML, which the globe draws whatever the kind.
  */
 export const CESIUM_SUPPORTED_LAYER_KINDS = Object.freeze({
   geojson: "native",
@@ -604,7 +654,7 @@ export const CESIUM_SUPPORTED_LAYER_KINDS = Object.freeze({
   cog: "native",
   "vector-file": "unsupported",
   "duckdb-query": "unsupported",
-  "deckgl-viz": "unsupported",
+  "deckgl-viz": "plugin",
   video: "unsupported",
   image: "native",
 } as const satisfies SupportedLayerKinds);
@@ -619,8 +669,8 @@ export function isCesiumSupportedLayerType(layer: GeoLibreLayer): boolean {
   // FeatureCollection on a kind that takes the GeoJSON path.
   if (isCzmlLayer(layer) || isCesiumKmlLayer(layer) || hasGeoJsonCollection(layer)) return true;
   const kind = classifyLayer(layer);
-  // No globe renderer (vector files, DuckDB queries, deck.gl, video), or an
-  // unknown type: these stay in the 2D panes.
+  // No globe renderer (vector files, DuckDB queries, video), or an unknown
+  // type: these stay in the 2D panes.
   if (hasLayerKindSupport(CESIUM_SUPPORTED_LAYER_KINDS, kind, "unsupported")) return false;
   switch (kind) {
     // GeoJSON (loaded or not yet), imagery (tile templates and a georeferenced
@@ -641,6 +691,10 @@ export function isCesiumSupportedLayerType(layer: GeoLibreLayer): boolean {
     case "vector-tiles":
     case "arcgis":
       return isDrapedLayer(layer);
+    // Rewritten into a GeoJSON or CZML record by sync() (cesium-deck-viz.ts);
+    // the screen-space and density kinds (heatmap, screen grid, contour) stay 2D.
+    case "deckgl-viz":
+      return isGlobeDeckVizLayer(layer);
   }
 }
 
@@ -884,8 +938,10 @@ function needsRebuild(prev: GeoLibreLayer, next: GeoLibreLayer): boolean {
         cesiumIonAssetId(prev) !== cesiumIonAssetId(next) ||
         str(prev.metadata?.sourceKind) !== str(next.metadata?.sourceKind) ||
         JSON.stringify(prev.source.requestHeaders ?? null) !==
-          JSON.stringify(next.source.requestHeaders ?? null) ||
-        prev.source.altitudeOffset !== next.source.altitudeOffset
+          JSON.stringify(next.source.requestHeaders ?? null)
+        // No `altitudeOffset` here: the offset is a model matrix applied in
+        // place by `applyTilesetAltitude`, so the Style panel's height field
+        // moves the tileset without re-downloading it (#3107).
       );
     case "kml":
       return cesiumKmlSource(prev) !== cesiumKmlSource(next);
@@ -930,8 +986,12 @@ export interface CesiumLayerSyncDeps {
   renderMarker?: typeof renderMarkerCanvas;
   /** Rasterises the fill-pattern tile; defaults to the 2D map's renderer. */
   renderFillPattern?: typeof renderFillPatternCanvas;
-  /** Overrides for the COPC decoder (the module, the projector, the budget). */
-  copcOptions?: Omit<LoadCopcOptions, "signal">;
+  /** Overrides for the COPC reader (the module, the projector, the LAZ decoder). */
+  copcOptions?: Omit<OpenCopcOptions, "signal">;
+  /** Overrides for the plain LAS/LAZ decoder (the module, the download, the projector). */
+  lasOptions?: Omit<LoadLasOptions, "signal" | "fallbackWkt">;
+  /** Overrides for the EPT decoder (the module, the fetchers, the projector). */
+  eptOptions?: Omit<LoadEptOptions, "signal">;
   /**
    * Publishes the attribute names read off a tileset's first rendered tile
    * (issue #2290). A 3D Tiles layer has no `layer.geojson` for the Style panel
@@ -2071,7 +2131,7 @@ export class CesiumLayerSync {
     for (const layer of this.currentLayers) {
       if (!layer.visible || layer.opacity === 0) continue;
       if (hasGeoJsonCollection(layer) && !layer.geojson?.features.length) continue;
-      // "2D only" kinds (vector files, DuckDB queries, deck.gl-viz, ...) are skipped on
+      // "2D only" kinds (vector files, DuckDB queries, deck.gl heatmaps, ...) are skipped on
       // the globe by design and flagged as such in the layer list, so they are
       // not load failures: reporting them in `errors` would make every capture
       // throw for an ordinary mixed project.
@@ -2209,9 +2269,12 @@ export class CesiumLayerSync {
       this.deps.loadCogTiler ??
       (async () => {
         const module = await import("cog-tiler-wasm");
+        installCogTilerDatumShift(module);
         const { default: wasmUrl } = await import("lerc/lerc-wasm.wasm?url");
         module.configureLercDecoder({ wasmUrl });
-        return module;
+        // JPEG COGs whose tiles omit their tables (Maxar/Vantor open data)
+        // decode through geotiff.js, as on the 2D raster control.
+        return withJpegTablesPatch(module);
       })
     )().then(cachingCogTiler, (error) => {
       // A failed module load must not poison every later COG for the life
@@ -2234,7 +2297,11 @@ export class CesiumLayerSync {
   }
 
   /** Reconcile the globe to `layers` (order preserved for imagery stacking). */
-  sync(layers: GeoLibreLayer[]): void {
+  sync(storeLayers: GeoLibreLayer[]): void {
+    // deck.gl has no globe renderer: a Deck.gl Layer builder record is drawn
+    // as the GeoJSON or CZML record it rewrites to (issue #2261). The rewrite
+    // is memoized per record, so an unchanged layer maps to the same object.
+    const layers = storeLayers.map((layer) => deckVizGlobeLayer(layer) ?? layer);
     this.restoreHighlight();
     this.currentLayers = layers;
     this.watchEnvironment();
@@ -2590,7 +2657,8 @@ export class CesiumLayerSync {
         outlineColor: Cesium.Color.fromCssColorString(style.strokeColor),
         outlineWidth: style.strokeWidth,
         heightReference,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        // Over terrain on the near side, hidden by the Earth on the far side.
+        disableDepthTestDistance: horizonDepthDistance(Cesium, viewer).property,
       };
       entity.billboard = undefined;
       entity.point = (
@@ -2777,8 +2845,37 @@ export class CesiumLayerSync {
     const abort = new AbortController();
     entry.abort = abort;
     try {
-      const cloud = await loadCopcPointCloud(url, {
-        ...this.deps.copcOptions,
+      const kind = pointCloudSourceKind(url);
+      if (kind === "ept" || kind === "copc") {
+        // An octree cloud needs detail where the camera is, not one sample
+        // of the whole cloud: stream it by view.
+        const source =
+          kind === "ept"
+            ? await openEptSource(url, { ...this.deps.eptOptions, signal: abort.signal })
+            : await openCopcSource(url, { ...this.deps.copcOptions, signal: abort.signal });
+        if (entry.cancelled) return;
+        const streamer = new PointCloudStreamer(Cesium, viewer, source, {
+          opacity: () => this.effectiveOpacity(entry),
+          altitudeOffset: Number(entry.layer.source.altitudeOffset),
+          onError: (message) => {
+            entry.loadError ??= message;
+          },
+        });
+        entry.streamer = streamer;
+        viewer.scene.primitives.add(streamer.collection);
+        await streamer.start();
+        if (entry.cancelled) return;
+        entry.handle = streamer.collection;
+        entry.appliedAlpha = String(this.effectiveOpacity(entry));
+        this.applyAppearance(entry);
+        return;
+      }
+      // A plain LAS/LAZ file has no octree to stream: one bounded sample.
+      const cloud = await loadLasPointCloud(url, {
+        ...this.deps.lasOptions,
+        // The LiDAR control records the WKT it read, for a file whose own
+        // CRS records are missing or unreadable.
+        fallbackWkt: str(entry.layer.metadata?.wkt),
         signal: abort.signal,
       });
       if (entry.cancelled) return;
@@ -2829,7 +2926,7 @@ export class CesiumLayerSync {
         resolver,
         this.effectiveOpacity(entry),
         zoom,
-        { scene: viewer.scene, clampToGround },
+        { scene: viewer.scene, clampToGround, horizon: horizonDepthDistance(Cesium, viewer) },
       );
       viewer.scene.primitives.add(collection);
       entry.handle = collection;
@@ -2853,8 +2950,12 @@ export class CesiumLayerSync {
     const plan = planPointRendering(entry.layer);
     entry.plan = plan;
     if (!plan.cluster || !dataSource.clustering?.clusterEvent) return;
-    entry.cluster = configureClustering(this.Cesium, dataSource, plan, () =>
-      clusterAppearance(entry.layer, this.effectiveOpacity(entry)),
+    entry.cluster = configureClustering(
+      this.Cesium,
+      dataSource,
+      plan,
+      () => clusterAppearance(entry.layer, this.effectiveOpacity(entry)),
+      horizonDepthDistance(this.Cesium, this.viewer),
     );
     entry.zoomCluster = true;
     entry.cluster.setEnabled(clusterActiveAtZoom(plan, this.cameraZoom()));
@@ -2974,7 +3075,12 @@ export class CesiumLayerSync {
       // avoid. Defer to the tile template whenever it names a protocol, so the
       // layer falls through to the bridge below (nothing between here and it
       // matches a WMS layer).
-      !protocolScheme(firstTile(layer) ?? "")
+      !protocolScheme(firstTile(layer) ?? "") &&
+      // A "wms" record whose tile is an ArcGIS REST export draws from that
+      // template: Earthdata GIS records an ImageServer as `source.url` and its
+      // `exportImage?bbox={bbox-epsg-3857}` as the tile, so a WMS provider
+      // pointed at the url would request GetMap from a REST endpoint.
+      !ARCGIS_REST_EXPORT.test(firstTile(layer) ?? "")
     ) {
       return { isAsync: false, provider: wmsImageryProvider(Cesium, layer, makeResource) };
     } else if (wmtsCaps) {
@@ -3370,6 +3476,12 @@ export class CesiumLayerSync {
 
       entry.handle = dataSource;
       dataSource.show = entry.layer.visible;
+      // A deck.gl model layer fades with the layer opacity like the 2D overlay.
+      if (entry.layer.metadata?.[DECK_VIZ_GLOBE_METADATA_KEY]) {
+        entry.documentCleanup = bindDocumentOpacity(Cesium, dataSource, () =>
+          this.effectiveOpacity(entry),
+        );
+      }
 
       await viewer.dataSources.add(dataSource);
       if (entry.cancelled) {
@@ -3448,7 +3560,6 @@ export class CesiumLayerSync {
           return;
         }
         viewer.scene.primitives.add(tileset);
-        this.applyTilesetAltitude(tileset, Number(layer.source.altitudeOffset));
         entry.handle = tileset;
         this.discoverTilesetFields(entry, tileset);
         this.applyAppearance(entry);
@@ -3491,9 +3602,7 @@ export class CesiumLayerSync {
           return;
         }
         viewer.scene.primitives.add(provider);
-        const offset = Number(layer.source.altitudeOffset);
         const tilesets = i3sTilesets(provider);
-        for (const tileset of tilesets) this.applyTilesetAltitude(tileset, offset);
         entry.handle = provider;
         // One sub-layer is enough for the schema: an I3S scene service publishes
         // one attribute set that every layer it drives shares.
@@ -3507,7 +3616,6 @@ export class CesiumLayerSync {
         return;
       }
       viewer.scene.primitives.add(tileset);
-      this.applyTilesetAltitude(tileset, Number(layer.source.altitudeOffset));
       if (layer.type === "lidar" && tileset.pointCloudShading) {
         // Eye-dome lighting and attenuation: the reading aids the 2D LiDAR
         // control's dynamic mode gives, native in Cesium's point-cloud shader.
@@ -3523,15 +3631,49 @@ export class CesiumLayerSync {
     }
   }
 
-  /** Raise/lower a tileset by an altitude offset (metres) at its centre. */
-  private applyTilesetAltitude(tileset: Cesium3DTileset, offset: number): void {
-    if (!Number.isFinite(offset) || offset === 0) return;
+  /**
+   * Where each tileset sat before any offset moved it. Read once, while its
+   * model matrix is still the identity: `boundingSphere` follows the model
+   * matrix (and lags it until the next frame), so re-reading it after a move
+   * would compound the offsets.
+   */
+  private readonly tilesetAnchors = new WeakMap<Cesium3DTileset, Cartographic>();
+
+  /**
+   * Raise/lower a 3D Tiles entry by the layer's altitude offset (metres).
+   *
+   * Applied in place on every sync rather than at creation, so editing the
+   * offset (the Style panel's height field, #3107) moves the loaded tileset
+   * instead of rebuilding it. A zero offset restores the identity matrix.
+   *
+   * @param entry The 3D Tiles entry to position.
+   */
+  private applyTilesetAltitude(entry: LayerEntry): void {
+    const raw = Number(entry.layer.source.altitudeOffset);
+    const offset = Number.isFinite(raw) ? raw : 0;
+    if ((entry.appliedAltitude ?? 0) === offset) return;
     const { Cesium } = this;
-    const carto = Cesium.Cartographic.fromCartesian(tileset.boundingSphere.center);
-    const surface = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, 0);
-    const target = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, offset);
-    const translation = Cesium.Cartesian3.subtract(target, surface, new Cesium.Cartesian3());
-    tileset.modelMatrix = Cesium.Matrix4.fromTranslation(translation);
+    const tilesets = this.entryTilesets(entry);
+    // Nothing to move yet (an I3S provider before its sub-layers exist): leave
+    // the offset unrecorded so the next sync tries again.
+    if (tilesets.length === 0) return;
+    for (const tileset of tilesets) {
+      let anchor = this.tilesetAnchors.get(tileset);
+      if (!anchor) {
+        anchor = Cesium.Cartographic.fromCartesian(tileset.boundingSphere.center);
+        this.tilesetAnchors.set(tileset, anchor);
+      }
+      if (offset === 0) {
+        tileset.modelMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY);
+        continue;
+      }
+      const surface = Cesium.Cartesian3.fromRadians(anchor.longitude, anchor.latitude, 0);
+      const target = Cesium.Cartesian3.fromRadians(anchor.longitude, anchor.latitude, offset);
+      const translation = Cesium.Cartesian3.subtract(target, surface, new Cesium.Cartesian3());
+      tileset.modelMatrix = Cesium.Matrix4.fromTranslation(translation);
+    }
+    entry.appliedAltitude = offset;
+    this.viewer.scene.requestRender();
   }
 
   /**
@@ -3581,6 +3723,7 @@ export class CesiumLayerSync {
       this.applyGeoJsonFilter(entry);
     } else {
       (handle as Cesium3DTileset | I3SDataProvider).show = layer.visible;
+      this.applyTilesetAltitude(entry);
       this.applyTilesetStyle(entry);
     }
   }
@@ -3919,6 +4062,17 @@ export class CesiumLayerSync {
     // Point pins and marker sprites keep their baked-in colour; multiplying by
     // white+alpha only fades them.
     const marker = Cesium.Color.WHITE.withAlpha(opacity);
+    // A data-defined label opacity replaces the layer opacity but still
+    // follows a story fade, scaled by how far the fade has taken the layer
+    // from its own opacity (a fade to 0 hides it).
+    const story = this.storyOpacities.get(entry.layer.id);
+    const storyFactor = !story
+      ? 1
+      : entry.layer.opacity > 0
+        ? story.currentOpacity / entry.layer.opacity
+        : story.currentOpacity > 0
+          ? 1
+          : 0;
     const isExtruded = Boolean(style.extrusionEnabled);
     const extColorVal = isExtruded ? extrusionColorValue(style) : null;
     const extColorStr =
@@ -4030,8 +4184,17 @@ export class CesiumLayerSync {
           entity.billboard.color = new Cesium.ConstantProperty(marker);
         }
         if (entity.label) {
-          entity.label.fillColor = new Cesium.ConstantProperty(labelFill);
-          entity.label.outlineColor = new Cesium.ConstantProperty(labelOutline);
+          // A label built with per-feature colours or a data-defined opacity
+          // keeps them; only the layer opacity is reapplied.
+          const base = labelBaseColors.get(entity);
+          const alpha =
+            base?.opacity === undefined ? opacity : Math.min(1, base.opacity * storyFactor);
+          entity.label.fillColor = new Cesium.ConstantProperty(
+            base ? base.fill.withAlpha(base.fill.alpha * alpha) : labelFill,
+          );
+          entity.label.outlineColor = new Cesium.ConstantProperty(
+            base ? base.outline.withAlpha(base.outline.alpha * alpha) : labelOutline,
+          );
         }
       }
     } finally {
@@ -4095,6 +4258,14 @@ export class CesiumLayerSync {
     // A fit still waiting on this entry has nothing left to frame.
     if (this.pendingZoomLayerId === entry.layer.id) this.pendingZoomLayerId = null;
     entry.abort?.abort();
+    if (entry.streamer) {
+      entry.streamer.destroy();
+      // Removed before its first load landed: the collection is already in
+      // the scene but not yet the entry's handle.
+      if (entry.handle !== entry.streamer.collection)
+        this.viewer.scene.primitives.remove(entry.streamer.collection);
+      entry.streamer = undefined;
+    }
     entry.documentCleanup?.();
     entry.documentCleanup = undefined;
     entry.overlayContainer?.remove();

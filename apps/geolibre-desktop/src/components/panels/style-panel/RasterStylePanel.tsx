@@ -9,6 +9,7 @@ import { NetcdfProfilePanel } from "../NetcdfProfilePanel";
 import { RasterSymbologySection } from "../RasterSymbologySection";
 import { TimeSliderSymbologySection } from "../TimeSliderSymbologySection";
 import { STYLE_PANEL_ASIDE_CLASS } from "./constants";
+import { WmsLegendSection } from "./WmsLegendSection";
 import { RasterStyleSlider } from "./style-inputs";
 
 interface RasterStylePanelProps {
@@ -174,6 +175,7 @@ export function RasterStylePanel({
               until this layer has a sampled pixel, so it costs nothing for the
               single-band and tile rasters that also come through here. */}
           <NetcdfProfilePanel layerId={layer.id} />
+          <WmsLegendSection layer={layer} mapControllerRef={mapControllerRef} />
           <Separator />
           <Button
             type="button"
