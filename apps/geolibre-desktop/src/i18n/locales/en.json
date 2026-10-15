@@ -9441,7 +9441,13 @@
       "blue": "Blue",
       "purple": "Purple",
       "gray": "Gray",
-      "clear": "Remove color"
+      "clear": "Remove color",
+      "areaMenu": "Color by swept area",
+      "areaRectangle": "Sweep a rectangle",
+      "areaPolygon": "Sweep a polygon",
+      "areaFreehand": "Sweep freehand",
+      "areaClear": "Remove color in area",
+      "areaHint": "Pick a shape, then a color, then sweep the map. Only the part inside the swept area changes; lines and polygons are split at its edge. Press Esc to cancel."
     },
     "exportGeoTiff": "GeoTIFF (COG)",
     "exportLas": "LAS",

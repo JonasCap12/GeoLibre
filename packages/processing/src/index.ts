@@ -546,3 +546,4 @@ export {
   type ObiaSegmentation,
   type RegionGrowingParams,
 } from "./obia";
+export { splitGeometryByArea, type AreaSplit } from "./split-by-area";

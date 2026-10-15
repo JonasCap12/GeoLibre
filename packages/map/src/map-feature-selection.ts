@@ -230,6 +230,12 @@ export function attachFeatureSelection(
         state.cancel.current?.();
         return;
       }
+      if (request.onArea && request.shape !== "single") {
+        const area = polygonFromPoints();
+        state.cancel.current?.();
+        if (area) request.onArea(area);
+        return;
+      }
       let matched: string[] = [];
       if (request.shape === "single" && points[0]) {
         const id = featureIdAtPoint(live, points[0]);

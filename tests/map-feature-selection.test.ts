@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parseHTML } from "linkedom";
 import { useAppStore } from "@geolibre/core";
+import type { Polygon } from "geojson";
 import {
   attachFeatureSelection,
   FEATURE_SELECTION_BEGIN_EVENT,
@@ -319,6 +320,37 @@ describe("attachFeatureSelection", () => {
         assert.equal(container.querySelector("svg"), null);
         assert.ok(CAMERA_HANDLERS.every((name) => cameraEnabled.get(name) === true));
         assert.ok([...listeners.values()].every((registered) => registered.size === 0));
+        detach();
+      });
+    });
+  }
+});
+
+describe("attachFeatureSelection area requests", () => {
+  for (const { shape, draw } of completedShapeGestures) {
+    it(`hands the drawn ${shape} to onArea instead of selecting`, () => {
+      withSelectionHarness(({ map, fire, cameraEnabled, container }) => {
+        seedLayer();
+        const state: FeatureSelectionState = {
+          active: { current: false },
+          cancel: { current: null },
+        };
+        const detach = attachFeatureSelection(map, { state, featureIdAtPoint: () => null });
+        const areas: Polygon[] = [];
+        window.dispatchEvent(
+          new CustomEvent(FEATURE_SELECTION_EVENT, {
+            detail: { layerId: "countries", shape, onArea: (area: Polygon) => areas.push(area) },
+          }),
+        );
+        draw(fire);
+
+        assert.equal(areas.length, 1);
+        const ring = areas[0].coordinates[0];
+        assert.deepEqual(ring[0], ring.at(-1));
+        assert.deepEqual(useAppStore.getState().selectedFeatureIds, []);
+        assert.equal(state.cancel.current, null);
+        assert.equal(container.querySelector("svg"), null);
+        assert.ok(CAMERA_HANDLERS.every((name) => cameraEnabled.get(name) === true));
         detach();
       });
     });
