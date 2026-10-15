@@ -21,6 +21,7 @@ import type {
 } from "@geolibre/core";
 import {
   canEditLayerGeometry,
+  getGeometryEditTargetLayerId,
   getLayerTimeBinding,
   getTemporalLayerAdapter,
   isArcGISWritableLayer,
@@ -40,6 +41,7 @@ import {
   DropdownMenuSubTrigger,
 } from "@geolibre/ui";
 import {
+  Brush,
   CalendarClock,
   CircleDashed,
   ClipboardPaste,
@@ -79,12 +81,17 @@ import {
 } from "lucide-react";
 import { isSpaceborneLidarLayer } from "../../../lib/along-track-profile";
 import { openAlongTrackProfile } from "../../../lib/along-track-profile-store";
-import { canOpenLayerAttributeTable } from "../../../lib/attribute-table-source";
+import {
+  canEditAttributeValues,
+  canOpenLayerAttributeTable,
+} from "../../../lib/attribute-table-source";
+import { FEATURE_COLOR_PRESETS } from "../../../lib/feature-color";
 import type { CollaborationApi } from "../../../hooks/useCollaboration";
 import {
   clearFeatureSelection,
   exportSelectionAsLayer,
   invertLayerSelection,
+  paintSelection,
   zoomToSelection,
 } from "../../../lib/selection-actions";
 import {
@@ -284,6 +291,10 @@ export function LayerActionsMenuItems({
   // layer they can be shared or published from, so it follows
   // `export` rather than the read-only selection actions beside it.
   const canExportSelection = holdsSelection && layerCaps.export;
+  // Painting writes simplestyle colors into the selected features, so it
+  // takes the same gate as editing their values in the attribute table.
+  const canPaintSelection =
+    holdsSelection && canEditAttributeValues(layer, getGeometryEditTargetLayerId());
   // Export writes the layer's GeoJSON features to disk; only
   // geojson-backed vector layers carry those features.
   const canExportLayer = layerCaps.export && layer.type === "geojson";
@@ -747,6 +758,31 @@ export function LayerActionsMenuItems({
             <X className="me-2 h-3.5 w-3.5" />
             {t("toolbar.item.clearSelection")}
           </DropdownMenuItem>
+          {canPaintSelection && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Brush className="h-3.5 w-3.5" />
+                {t("layers.featureColor.menu")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {FEATURE_COLOR_PRESETS.map(({ color, labelKey }) => (
+                  <DropdownMenuItem key={color} onSelect={() => paintSelection(color)}>
+                    <span
+                      aria-hidden="true"
+                      className="me-2 h-3.5 w-3.5 rounded-sm border border-border"
+                      style={{ backgroundColor: color }}
+                    />
+                    {t(labelKey)}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => paintSelection(null)}>
+                  <X className="me-2 h-3.5 w-3.5" />
+                  {t("layers.featureColor.clear")}
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           {canExportSelection && (
             <DropdownMenuItem
               onSelect={() =>

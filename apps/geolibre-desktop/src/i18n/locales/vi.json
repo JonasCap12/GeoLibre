@@ -9149,6 +9149,18 @@
     "selectFeaturesFreehand": "Chọn tính năng bằng nét vẽ tự do",
     "selectFeaturesRadius": "Chọn tính năng bằng bán kính",
     "selectFeaturesModifiers": "Shift để thêm, Alt để bớt, Shift+Alt để lấy phần giao. Nhấn Esc để hủy.",
+    "featureColor": {
+      "menu": "Tô màu đối tượng đã chọn",
+      "red": "Đỏ",
+      "orange": "Cam",
+      "yellow": "Vàng",
+      "green": "Xanh lá",
+      "cyan": "Xanh ngọc",
+      "blue": "Xanh dương",
+      "purple": "Tím",
+      "gray": "Xám",
+      "clear": "Bỏ màu"
+    },
     "exportGeoTiff": "GeoTIFF (COG)",
     "exportLas": "LAS",
     "exportLaz": "LAZ (nén)",
