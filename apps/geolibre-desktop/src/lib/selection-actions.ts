@@ -6,6 +6,7 @@ import {
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import type { Feature, FeatureCollection } from "geojson";
+import { featureColorPatch } from "./feature-color";
 
 /**
  * Actions on the live feature selection (#1314), shared by the Edit menu and
@@ -53,6 +54,24 @@ export function invertLayerSelection(): void {
 /** Clear the selection (keeps the layer active). */
 export function clearFeatureSelection(): void {
   useAppStore.getState().selectFeature(null);
+}
+
+/**
+ * Paint the selected features `color`, or restore the layer style on them
+ * when `color` is null. The selection is cleared afterwards: its highlight
+ * would otherwise cover the color that was just applied. Returns how many
+ * features were painted.
+ */
+export function paintSelection(color: string | null): number {
+  const layer = selectionHolderLayer();
+  if (!layer) return 0;
+  const store = useAppStore.getState();
+  const ids = new Set(store.selectedFeatureIds);
+  const patch = featureColorPatch(layer, ids, color);
+  if (!patch) return 0;
+  store.updateLayer(layer.id, patch);
+  clearFeatureSelection();
+  return ids.size;
 }
 
 /** Fit the map to the selected features (re-using the highlight overlay). */
