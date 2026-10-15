@@ -50,7 +50,10 @@ async function responseError(response: Response, fallback: string): Promise<Clou
   } catch {
     // Proxies can return HTML/text errors. The status still makes the failure actionable.
   }
-  return new CloudWorkspaceError(message || `${fallback} (HTTP ${response.status})`, response.status);
+  return new CloudWorkspaceError(
+    message || `${fallback} (HTTP ${response.status})`,
+    response.status,
+  );
 }
 
 function parseProject(value: unknown): CloudWorkspaceProject | null {
@@ -113,7 +116,9 @@ export async function findCloudWorkspace(
 
   const body = (await response.json()) as { projects?: unknown };
   const projects = Array.isArray(body.projects)
-    ? body.projects.map(parseProject).filter((project): project is CloudWorkspaceProject => !!project)
+    ? body.projects
+        .map(parseProject)
+        .filter((project): project is CloudWorkspaceProject => !!project)
     : [];
   // The tag is the durable marker. The reserved title is a recovery path for
   // the narrow case where POST succeeded but the follow-up marker PATCH did not.
@@ -124,11 +129,17 @@ export async function findCloudWorkspace(
   );
 }
 
-/** Download a private workspace without ever forwarding its token cross-origin. */
+/**
+ * Download a private workspace without ever forwarding its token cross-origin.
+ *
+ * @returns The project content, or null when the project exists but its
+ *   content is gone (the server answers 404 "project content not found"), so
+ *   the caller can write a fresh version instead of failing on every launch.
+ */
 export async function downloadCloudWorkspace(
   project: CloudWorkspaceProject,
   options: CloudWorkspaceOptions,
-): Promise<string> {
+): Promise<string | null> {
   const base = normalizedBaseUrl(options.baseUrl);
   let rawUrl: URL;
   try {
@@ -150,6 +161,7 @@ export async function downloadCloudWorkspace(
     },
     fetchImpl,
   );
+  if (response.status === 404) return null;
   if (!response.ok) throw await responseError(response, "Could not download the cloud workspace");
   return response.text();
 }

@@ -40,7 +40,9 @@ origin**, so a relative value works. `apps/geolibre-desktop/public/plugin-regist
 ships as an empty array for exactly this: set the variable to
 `/plugin-registry.json` and the plugin browser reads a registry you serve
 yourself. It then lists nothing until you add entries, which the UI reports as
-an empty registry rather than an error. Installing a plugin from a zip or a
+an empty registry rather than an error. The plugin blocklist is read from
+`blocklist.json` beside the registry, so `public/blocklist.json` ships empty
+too; without it every launch logs a 404 for it. Installing a plugin from a zip or a
 `plugin.json` URL is unaffected.
 
 ## The one that matters most
