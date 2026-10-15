@@ -79,8 +79,13 @@ export function featureColorPatch(
   if (changed === 0) return null;
 
   const geojson: FeatureCollection = { ...layer.geojson, features };
+  // The painted features no longer match the file or shared dataset the layer
+  // came from. Without the edit flag a save keeps only that reference (a
+  // library layer drops its features from the cloud workspace and a reloadable
+  // desktop file saves its path), and reopening loads the drawing unpainted.
+  const metadata = { ...layer.metadata, geometryEdited: true };
   // Clearing leaves the flag on: other features may still carry paint, and
   // with no simplestyle property a feature renders the layer style anyway.
-  if (color === null || layer.style.simpleStyleEnabled) return { geojson };
-  return { geojson, style: { ...layer.style, simpleStyleEnabled: true } };
+  if (color === null || layer.style.simpleStyleEnabled) return { geojson, metadata };
+  return { geojson, metadata, style: { ...layer.style, simpleStyleEnabled: true } };
 }
