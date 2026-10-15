@@ -46,6 +46,8 @@ interface RegistryEntry {
   index: TileIndex | null;
   /** Settles once the worker has been sent everything it needs to build. */
   posted: Promise<void> | null;
+  /** Distinguishes this build's tile URLs from an earlier build's. */
+  revision: number;
 }
 
 // Keyed by layer id. Module-level rather than on the Zustand record because tile
@@ -213,6 +215,7 @@ let tileWorker: TileWorkerHost | null = null;
 /** Set once a worker could not be used; later layers tile inline. */
 let tileWorkerUnavailable = false;
 let buildGeneration = 0;
+let indexRevision = 0;
 
 /**
  * Install how the tiling worker is created. Until a factory is installed,
@@ -284,6 +287,7 @@ export function registerGeoJsonVtSource(
     existing.clusterMaxZoom === options.clusterMaxZoom;
   if (unchanged) return false;
 
+  const revision = ++indexRevision;
   const worker = getTileWorker();
   if (!worker) {
     registry.set(layerId, {
@@ -291,10 +295,17 @@ export function registerGeoJsonVtSource(
       ...options,
       index: buildTileIndex(geojson, options),
       posted: null,
+      revision,
     });
     return true;
   }
-  const entry: RegistryEntry = { geojsonRef: geojson, ...options, index: null, posted: null };
+  const entry: RegistryEntry = {
+    geojsonRef: geojson,
+    ...options,
+    index: null,
+    posted: null,
+    revision,
+  };
   registry.set(layerId, entry);
   const generation = ++buildGeneration;
   entry.posted = worker.build(
@@ -330,9 +341,18 @@ export function hasGeoJsonVtSource(layerId: string): boolean {
   return registry.has(layerId);
 }
 
-/** The `tiles` template for a layer's vector source. */
+/**
+ * The `tiles` template for a layer's vector source.
+ *
+ * Carries the index revision so each rebuild has its own URLs. MapLibre keeps
+ * the tiles it cuts for zooms past the source maxzoom in a worker cache keyed
+ * by URL, and that cache outlives a removed and re-added source of the same id,
+ * so with a fixed URL an edit (a repaint, say) never reached a deep zoom the
+ * layer had already been viewed at.
+ */
 export function geojsonVtTileUrl(layerId: string): string {
-  return `${GEOJSONVT_PROTOCOL}://${encodeURIComponent(layerId)}/{z}/{x}/{y}`;
+  const revision = registry.get(layerId)?.revision ?? 0;
+  return `${GEOJSONVT_PROTOCOL}://${encodeURIComponent(layerId)}/{z}/{x}/{y}?v=${revision}`;
 }
 
 /**
@@ -377,9 +397,12 @@ async function geojsonVtProtocolHandler(
   return { data: encodeTile(entry.index, z, x, y) };
 }
 
-// Parse `geolibre-gjvt://<layerId>/<z>/<x>/<y>`, or null when malformed.
+// Parse `geolibre-gjvt://<layerId>/<z>/<x>/<y>[?v=<revision>]`, or null when
+// malformed. The revision only keeps URLs distinct; the registry decides which
+// index answers.
 function parseTileUrl(url: string): { layerId: string; z: number; x: number; y: number } | null {
-  const path = url.slice(`${GEOJSONVT_PROTOCOL}://`.length);
+  const query = url.indexOf("?");
+  const path = url.slice(`${GEOJSONVT_PROTOCOL}://`.length, query < 0 ? undefined : query);
   const slash = path.indexOf("/");
   if (slash < 0) return null;
   let layerId: string;

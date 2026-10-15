@@ -13,6 +13,7 @@ import { syncLayer } from "../packages/map/src/layer-sync";
 import {
   ensureGeoJsonVtProtocol,
   GEOJSONVT_PROTOCOL,
+  geojsonVtTileUrl,
   registerGeoJsonVtSource,
   unregisterGeoJsonVtSource,
 } from "../packages/map/src/geojson-vt-protocol";
@@ -218,6 +219,23 @@ describe("geojson-vt protocol", () => {
     unregisterGeoJsonVtSource("L2");
   });
 
+  it("gives each rebuild its own tile URLs, which the handler still serves", async () => {
+    // MapLibre caches overzoomed tiles by URL across a re-added source, so a
+    // rebuilt index must not reuse the previous build's URLs.
+    const options = { cluster: false, clusterRadius: 50, clusterMaxZoom: 14 };
+    registerGeoJsonVtSource("LR", pointGrid(5), options);
+    const first = geojsonVtTileUrl("LR");
+    registerGeoJsonVtSource("LR", pointGrid(5), options);
+    const second = geojsonVtTileUrl("LR");
+    assert.notEqual(first, second);
+
+    const handler = protocolHandler();
+    const url = second.replace("{z}", "0").replace("{x}", "0").replace("{y}", "0");
+    const tile = await handler({ url }, new AbortController());
+    assert.ok(tile.data.byteLength > 0);
+    unregisterGeoJsonVtSource("LR");
+  });
+
   it("encodes a clustered tile", async () => {
     const handler = protocolHandler();
     registerGeoJsonVtSource("LC", pointGrid(200), {
@@ -240,7 +258,10 @@ describe("syncLayer tiled path", () => {
 
       const src = sources.get(`source-${id}`) as Record<string, unknown>;
       assert.equal(src.type, "vector");
-      assert.deepEqual(src.tiles, [`${GEOJSONVT_PROTOCOL}://${id}/{z}/{x}/{y}`]);
+      assert.match(
+        (src.tiles as string[])[0],
+        new RegExp(`^${GEOJSONVT_PROTOCOL}://${id}/\\{z\\}/\\{x\\}/\\{y\\}\\?v=\\d+$`),
+      );
 
       const circle = layers.get(`layer-${id}-circle`) as Record<string, unknown>;
       assert.equal(circle.type, "circle");
