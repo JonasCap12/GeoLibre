@@ -8,6 +8,12 @@ export interface FeatureSelectionRequest {
   layerId: string;
   shape: FeatureSelectionShape;
   mode?: SelectionMode;
+  /**
+   * Receive the drawn area instead of selecting the features it touches, for
+   * tools that act on the area itself (painting only the swept part of a
+   * drawing). Ignored for `single`, which draws no area.
+   */
+  onArea?: (area: Polygon) => void;
 }
 
 export const FEATURE_SELECTION_EVENT = "geolibre:select-features-on-map";

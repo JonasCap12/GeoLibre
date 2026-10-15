@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { DEFAULT_LAYER_STYLE, vectorLineColorValue, type GeoLibreLayer } from "@geolibre/core";
-import type { FeatureCollection } from "geojson";
+import type { FeatureCollection, LineString, Polygon } from "geojson";
 import {
   FEATURE_COLOR_KEYS,
   FEATURE_COLOR_PRESETS,
+  featureAreaColorPatch,
   featureColorPatch,
 } from "../apps/geolibre-desktop/src/lib/feature-color";
 
@@ -143,6 +144,100 @@ describe("featureColorPatch", () => {
       featureColorPatch(makeLayer({ geojson: undefined }), new Set(["0"]), "#2563eb"),
       null,
     );
+  });
+
+  it("paints by area only the part inside, splitting a crossed line", () => {
+    // x ∈ [0.5, 1.5] cuts features 0 and 1 and misses feature 2 (y = 1).
+    const area: Polygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0.5, -0.5],
+          [1.5, -0.5],
+          [1.5, 0.5],
+          [0.5, 0.5],
+          [0.5, -0.5],
+        ],
+      ],
+    };
+    const patch = featureAreaColorPatch(makeLayer(), area, "#16a34a");
+    const features = patch?.geojson?.features ?? [];
+    // Each cut feature becomes an outside part followed by an inside part.
+    assert.equal(features.length, 5);
+    assert.deepEqual(
+      features.map((feature) => [
+        feature.properties?.EntityHandle ?? null,
+        feature.properties?.stroke,
+      ]),
+      [
+        ["1A", undefined],
+        ["1A", "#16a34a"],
+        ["1B", undefined],
+        ["1B", "#16a34a"],
+        [null, undefined],
+      ],
+    );
+    assert.deepEqual((features[1].geometry as LineString).coordinates, [
+      [0.5, 0],
+      [1, 0],
+    ]);
+    assert.equal(patch?.style?.simpleStyleEnabled, true);
+    assert.equal(patch?.metadata?.geometryEdited, true);
+  });
+
+  it("gives the inside part of a feature with an id an id of its own", () => {
+    const area: Polygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-1, 0.5],
+          [1, 0.5],
+          [1, 1.5],
+          [-1, 1.5],
+          [-1, 0.5],
+        ],
+      ],
+    };
+    const features = featureAreaColorPatch(makeLayer(), area, "#16a34a")?.geojson?.features ?? [];
+    const ids = features.filter((feature) => feature.id !== undefined).map((feature) => feature.id);
+    assert.equal(ids[0], "edge");
+    assert.equal(new Set(ids).size, ids.length);
+  });
+
+  it("paints by area in place when the area covers a feature whole", () => {
+    const area: Polygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-1, -1],
+          [3, -1],
+          [3, 3],
+          [-1, 3],
+          [-1, -1],
+        ],
+      ],
+    };
+    const layer = makeLayer();
+    const features = featureAreaColorPatch(layer, area, "#16a34a")?.geojson?.features ?? [];
+    assert.equal(features.length, 3);
+    assert.equal(features[0].geometry, layer.geojson?.features[0].geometry);
+    assert.ok(features.every((feature) => feature.properties?.stroke === "#16a34a"));
+  });
+
+  it("is a no-op by area when nothing lies inside", () => {
+    const area: Polygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [10, 10],
+          [11, 10],
+          [11, 11],
+          [10, 11],
+          [10, 10],
+        ],
+      ],
+    };
+    assert.equal(featureAreaColorPatch(makeLayer(), area, "#16a34a"), null);
   });
 
   it("offers only colors the renderer accepts", () => {

@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import {
   activeLayerFilterExpression,
@@ -91,6 +91,7 @@ import {
   clearFeatureSelection,
   exportSelectionAsLayer,
   invertLayerSelection,
+  paintArea,
   paintSelection,
   zoomToSelection,
 } from "../../../lib/selection-actions";
@@ -179,6 +180,12 @@ interface LayerActionsMenuItemsProps {
  * The items of a layer row's actions ("...") menu. Rendered inside the row's
  * DropdownMenuContent, so it mounts only while that menu is open.
  */
+type AreaPaintShape = "rectangle" | "polygon" | "freehand";
+
+// The shape last chosen for painting by area. The menu remounts on every
+// open, so it lives here rather than in component state alone.
+let lastAreaPaintShape: AreaPaintShape = "rectangle";
+
 export function LayerActionsMenuItems({
   shared,
   layer,
@@ -295,6 +302,15 @@ export function LayerActionsMenuItems({
   // takes the same gate as editing their values in the attribute table.
   const canPaintSelection =
     holdsSelection && canEditAttributeValues(layer, getGeometryEditTargetLayerId());
+  // Painting by area splits features at the swept edge as well, so it needs
+  // the same gate without needing a selection first.
+  const canPaintArea =
+    canSelectFeatures && canEditAttributeValues(layer, getGeometryEditTargetLayerId());
+  const [areaShape, setAreaShape] = useState<AreaPaintShape>(lastAreaPaintShape);
+  const chooseAreaShape = (shape: AreaPaintShape) => {
+    lastAreaPaintShape = shape;
+    setAreaShape(shape);
+  };
   // Export writes the layer's GeoJSON features to disk; only
   // geojson-backed vector layers carry those features.
   const canExportLayer = layerCaps.export && layer.type === "geojson";
@@ -727,6 +743,67 @@ export function LayerActionsMenuItems({
               </DropdownMenuLabel>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          {canPaintArea && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Brush className="h-3.5 w-3.5" />
+                {t("layers.featureColor.areaMenu")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {(
+                  [
+                    ["rectangle", SquareDashed, "layers.featureColor.areaRectangle"],
+                    ["polygon", Pentagon, "layers.featureColor.areaPolygon"],
+                    ["freehand", LassoSelect, "layers.featureColor.areaFreehand"],
+                  ] as const
+                ).map(([shape, Icon, label]) => (
+                  <DropdownMenuCheckboxItem
+                    key={shape}
+                    checked={areaShape === shape}
+                    // Keep the menu open: the shape is chosen before the color.
+                    onSelect={(e) => e.preventDefault()}
+                    onCheckedChange={() => chooseAreaShape(shape)}
+                  >
+                    <Icon className="me-2 h-3.5 w-3.5" />
+                    {t(label)}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                {[
+                  ...FEATURE_COLOR_PRESETS,
+                  { color: null, labelKey: "layers.featureColor.areaClear" } as const,
+                ].map(({ color, labelKey }) => (
+                  <DropdownMenuItem
+                    key={color ?? "clear"}
+                    disabled={!layerRendered}
+                    onSelect={() => {
+                      if (identifyOwnsClicks) setIdentifyLayer(null);
+                      startFeatureSelection({
+                        layerId: layer.id,
+                        shape: areaShape,
+                        onArea: (area) => paintArea(layer.id, area, color),
+                      });
+                    }}
+                  >
+                    {color ? (
+                      <span
+                        aria-hidden="true"
+                        className="me-2 h-3.5 w-3.5 rounded-sm border border-border"
+                        style={{ backgroundColor: color }}
+                      />
+                    ) : (
+                      <X className="me-2 h-3.5 w-3.5" />
+                    )}
+                    {t(labelKey)}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="max-w-64 whitespace-normal text-xs font-normal text-muted-foreground">
+                  {t("layers.featureColor.areaHint")}
+                </DropdownMenuLabel>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           {/* Not selectLayer() + open: that would clear the
           live selection the dialogs' add/remove/intersect
           modes combine with, so the target travels via the

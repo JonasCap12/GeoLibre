@@ -9159,7 +9159,13 @@
       "blue": "Xanh dương",
       "purple": "Tím",
       "gray": "Xám",
-      "clear": "Bỏ màu"
+      "clear": "Bỏ màu",
+      "areaMenu": "Tô màu theo vùng quét",
+      "areaRectangle": "Quét hình chữ nhật",
+      "areaPolygon": "Quét đa giác",
+      "areaFreehand": "Quét tự do",
+      "areaClear": "Bỏ màu trong vùng",
+      "areaHint": "Chọn kiểu vùng, chọn màu rồi quét trên bản đồ. Chỉ phần nằm trong vùng quét đổi màu; đường và vùng bị cắt tại mép vùng quét. Nhấn Esc để hủy."
     },
     "exportGeoTiff": "GeoTIFF (COG)",
     "exportLas": "LAS",

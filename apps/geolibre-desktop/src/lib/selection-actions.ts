@@ -5,8 +5,8 @@ import {
   type GeoLibreLayer,
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
-import type { Feature, FeatureCollection } from "geojson";
-import { featureColorPatch } from "./feature-color";
+import type { Feature, FeatureCollection, Polygon } from "geojson";
+import { featureAreaColorPatch, featureColorPatch } from "./feature-color";
 
 /**
  * Actions on the live feature selection (#1314), shared by the Edit menu and
@@ -72,6 +72,24 @@ export function paintSelection(color: string | null): number {
   store.updateLayer(layer.id, patch);
   clearFeatureSelection();
   return ids.size;
+}
+
+/**
+ * Paint `color` (or with null, strip the paint) on only what lies inside a
+ * drawn area of a layer, splitting features its edge crosses. Returns whether
+ * anything was inside.
+ */
+export function paintArea(layerId: string, area: Polygon, color: string | null): boolean {
+  const store = useAppStore.getState();
+  const layer = store.layers.find((item) => item.id === layerId);
+  if (!layer) return false;
+  const patch = featureAreaColorPatch(layer, area, color);
+  if (!patch) return false;
+  store.updateLayer(layer.id, patch);
+  // Splitting inserts features, so index-based selection ids on this layer
+  // would now point at different features.
+  if (store.selectedLayerId === layer.id) clearFeatureSelection();
+  return true;
 }
 
 /** Fit the map to the selected features (re-using the highlight overlay). */
