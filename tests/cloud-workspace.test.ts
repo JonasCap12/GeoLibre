@@ -56,7 +56,11 @@ describe("cloud workspace discovery", () => {
     const { fetch, calls } = stubFetch(() => ({
       body: { projects: [apiProject()] },
     }));
-    const project = await findCloudWorkspace({ token: TOKEN, baseUrl: `${BASE}/`, fetchImpl: fetch });
+    const project = await findCloudWorkspace({
+      token: TOKEN,
+      baseUrl: `${BASE}/`,
+      fetchImpl: fetch,
+    });
     assert.equal(project?.id, "workspace-id");
     assert.equal(calls[0].url, `${BASE}/api/projects?mine=true&limit=100`);
     assert.equal(new Headers(calls[0].init.headers).get("Authorization"), `Bearer ${TOKEN}`);
@@ -73,10 +77,7 @@ describe("cloud workspace discovery", () => {
 
   it("returns null when the account has no cloud workspace", async () => {
     const { fetch } = stubFetch(() => ({ body: { projects: [] } }));
-    assert.equal(
-      await findCloudWorkspace({ token: TOKEN, baseUrl: BASE, fetchImpl: fetch }),
-      null,
-    );
+    assert.equal(await findCloudWorkspace({ token: TOKEN, baseUrl: BASE, fetchImpl: fetch }), null);
   });
 
   it("surfaces an invalid token without leaking it", async () => {
@@ -108,6 +109,17 @@ describe("cloud workspace content", () => {
     );
     assert.equal(new Headers(calls[0].init.headers).get("Authorization"), `Bearer ${TOKEN}`);
     assert.equal(calls[0].init.cache, "no-store");
+  });
+
+  it("reports a workspace whose content is gone as null, not an error", async () => {
+    const { fetch } = stubFetch(() => ({
+      status: 404,
+      body: { error: "project content not found" },
+    }));
+    assert.equal(
+      await downloadCloudWorkspace(apiProject(), { token: TOKEN, baseUrl: BASE, fetchImpl: fetch }),
+      null,
+    );
   });
 
   it("never sends the bearer token to a raw URL on another origin", async () => {
@@ -182,7 +194,7 @@ describe("cloud workspace content", () => {
       status: 201,
       body: { project: apiProject(), version: 2 },
     }));
-    await updateCloudWorkspace("workspace/id", "{\"layers\":[]}", {
+    await updateCloudWorkspace("workspace/id", '{"layers":[]}', {
       token: TOKEN,
       baseUrl: BASE,
       fetchImpl: fetch,

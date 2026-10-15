@@ -164,8 +164,16 @@ export function useCloudWorkspace(
     void (async () => {
       try {
         workspace = await findCloudWorkspace(options);
-        if (workspace) {
-          const content = await downloadCloudWorkspace(workspace, options);
+        // A workspace whose stored content is gone has nothing to restore. Keep
+        // the project so the first save appends a version to it, and save now
+        // rather than on the next edit so later launches stop hitting the 404.
+        let repairWorkspace = false;
+        const content = workspace ? await downloadCloudWorkspace(workspace, options) : null;
+        if (workspace && content === null) {
+          console.warn("[GeoLibre] The cloud workspace has no content; saving a fresh copy.");
+          repairWorkspace = true;
+        }
+        if (content !== null) {
           const project = parseProject(content);
           if (cancelled) return;
           const current = useAppStore.getState();
@@ -201,7 +209,7 @@ export function useCloudWorkspace(
 
         // Covers an edit that landed after the final guard but before the
         // subscription was installed (for example, a very fast file drop).
-        if (useAppStore.getState().isDirty) {
+        if (useAppStore.getState().isDirty || repairWorkspace) {
           changeRevision += 1;
           scheduleSave();
         }
