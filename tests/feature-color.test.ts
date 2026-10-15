@@ -118,6 +118,16 @@ describe("featureColorPatch", () => {
     assert.equal(patch?.style, undefined);
   });
 
+  it("marks the layer edited so a save keeps the painted features", () => {
+    const layer = makeLayer({ metadata: { sharedDatasetId: "dataset-1" } });
+    for (const color of ["#16a34a", null]) {
+      const patch = featureColorPatch(layer, new Set(["0"]), color);
+      assert.equal(patch?.metadata?.geometryEdited, true);
+      // The rest of the metadata is carried over, not replaced.
+      assert.equal(patch?.metadata?.sharedDatasetId, "dataset-1");
+    }
+  });
+
   it("stamps the edit on a layer with editor tracking", () => {
     const layer = makeLayer({ editorTracking: { enabled: true } });
     const patch = featureColorPatch(layer, new Set(["0"]), "#2563eb");
