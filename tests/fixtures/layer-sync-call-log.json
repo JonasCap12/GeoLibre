@@ -7191,7 +7191,7 @@
           "source-vt",
           {
             "type": "vector",
-            "tiles": ["geolibre-gjvt://vt/{z}/{x}/{y}"],
+            "tiles": ["geolibre-gjvt://vt/{z}/{x}/{y}?v=1"],
             "minzoom": 0,
             "maxzoom": 16
           }
@@ -7348,7 +7348,7 @@
           "source-vt",
           {
             "type": "vector",
-            "tiles": ["geolibre-gjvt://vt/{z}/{x}/{y}"],
+            "tiles": ["geolibre-gjvt://vt/{z}/{x}/{y}?v=2"],
             "minzoom": 0,
             "maxzoom": 16
           }
