@@ -11277,7 +11277,8 @@
     "status": {
       "done": "Done",
       "wip": "In progress",
-      "clear": "Clear mark"
+      "clear": "Clear mark",
+      "none": "Not started"
     },
     "items": "Work items",
     "itemsEmpty": "No work items yet. Add them in Settings.",
@@ -11314,6 +11315,15 @@
     "newItem": "New work item",
     "addItem": "Add item",
     "removeItem": "Remove item",
-    "resuggest": "Rebuild from CAD layers"
+    "resuggest": "Rebuild from CAD layers",
+    "markClick": "Click features",
+    "brushOn": "Click features on the map to mark them: {{status}}",
+    "brushStop": "Stop",
+    "structures": "Structures",
+    "wholeProject": "Whole project",
+    "matrixTitle": "{{name}} · {{pct}}%",
+    "cellTitle": "{{component}} · {{item}}: {{done}} done, {{wip}} in progress, {{none}} not started",
+    "componentTitle": "Select {{component}} on the map",
+    "selectOnMap": "Select on the map"
   }
 }

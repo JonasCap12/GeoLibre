@@ -6154,20 +6154,14 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
     --progress-side-w: 0px;
     --progress-strip-h: 46dvh;
   }
-  /* Too short for four stacked blocks: the chart and the issues share a row. */
+  /* The chart and the issues already share the footer row; the strip just
+     stacks the blocks under the map. */
   .progress-screen-side {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: auto minmax(3.5rem, 1.6fr) minmax(3.5rem, 1fr);
     inset-block-start: auto;
     inset-inline: 0;
     width: auto;
     height: var(--progress-strip-h);
     border-inline-start-width: 0;
     border-block-start-width: 1px;
-  }
-  .progress-screen-side > [data-block="mark"],
-  .progress-screen-side > [data-block="items"] {
-    grid-column: 1 / -1;
   }
 }
