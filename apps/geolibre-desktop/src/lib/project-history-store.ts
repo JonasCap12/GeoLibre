@@ -185,6 +185,11 @@ function createSnapshotId(): string {
   );
 }
 
+// Autosave runs after every edit, so a project that stays too large would log
+// the same skip every few seconds. The status bar already shows autosave as
+// paused; the console says so once per stretch of oversized saves.
+let warnedTooLarge = false;
+
 export async function addProjectSnapshot(
   content: string,
   projectKey?: string,
@@ -193,11 +198,15 @@ export async function addProjectSnapshot(
   if (!available()) return "duplicate";
   const size = new Blob([content]).size;
   if (size > MAX_SNAPSHOT_BYTES) {
-    console.warn(
-      `Project autosave skipped: snapshot is ${size} bytes, above the ${MAX_SNAPSHOT_BYTES}-byte limit.`,
-    );
+    if (!warnedTooLarge) {
+      console.warn(
+        `Project autosave skipped: snapshot is ${size} bytes, above the ${MAX_SNAPSHOT_BYTES}-byte limit.`,
+      );
+      warnedTooLarge = true;
+    }
     return "too-large";
   }
+  warnedTooLarge = false;
   const project = parseProject(content);
   const contentHash = hashContent(content);
   const existing = await listProjectSnapshotMetadata();
