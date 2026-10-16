@@ -6,7 +6,7 @@ import {
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import type { Feature, FeatureCollection, Polygon } from "geojson";
-import { featureAreaColorPatch, featureColorPatch } from "./feature-color";
+import { featureAreaColorPatch, featureColorPatch, type PaintProperties } from "./feature-color";
 
 /**
  * Actions on the live feature selection (#1314), shared by the Edit menu and
@@ -60,14 +60,15 @@ export function clearFeatureSelection(): void {
  * Paint the selected features `color`, or restore the layer style on them
  * when `color` is null. The selection is cleared afterwards: its highlight
  * would otherwise cover the color that was just applied. Returns how many
- * features were painted.
+ * features were painted. `extra` properties (such as a construction state)
+ * are written with the color.
  */
-export function paintSelection(color: string | null): number {
+export function paintSelection(color: string | null, extra?: PaintProperties): number {
   const layer = selectionHolderLayer();
   if (!layer) return 0;
   const store = useAppStore.getState();
   const ids = new Set(store.selectedFeatureIds);
-  const patch = featureColorPatch(layer, ids, color);
+  const patch = featureColorPatch(layer, ids, color, extra);
   if (!patch) return 0;
   store.updateLayer(layer.id, patch);
   clearFeatureSelection();
@@ -79,11 +80,17 @@ export function paintSelection(color: string | null): number {
  * drawn area of a layer, splitting features its edge crosses. Returns whether
  * anything was inside.
  */
-export function paintArea(layerId: string, area: Polygon, color: string | null): boolean {
+export function paintArea(
+  layerId: string,
+  area: Polygon,
+  color: string | null,
+  extra?: PaintProperties,
+  keepWhole?: (feature: Feature) => boolean,
+): boolean {
   const store = useAppStore.getState();
   const layer = store.layers.find((item) => item.id === layerId);
   if (!layer) return false;
-  const patch = featureAreaColorPatch(layer, area, color);
+  const patch = featureAreaColorPatch(layer, area, color, extra, keepWhole);
   if (!patch) return false;
   store.updateLayer(layer.id, patch);
   // Splitting inserts features, so index-based selection ids on this layer
