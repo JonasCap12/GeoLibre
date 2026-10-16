@@ -323,6 +323,42 @@ describe("issues and fitting", () => {
   });
 });
 
+describe("progress screen", () => {
+  it("opens on the active drawing and seeds a setup from its CAD layers", async () => {
+    const { useAppStore } = await import("@geolibre/core");
+    const screen = await import("../apps/geolibre-desktop/src/lib/progress-screen");
+    const drawing = layer([feature("COC", point(0)), feature("DAM", line(0, 1))]);
+    const empty = { ...layer([]), id: "empty" } as GeoLibreLayer;
+    useAppStore.setState({ layers: [empty, drawing], selectedLayerId: "empty" });
+    try {
+      let calls = 0;
+      const unsubscribe = screen.subscribeProgressScreen(() => (calls += 1));
+      // Neither the empty active layer nor a missing id can carry progress.
+      assert.equal(screen.openProgressScreen(), null);
+      assert.equal(screen.openProgressScreen("missing"), null);
+      useAppStore.setState({ selectedLayerId: "drawing" });
+      assert.equal(screen.openProgressScreen(), "drawing");
+      assert.equal(screen.getProgressScreenLayerId(), "drawing");
+      const stored = readProgressConfig(useAppStore.getState().layers[1]);
+      assert.deepEqual(
+        stored?.items.map((i) => i.name),
+        ["COC", "DAM"],
+      );
+      assert.equal(stored?.title, "Bản vẽ");
+      // Once a layer has a setup, it is found without being active.
+      useAppStore.setState({ selectedLayerId: null });
+      assert.equal(screen.progressScreenTarget(useAppStore.getState().layers, null)?.id, "drawing");
+      screen.closeProgressScreen();
+      screen.closeProgressScreen();
+      assert.equal(screen.getProgressScreenLayerId(), null);
+      assert.equal(calls, 2);
+      unsubscribe();
+    } finally {
+      useAppStore.setState({ layers: [], selectedLayerId: null });
+    }
+  });
+});
+
 describe("item features and bounds", () => {
   it("finds an item's features and the box around them", async () => {
     const { itemFeatureIndexes, featuresBounds } =

@@ -6113,3 +6113,61 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   ) {
   filter: url(#geolibre-cvd-achromatopsia);
 }
+
+/* Fork: construction progress screen (components/progress). The shell keeps
+   its own layout; while the screen is open the map area (the shell's one
+   `main.isolate`) is pinned into the screen's map cell and the screen's header band and side column cover the
+   rest, so the whole view fits the viewport and nothing scrolls. Dialogs and
+   menus (z-50) still open above it. On a narrow viewport the side column
+   becomes a strip under the map. */
+:root[data-progress-screen] {
+  --progress-header-h: 4.75rem;
+  --progress-side-w: clamp(19rem, 28vw, 27rem);
+  --progress-strip-h: 0px;
+  overflow: hidden;
+}
+:root[data-progress-screen] main.isolate {
+  position: fixed;
+  z-index: 40;
+  inset-block: var(--progress-header-h) var(--progress-strip-h);
+  inset-inline: 0 var(--progress-side-w);
+  min-height: 0;
+}
+.progress-screen-header {
+  position: fixed;
+  z-index: 40;
+  inset-block-start: 0;
+  inset-inline: 0;
+  height: var(--progress-header-h);
+}
+.progress-screen-side {
+  position: fixed;
+  z-index: 40;
+  inset-block: var(--progress-header-h) 0;
+  inset-inline-end: 0;
+  width: var(--progress-side-w);
+  border-inline-start-width: 1px;
+}
+@media (max-width: 899px) {
+  :root[data-progress-screen] {
+    --progress-header-h: 4rem;
+    --progress-side-w: 0px;
+    --progress-strip-h: 46dvh;
+  }
+  /* Too short for four stacked blocks: the chart and the issues share a row. */
+  .progress-screen-side {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(3.5rem, 1.6fr) minmax(3.5rem, 1fr);
+    inset-block-start: auto;
+    inset-inline: 0;
+    width: auto;
+    height: var(--progress-strip-h);
+    border-inline-start-width: 0;
+    border-block-start-width: 1px;
+  }
+  .progress-screen-side > [data-block="mark"],
+  .progress-screen-side > [data-block="items"] {
+    grid-column: 1 / -1;
+  }
+}
