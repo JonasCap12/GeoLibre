@@ -77,6 +77,14 @@
       "restoreLayerError": "Không thể khôi phục lớp này từ bản chụp."
     }
   },
+  "cloudWorkspace": {
+    "loading": "Đang khôi phục không gian làm việc trên cloud…",
+    "saving": "Đang lưu lên cloud…",
+    "saved": "Đã lưu lên cloud",
+    "error": "Lưu cloud thất bại",
+    "tooLarge": "Dự án nặng {{size}} MB, vượt mức {{limit}} MB mà một lần lưu cloud mang được, và không có lớp nào chuyển được sang thư viện dùng chung để giảm dung lượng.",
+    "layerUploadFailed": "Không chuyển được {{name}} sang thư viện dùng chung để lần lưu cloud vừa dung lượng: {{detail}}"
+  },
   "browser": {
     "title": "Trình duyệt",
     "services": "Dịch vụ",

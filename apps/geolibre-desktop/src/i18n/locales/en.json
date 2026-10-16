@@ -84,7 +84,9 @@
     "loading": "Restoring cloud workspace…",
     "saving": "Saving to cloud…",
     "saved": "Saved to cloud",
-    "error": "Cloud save failed"
+    "error": "Cloud save failed",
+    "tooLarge": "The project is {{size}} MB, above the {{limit}} MB a cloud save can carry, and no layer could be moved to the shared library to make room.",
+    "layerUploadFailed": "Could not move {{name}} to the shared library to make the cloud save fit: {{detail}}"
   },
   "browser": {
     "title": "Browser",
