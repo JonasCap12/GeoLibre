@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useCallback, useState } from "react";
 import { DesktopShell } from "./components/layout/DesktopShell";
+import { ConstructionProgressScreen } from "./components/progress/ConstructionProgressScreen";
 import { NotificationRegion } from "./components/layout/NotificationRegion";
 import { OnboardingDialog } from "./components/layout/OnboardingDialog";
 import { UpdateNotificationModal } from "./components/layout/UpdateNotificationModal";
@@ -90,6 +91,7 @@ export default function App() {
             onToggleThemeMode={toggleThemeMode}
             onMapReady={handleMapReady}
           />
+          <ConstructionProgressScreen camera={mapAppAPI} />
           <OnboardingDialog open={showOnboarding} onClose={dismissOnboarding} />
         </>
       )}

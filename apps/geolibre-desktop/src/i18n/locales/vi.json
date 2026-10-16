@@ -11017,5 +11017,60 @@
     "updated": "Đã lưu bản ghi liên quan {{id}}.",
     "unchanged": "Không có gì thay đổi, nên không có gì được gửi.",
     "deleted": "Đã xóa bản ghi liên quan {{id}}."
+  },
+  "progress": {
+    "title": "Tiến độ thi công",
+    "openScreen": "Màn hình tiến độ thi công",
+    "noLayer": "Hãy chọn một lớp bản vẽ có đối tượng trước, rồi mở màn hình tiến độ.",
+    "week": "Tuần {{week}} · {{date}}",
+    "actual": "Thực hiện",
+    "planned": "Kế hoạch",
+    "deviation": "Chênh lệch",
+    "closeWeek": "Chốt tuần",
+    "settings": "Cài đặt",
+    "mark": "Đánh dấu trên bản vẽ",
+    "markHint": "Chọn kiểu quét hoặc vùng đang chọn, rồi chọn trạng thái. Quét chỉ đánh dấu phần nằm trong vùng quét. Bấm vào một hạng mục để chọn các đối tượng của nó.",
+    "markSelection": "Vùng chọn ({{count}})",
+    "markMenu": "Đánh dấu tiến độ thi công",
+    "status": {
+      "done": "Xong",
+      "wip": "Đang làm",
+      "clear": "Bỏ đánh dấu"
+    },
+    "items": "Hạng mục",
+    "itemsEmpty": "Chưa có hạng mục. Thêm trong phần Cài đặt.",
+    "itemTitle": "{{name}} · kế hoạch {{plan}}% · bấm để chọn các đối tượng",
+    "overridden": "nhập tay",
+    "more": "+{{count}} mục khác",
+    "history": "Diễn biến theo tuần",
+    "historyEmpty": "Bấm Chốt tuần để bắt đầu biểu đồ.",
+    "issues": "Vấn đề cần chú ý",
+    "issuesEmpty": "Chưa ghi nhận.",
+    "settingsTitle": "Cài đặt tiến độ",
+    "settingsDescription": "Gán các lớp CAD của bản vẽ vào hạng mục. % của hạng mục tính phần đã Xong đủ, phần Đang làm một nửa, trừ khi bạn nhập tay.",
+    "field": {
+      "title": "Tiêu đề",
+      "subtitle": "Dòng phụ",
+      "name": "Hạng mục",
+      "weight": "Trọng số",
+      "measure": "Đo theo",
+      "plan": "% kế hoạch",
+      "override": "% nhập tay",
+      "overrideAuto": "tự động",
+      "cadLayers": "Lớp CAD",
+      "notes": "Vấn đề cần chú ý",
+      "notesHint": "Mỗi dòng một vấn đề"
+    },
+    "measure": {
+      "count": "Số lượng",
+      "length": "Chiều dài (m)",
+      "area": "Diện tích (m²)"
+    },
+    "cadLayerCount_other": "{{count}} lớp",
+    "noCadLayers": "Bản vẽ này không có tên lớp CAD.",
+    "newItem": "Hạng mục mới",
+    "addItem": "Thêm hạng mục",
+    "removeItem": "Xóa hạng mục",
+    "resuggest": "Tạo lại từ lớp CAD"
   }
 }

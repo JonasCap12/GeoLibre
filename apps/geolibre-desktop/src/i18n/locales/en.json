@@ -11255,5 +11255,61 @@
     "updated": "Saved related record {{id}}.",
     "unchanged": "Nothing changed, so nothing was sent.",
     "deleted": "Deleted related record {{id}}."
+  },
+  "progress": {
+    "title": "Construction progress",
+    "openScreen": "Construction progress screen",
+    "noLayer": "Select a drawing layer with features first, then open the progress screen.",
+    "week": "Week {{week}} · {{date}}",
+    "actual": "Actual",
+    "planned": "Planned",
+    "deviation": "Deviation",
+    "closeWeek": "Record week",
+    "settings": "Settings",
+    "mark": "Mark on the drawing",
+    "markHint": "Choose a sweep shape or the current selection, then a state. A sweep marks only the part inside it. Click a work item to select its features.",
+    "markSelection": "Selection ({{count}})",
+    "markMenu": "Mark construction progress",
+    "status": {
+      "done": "Done",
+      "wip": "In progress",
+      "clear": "Clear mark"
+    },
+    "items": "Work items",
+    "itemsEmpty": "No work items yet. Add them in Settings.",
+    "itemTitle": "{{name}} · plan {{plan}}% · click to select its features",
+    "overridden": "manual",
+    "more": "+{{count}} more",
+    "history": "Weekly progress",
+    "historyEmpty": "Record a week to start the chart.",
+    "issues": "Issues to watch",
+    "issuesEmpty": "None noted.",
+    "settingsTitle": "Progress settings",
+    "settingsDescription": "Map the drawing's CAD layers to work items. An item's percent counts features marked done in full and in progress by half, unless you enter it by hand.",
+    "field": {
+      "title": "Title",
+      "subtitle": "Subtitle",
+      "name": "Work item",
+      "weight": "Weight",
+      "measure": "Measure by",
+      "plan": "Plan %",
+      "override": "Manual %",
+      "overrideAuto": "auto",
+      "cadLayers": "CAD layers",
+      "notes": "Issues to watch",
+      "notesHint": "One issue per line"
+    },
+    "measure": {
+      "count": "Count",
+      "length": "Length (m)",
+      "area": "Area (m²)"
+    },
+    "cadLayerCount_one": "{{count}} layer",
+    "cadLayerCount_other": "{{count}} layers",
+    "noCadLayers": "This drawing has no CAD layer names.",
+    "newItem": "New work item",
+    "addItem": "Add item",
+    "removeItem": "Remove item",
+    "resuggest": "Rebuild from CAD layers"
   }
 }
