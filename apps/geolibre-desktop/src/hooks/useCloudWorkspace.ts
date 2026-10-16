@@ -1,20 +1,40 @@
 import { parseProject, serializeProject, useAppStore } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
+import i18next from "i18next";
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { buildCollaborationSnapshot } from "../lib/build-project-snapshot";
 import { rehydrateSharedLayersInStore } from "../lib/collaboration-shared-load";
+import { collaborationSnapshotMeasure } from "../lib/collaboration-snapshot-measure";
 import {
+  applyCollaborationPromotions,
+  uploadCollaborationCandidate,
+} from "../lib/collaboration-snapshot-shrink";
+import {
+  CloudWorkspaceError,
   createCloudWorkspace,
   downloadCloudWorkspace,
   findCloudWorkspace,
   updateCloudWorkspace,
   type CloudWorkspaceProject,
 } from "../lib/cloud-workspace";
+import {
+  CLOUD_WORKSPACE_INLINE_BYTES,
+  CLOUD_WORKSPACE_MAX_BYTES,
+  cloudSaveRetryDelay,
+  LARGE_WORKSPACE_SAVE_DEBOUNCE_MS,
+  createWorkspacePromotionBook,
+  currentPromotions,
+  deleteSupersededUploads,
+  documentBytes,
+  shrinkWorkspaceLayers,
+  workspaceTooLargeMessage,
+} from "../lib/cloud-workspace-shrink";
 import { dataUrlParameters, serviceUrlParameter } from "../lib/data-url";
 import { isTauri } from "../lib/is-tauri";
 import { projectChanged } from "../lib/project-broadcast-changed";
 import { projectUrlFromLocation } from "../lib/project-url";
 import { resolveShareBaseUrl } from "../lib/share-geolibre";
+import { deleteSharedDataset } from "../lib/shared-datasets";
 import { isEmbedded } from "./embedHost";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
 
@@ -80,6 +100,13 @@ export function useCloudWorkspace(
     let changeRevision = 0;
     let workspace: CloudWorkspaceProject | null = null;
     let lastContent: string | null = null;
+    // Layers moved to the shared library to keep the saved document small,
+    // and this session's older copies waiting for a save that no longer
+    // needs them.
+    const promotionBook = createWorkspacePromotionBook();
+    let pendingDeletes: string[] = [];
+    // Retries made since the last successful save.
+    let retryAttempt = 0;
     const abortController = new AbortController();
     const initialGeneration = useAppStore.getState().projectGeneration;
     const options = {
@@ -112,14 +139,49 @@ export function useCloudWorkspace(
         // This is the same portable, credential-redacted snapshot sent to a
         // collaborator. Local vector uploads are embedded before serialization,
         // so restoring the cloud copy does not depend on a vanished File object.
-        const project = await buildCollaborationSnapshot(mapControllerRef);
-        const content = serializeProject(project);
+        let content = serializeProject(await buildCollaborationSnapshot(mapControllerRef));
+        if (documentBytes(content) > CLOUD_WORKSPACE_INLINE_BYTES) {
+          // Move the largest embedded layers to the shared library and save
+          // their ids, so each version stays small.
+          const before = useAppStore.getState().layers;
+          const shrunk = await shrinkWorkspaceLayers({
+            layers: before,
+            token,
+            book: promotionBook,
+            measure: collaborationSnapshotMeasure(mapControllerRef),
+            upload: uploadCollaborationCandidate,
+          });
+          const applied = currentPromotions(
+            shrunk.promotions,
+            before,
+            useAppStore.getState().layers,
+          );
+          applyCollaborationPromotions(applied);
+          pendingDeletes.push(...shrunk.superseded);
+          if (applied.length > 0) {
+            content = serializeProject(await buildCollaborationSnapshot(mapControllerRef));
+          }
+          const bytes = documentBytes(content);
+          // A layer that could not move still saves whole, as before. Only a
+          // document the API would refuse is stopped here.
+          if (bytes > CLOUD_WORKSPACE_MAX_BYTES) {
+            throw new CloudWorkspaceError(
+              workspaceTooLargeMessage({ failure: shrunk.failure, bytes }, i18next.t),
+              413,
+            );
+          }
+        }
         if (content !== lastContent) {
           workspace = workspace
             ? await updateCloudWorkspace(workspace.id, content, options)
             : await createCloudWorkspace(content, options);
           lastContent = content;
         }
+        // The saved version points at the newer copies now.
+        const deletes = pendingDeletes;
+        pendingDeletes = [];
+        void deleteSupersededUploads(deletes, (id) => deleteSharedDataset(id, { token }));
+        retryAttempt = 0;
         showSaved();
 
         // A later edit may have landed while the snapshot/upload was in flight.
@@ -140,6 +202,19 @@ export function useCloudWorkspace(
           status: "error",
           error: error instanceof Error ? error.message : String(error),
         });
+        // A dropped upload often goes through on a later try. Retry on our own
+        // unless an edit has already queued the next save.
+        const delay = cloudSaveRetryDelay(
+          error instanceof CloudWorkspaceError ? error.status : 400,
+          retryAttempt,
+        );
+        if (delay !== null && saveTimer === null && !pendingSave) {
+          retryAttempt += 1;
+          saveTimer = window.setTimeout(() => {
+            saveTimer = null;
+            void save();
+          }, delay);
+        }
       } finally {
         saving = false;
         if (!cancelled && pendingSave) {
@@ -154,10 +229,15 @@ export function useCloudWorkspace(
 
     const scheduleSave = () => {
       if (saveTimer !== null) window.clearTimeout(saveTimer);
-      saveTimer = window.setTimeout(() => {
-        saveTimer = null;
-        void save();
-      }, CLOUD_SAVE_DEBOUNCE_MS);
+      // Once a drawing had to go to the library, every pause in painting it
+      // would upload it again; wait for a longer quiet spell instead.
+      saveTimer = window.setTimeout(
+        () => {
+          saveTimer = null;
+          void save();
+        },
+        promotionBook.uploaded.size > 0 ? LARGE_WORKSPACE_SAVE_DEBOUNCE_MS : CLOUD_SAVE_DEBOUNCE_MS,
+      );
     };
 
     setSyncState({ status: "loading", error: null });
