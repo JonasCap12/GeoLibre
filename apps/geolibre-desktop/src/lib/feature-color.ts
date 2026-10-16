@@ -34,8 +34,18 @@ export const FEATURE_COLOR_PRESETS = [
   { color: "#6b7280", labelKey: "layers.featureColor.gray" },
 ] as const;
 
+/**
+ * Extra properties a paint writes beside the color, such as a construction
+ * state. A null value removes that property.
+ */
+export type PaintProperties = Readonly<Record<string, string | null>>;
+
 /** Writes (or with null, strips) the paint on one feature's properties. */
-function paintedProperties(layer: GeoLibreLayer, color: string | null) {
+function paintedProperties(
+  layer: GeoLibreLayer,
+  color: string | null,
+  extra: PaintProperties | undefined,
+) {
   // One identity and timestamp for the whole paint, as a field calculation
   // stamps: a paint is a single edit however many features it touches.
   const stampOptions = editorTrackingFieldNames(layer.editorTracking)
@@ -50,6 +60,10 @@ function paintedProperties(layer: GeoLibreLayer, color: string | null) {
     for (const key of FEATURE_COLOR_KEYS) {
       if (color === null) delete properties[key];
       else properties[key] = color;
+    }
+    for (const [key, value] of Object.entries(extra ?? {})) {
+      if (value === null) delete properties[key];
+      else properties[key] = value;
     }
     return stampOptions
       ? stampFeaturePropertiesEditorTracking(properties, "update", stampOptions)
@@ -82,6 +96,7 @@ function paintPatch(
  * @param layer - The layer holding the features.
  * @param featureIds - Selection ids (see `featureSelectionId`) of the features to paint.
  * @param color - A `#rrggbb` color, or null to restore the layer style.
+ * @param extra - Properties written (or with null, removed) with the color.
  * @returns The patch for `updateLayer`, or null when the layer has no
  *   in-store features or none of the ids match.
  */
@@ -89,9 +104,10 @@ export function featureColorPatch(
   layer: GeoLibreLayer,
   featureIds: ReadonlySet<string>,
   color: string | null,
+  extra?: PaintProperties,
 ): Partial<GeoLibreLayer> | null {
   if (!layer.geojson || featureIds.size === 0) return null;
-  const paint = paintedProperties(layer, color);
+  const paint = paintedProperties(layer, color, extra);
   let changed = 0;
   const features = layer.geojson.features.map((feature, index) => {
     if (!featureIds.has(featureSelectionId(feature, index))) return feature;
@@ -113,6 +129,9 @@ export function featureColorPatch(
  * @param layer - The layer holding the features.
  * @param area - The drawn area, one ring in longitude/latitude.
  * @param color - A `#rrggbb` color, or null to strip the paint inside the area.
+ * @param extra - Properties written (or with null, removed) with the color.
+ * @param keepWhole - Features that must never be split, such as a pile that
+ *   is counted rather than measured: they are painted only when wholly inside.
  * @returns The patch for `updateLayer`, or null when the layer has no
  *   in-store features or nothing of it lies inside the area.
  */
@@ -120,14 +139,16 @@ export function featureAreaColorPatch(
   layer: GeoLibreLayer,
   area: Polygon,
   color: string | null,
+  extra?: PaintProperties,
+  keepWhole?: (feature: Feature) => boolean,
 ): Partial<GeoLibreLayer> | null {
   if (!layer.geojson) return null;
-  const paint = paintedProperties(layer, color);
+  const paint = paintedProperties(layer, color, extra);
   let changed = 0;
   const features: Feature[] = [];
   for (const feature of layer.geojson.features) {
     const split = feature.geometry ? splitGeometryByArea(feature.geometry, area) : null;
-    if (!split?.inside) {
+    if (!split?.inside || (split.outside && keepWhole?.(feature))) {
       features.push(feature);
       continue;
     }
