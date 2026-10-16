@@ -8825,6 +8825,7 @@
       "opacity": "Chiều rộng hào quang văn bản",
       "advanced": "Biểu thức chiều cao nâng cao",
       "heightExpression": "biểu hiện chiều cao",
+      "baseExpression": "Biểu thức cao độ đáy (tùy chọn)",
       "heightProperty": "Thuộc tính chiều cao",
       "heightScale": "Thang đo chiều cao",
       "base": "Chiều cao cơ sở",
@@ -8834,7 +8835,8 @@
     "expressionLabels": {
       "style": "biểu hiện phong cách",
       "color": "Biểu hiện màu sắc",
-      "height": "biểu hiện chiều cao"
+      "height": "biểu hiện chiều cao",
+      "base": "Biểu thức cao độ đáy"
     },
     "expressionErrors": {
       "notArray": "{{label}} phải là biểu thức mảng JSON.",

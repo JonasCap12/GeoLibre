@@ -31,6 +31,8 @@ export function ExtrusionControls({
     draftColorExpression,
     draftHeightExpression,
     setDraftHeightExpression,
+    draftBaseExpression,
+    setDraftBaseExpression,
     draftExtrusionColor,
     setDraftExtrusionColor,
     draftExtrusionOpacity,
@@ -54,7 +56,8 @@ export function ExtrusionControls({
     draftExtrusionBase !== styleValue(style, "extrusionBase") ||
     draftAdvancedExtrusionEnabled !== styleValue(style, "extrusionAdvancedStyleEnabled") ||
     draftColorExpression !== styleValue(style, "extrusionColorExpression") ||
-    draftHeightExpression !== styleValue(style, "extrusionHeightExpression");
+    draftHeightExpression !== styleValue(style, "extrusionHeightExpression") ||
+    draftBaseExpression !== styleValue(style, "extrusionBaseExpression");
   const applyExtrusionSettings = () => {
     if (draftAdvancedExtrusionEnabled) {
       const colorError = validateExpressionJson(
@@ -76,6 +79,15 @@ export function ExtrusionControls({
         setExtrusionError(heightError);
         return;
       }
+
+      // Optional: an empty base keeps the flat base below.
+      const baseError = draftBaseExpression.trim()
+        ? validateExpressionJson(draftBaseExpression, t("style.expressionLabels.base"), t)
+        : null;
+      if (baseError) {
+        setExtrusionError(baseError);
+        return;
+      }
     }
 
     setExtrusionError(null);
@@ -88,6 +100,7 @@ export function ExtrusionControls({
       extrusionAdvancedStyleEnabled: draftAdvancedExtrusionEnabled,
       extrusionColorExpression: draftColorExpression.trim(),
       extrusionHeightExpression: draftHeightExpression.trim(),
+      extrusionBaseExpression: draftBaseExpression.trim(),
     });
   };
   return (
@@ -135,6 +148,17 @@ export function ExtrusionControls({
             value={draftHeightExpression}
             onChange={(event) => {
               setDraftHeightExpression(event.target.value);
+              setExtrusionError(null);
+            }}
+          />
+          <Label htmlFor="extrusionBaseExpression">{t("style.extrusion.baseExpression")}</Label>
+          <textarea
+            id="extrusionBaseExpression"
+            className="min-h-14 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs placeholder:text-muted-foreground focus-visible:border-2 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-0"
+            placeholder='["get", "base"]'
+            value={draftBaseExpression}
+            onChange={(event) => {
+              setDraftBaseExpression(event.target.value);
               setExtrusionError(null);
             }}
           />

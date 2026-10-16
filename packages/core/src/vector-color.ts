@@ -984,6 +984,23 @@ export function extrusionHeightValue(style: LayerStyle): number | unknown[] {
 }
 
 /**
+ * Resolves where a 3D extrusion starts: in advanced mode a valid
+ * `extrusionBaseExpression` (per-feature, so one layer can hold floating
+ * parts), otherwise the flat `extrusionBase` in metres.
+ *
+ * @param style - The layer style.
+ * @returns The extrusion base as a number or a MapLibre expression array.
+ */
+export function extrusionBaseValue(style: LayerStyle): number | unknown[] {
+  const advancedExpression = parseJsonExpression(
+    styleValue(style, "extrusionAdvancedStyleEnabled")
+      ? styleValue(style, "extrusionBaseExpression")
+      : "",
+  );
+  return advancedExpression ?? styleValue(style, "extrusionBase");
+}
+
+/**
  * Resolves the 3D-extrusion color for a layer style: a data-driven expression
  * when the layer's symbology mode produces one (categorized/graduated/rule/
  * expression) or an advanced `extrusionColorExpression` is set, otherwise the

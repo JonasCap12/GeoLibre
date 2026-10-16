@@ -190,3 +190,58 @@ describe("StylePanel", () => {
     );
   });
 });
+
+describe("StylePanel 3D extrusion base", () => {
+  it("applies a per-feature base expression in advanced mode", () => {
+    useAppStore.setState({
+      layers: [
+        geojsonLayer({
+          id: "blocks",
+          name: "Blocks",
+          geojson: polygons,
+          style: {
+            ...style0(),
+            extrusionEnabled: true,
+            extrusionAdvancedStyleEnabled: true,
+            extrusionHeightExpression: '["get", "h"]',
+          },
+        }),
+      ],
+      selectedLayerId: "blocks",
+    });
+    renderStylePanel();
+
+    act(() => {
+      fireEvent.change(input("Base expression (optional)"), {
+        target: { value: '["get", "base"]' },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Apply 3D extrusion" }));
+    });
+    assert.equal(style("blocks").extrusionBaseExpression, '["get", "base"]');
+    assert.equal(style("blocks").extrusionHeightExpression, '["get", "h"]');
+  });
+
+  it("refuses an invalid base expression", () => {
+    useAppStore.setState({
+      layers: [
+        geojsonLayer({
+          id: "blocks",
+          name: "Blocks",
+          geojson: polygons,
+          style: { ...style0(), extrusionEnabled: true, extrusionAdvancedStyleEnabled: true },
+        }),
+      ],
+      selectedLayerId: "blocks",
+    });
+    renderStylePanel();
+    act(() => {
+      fireEvent.change(input("Base expression (optional)"), { target: { value: "[oops" } });
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Apply 3D extrusion" }));
+    });
+    assert.equal(style("blocks").extrusionBaseExpression, "");
+  });
+});
