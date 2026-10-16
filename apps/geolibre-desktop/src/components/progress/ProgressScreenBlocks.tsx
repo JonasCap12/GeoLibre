@@ -1,9 +1,22 @@
 import { featureSelectionId, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import { startFeatureSelection } from "@geolibre/map";
 import { getGeometryEditTargetLayerId } from "@geolibre/plugins";
-import { Button } from "@geolibre/ui";
-import { LassoSelect, Pentagon, SquareDashed } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@geolibre/ui";
+import { LassoSelect, MousePointerClick, Pentagon, SquareDashed } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { canEditAttributeValues } from "../../lib/attribute-table-source";
 import {
@@ -19,7 +32,7 @@ import {
   type ProgressStatus,
   type WeekRecord,
 } from "../../lib/construction-progress";
-import { paintArea, paintSelection } from "../../lib/selection-actions";
+import { paintArea, paintFeatures, paintSelection } from "../../lib/selection-actions";
 
 /**
  * The side column of the construction progress screen: marking states on the
@@ -34,7 +47,7 @@ const ISSUE_ROW_MIN = 22;
 const LIST_PADDING = 8;
 
 type SweepShape = "rectangle" | "polygon" | "freehand";
-type MarkTarget = SweepShape | "selection";
+type MarkTarget = SweepShape | "click" | "selection";
 
 const pctFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
@@ -47,7 +60,7 @@ export interface ProgressScreenCamera {
 }
 
 /** Height of an element, kept current with a ResizeObserver. */
-function useHeight<T extends HTMLElement>(): [RefObject<T | null>, number] {
+export function useHeight<T extends HTMLElement>(): [RefObject<T | null>, number] {
   const ref = useRef<T | null>(null);
   const [height, setHeight] = useState(0);
   useLayoutEffect(() => {
@@ -62,14 +75,14 @@ function useHeight<T extends HTMLElement>(): [RefObject<T | null>, number] {
   return [ref, height];
 }
 
-function Block({
+export function Block({
   kind,
   title,
   className,
   children,
 }: {
   /** Names the block for the narrow-screen grid in `index.css`. */
-  kind: "mark" | "items" | "history" | "issues";
+  kind: "mark" | "items" | "history" | "issues" | "structures" | "matrix";
   title: string;
   className?: string;
   children: ReactNode;
@@ -95,12 +108,45 @@ export function MarkBlock({
   config: ConstructionProgress;
 }) {
   const { t } = useTranslation();
-  const [target, setTarget] = useState<MarkTarget>("rectangle");
+  const [target, setTarget] = useState<MarkTarget>("click");
+  // The click brush: while set, every feature clicked on the map takes this state.
+  const [brush, setBrush] = useState<{ status: ProgressStatus | null } | null>(null);
   const selectedCount = useAppStore((s) =>
     s.selectedLayerId === layer.id ? s.selectedFeatureIds.length : 0,
   );
   const canEdit = canEditAttributeValues(layer, getGeometryEditTargetLayerId());
-  const chosen = target === "selection" && selectedCount === 0 ? "rectangle" : target;
+  const chosen = target === "selection" && selectedCount === 0 ? "click" : target;
+
+  useEffect(() => {
+    if (!brush) return;
+    const { color, extra } = progressStatusPaint(brush.status);
+    // A click on the map selects the feature under it; the brush turns that
+    // selection into a mark and clears it, so the next click starts fresh.
+    return useAppStore.subscribe((state, previous) => {
+      if (state.selectedFeatureIds === previous.selectedFeatureIds) return;
+      if (state.selectedLayerId !== layer.id || state.selectedFeatureIds.length === 0) return;
+      paintFeatures(layer.id, new Set(state.selectedFeatureIds), color, extra);
+      useAppStore.getState().selectFeature(null);
+    });
+  }, [brush, layer.id]);
+
+  // The map's click selection ends on Escape; the brush must not outlive the
+  // screen and keep turning later selections into marks. Only an armed brush
+  // sends it, so closing the screen never dismisses something else.
+  const brushRef = useRef(brush);
+  brushRef.current = brush;
+  const endClickSelection = () =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  const stopBrush = () => {
+    setBrush(null);
+    endClickSelection();
+  };
+  useEffect(
+    () => () => {
+      if (brushRef.current) endClickSelection();
+    },
+    [],
+  );
 
   const mark = (status: ProgressStatus | null) => {
     const { color, extra } = progressStatusPaint(status);
@@ -109,8 +155,15 @@ export function MarkBlock({
       return;
     }
     const store = useAppStore.getState();
-    // A sweep takes over map clicks, so Identify has to let go of them.
+    // A sweep or a click mode takes over map clicks, so Identify has to let go.
     if (store.identifyLayerId !== null) store.setIdentifyLayer(null);
+    if (chosen === "click") {
+      store.selectFeature(null);
+      setBrush({ status });
+      startFeatureSelection({ layerId: layer.id, shape: "single" });
+      return;
+    }
+    setBrush(null);
     startFeatureSelection({
       layerId: layer.id,
       shape: chosen,
@@ -119,6 +172,7 @@ export function MarkBlock({
   };
 
   const targets: Array<[MarkTarget, ReactNode, string]> = [
+    ["click", <MousePointerClick key="c" className="h-3.5 w-3.5" />, t("progress.markClick")],
     [
       "rectangle",
       <SquareDashed key="r" className="h-3.5 w-3.5" />,
@@ -172,8 +226,11 @@ export function MarkBlock({
             size="sm"
             variant="outline"
             disabled={!canEdit}
+            aria-pressed={brush?.status === status}
             onClick={() => mark(status)}
-            className="h-7 gap-1.5 px-2 text-xs"
+            className={`h-7 gap-1.5 px-2 text-xs ${
+              brush?.status === status ? "ring-2 ring-primary ring-offset-1" : ""
+            }`}
           >
             <span
               aria-hidden="true"
@@ -184,6 +241,18 @@ export function MarkBlock({
           </Button>
         ))}
       </div>
+      {brush ? (
+        <div className="flex items-center gap-2 border-t border-border bg-primary/10 px-2 py-1 text-xs">
+          <span className="min-w-0 flex-1 truncate">
+            {t("progress.brushOn", {
+              status: t(brush.status ? `progress.status.${brush.status}` : "progress.status.clear"),
+            })}
+          </span>
+          <Button type="button" size="sm" className="h-6 px-2 text-xs" onClick={stopBrush}>
+            {t("progress.brushStop")}
+          </Button>
+        </div>
+      ) : null}
     </Block>
   );
 }
@@ -224,9 +293,27 @@ export function ItemsBlock({
           <ItemRow key={entry.item.key} entry={entry} onSelect={() => selectItem(entry)} />
         ))}
         {hidden > 0 ? (
-          <div className="flex min-h-[22px] items-center text-xs text-muted-foreground">
-            {t("progress.more", { count: hidden })}
-          </div>
+          // The items that did not fit stay one click away, in a menu.
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex min-h-[22px] items-center rounded-sm text-start text-xs text-primary hover:bg-muted/60"
+              >
+                {t("progress.more", { count: hidden })}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-[60dvh] w-72 overflow-y-auto">
+              {items.slice(shown).map((entry) => (
+                <DropdownMenuItem key={entry.item.key} onSelect={() => selectItem(entry)}>
+                  <span className="min-w-0 flex-1 truncate">{entry.item.name}</span>
+                  <span className="ms-2 shrink-0 tabular-nums text-muted-foreground">
+                    {fmt(entry.pct)}%
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
       </div>
     </Block>

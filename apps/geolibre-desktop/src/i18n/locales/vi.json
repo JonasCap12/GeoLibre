@@ -11045,7 +11045,8 @@
     "status": {
       "done": "Xong",
       "wip": "Đang làm",
-      "clear": "Bỏ đánh dấu"
+      "clear": "Bỏ đánh dấu",
+      "none": "Chưa làm"
     },
     "items": "Hạng mục",
     "itemsEmpty": "Chưa có hạng mục. Thêm trong phần Cài đặt.",
@@ -11081,6 +11082,15 @@
     "newItem": "Hạng mục mới",
     "addItem": "Thêm hạng mục",
     "removeItem": "Xóa hạng mục",
-    "resuggest": "Tạo lại từ lớp CAD"
+    "resuggest": "Tạo lại từ lớp CAD",
+    "markClick": "Bấm từng đối tượng",
+    "brushOn": "Bấm vào đối tượng trên bản đồ để đánh dấu: {{status}}",
+    "brushStop": "Dừng",
+    "structures": "Công trình",
+    "wholeProject": "Toàn dự án",
+    "matrixTitle": "{{name}} · {{pct}}%",
+    "cellTitle": "{{component}} · {{item}}: {{done}} xong, {{wip}} đang làm, {{none}} chưa làm",
+    "componentTitle": "Chọn {{component}} trên bản đồ",
+    "selectOnMap": "Chọn trên bản đồ"
   }
 }

@@ -85,6 +85,15 @@ export interface ItemProgress {
   featureCount: number;
 }
 
+/** How a summary is scoped. */
+export interface ProgressScopeOptions {
+  /**
+   * Summarise one part of the project (a structure, a component): ignore the
+   * project-wide manual percents and weight only the items the part holds.
+   */
+  scope?: boolean;
+}
+
 export interface ProgressSummary {
   items: ItemProgress[];
   overallPct: number;
@@ -280,6 +289,7 @@ export function geometryMeasure(geometry: Geometry | null, measure: ProgressMeas
 export function computeProgress(
   features: readonly Feature[],
   config: ConstructionProgress,
+  options: ProgressScopeOptions = {},
 ): ProgressSummary {
   const items = config.items.map((item): ItemProgress => {
     const wanted = new Set(item.cadLayers);
@@ -297,13 +307,18 @@ export function computeProgress(
       else if (status === "wip") wip += size;
     }
     const drawingPct = total > 0 ? ((done + WIP_CREDIT * wip) / total) * 100 : null;
-    const pct = item.overridePct ?? drawingPct ?? 0;
+    // A hand-entered percent is a project-wide figure; one structure's share
+    // of the item is still read off its own features.
+    const pct = (options.scope ? null : item.overridePct) ?? drawingPct ?? 0;
     return { item, pct, drawingPct, total, done, wip, featureCount };
   });
-  const weightSum = config.items.reduce((sum, item) => sum + item.weight, 0);
+  // In a scope, only the items it holds count: a bridge has no pavement, and
+  // weighting that in at 0 % would understate it.
+  const counted = options.scope ? items.filter((entry) => entry.featureCount > 0) : items;
+  const weightSum = counted.reduce((sum, entry) => sum + entry.item.weight, 0);
   const weighted = (pick: (entry: ItemProgress) => number) =>
     weightSum > 0
-      ? items.reduce((sum, entry) => sum + entry.item.weight * pick(entry), 0) / weightSum
+      ? counted.reduce((sum, entry) => sum + entry.item.weight * pick(entry), 0) / weightSum
       : 0;
   const overallPct = weighted((entry) => entry.pct);
   const plannedPct = weighted((entry) => entry.item.plannedPct);
@@ -488,4 +503,166 @@ export function countedFeatureTest(config: ConstructionProgress): (feature: Feat
     config.items.filter((item) => item.measure === "count").flatMap((item) => item.cadLayers),
   );
   return (feature) => counted.has(cadLayerOf(feature));
+}
+
+// ---------------------------------------------------------------- structures
+
+/** Feature property naming the structure a feature belongs to (a bridge, a road section). */
+export const STRUCTURE_PROPERTY = "cong_trinh";
+/** Feature property naming the component within its structure (M1, T1, N1, a 100 m segment). */
+export const COMPONENT_PROPERTY = "cau_kien";
+/** Optional numeric feature property ordering structures and components along the route. */
+export const ORDER_PROPERTY = "thu_tu";
+
+function textProperty(feature: Feature, key: string): string {
+  const value = feature.properties?.[key];
+  return typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+}
+
+function orderOf(feature: Feature, fallback: number): number {
+  const raw = feature.properties?.[ORDER_PROPERTY];
+  const value = typeof raw === "number" ? raw : Number.NaN;
+  return Number.isFinite(value) ? value : fallback;
+}
+
+export interface StructureProgress {
+  name: string;
+  /** Indexes, in layer order, of the structure's features. */
+  featureIndexes: number[];
+  summary: ProgressSummary;
+}
+
+/**
+ * The project's structures, in route order, each with its own progress. A
+ * drawing without the structure property has none, and the screen then shows
+ * the project as a whole only.
+ */
+export function progressStructures(
+  features: readonly Feature[],
+  config: ConstructionProgress,
+): StructureProgress[] {
+  const groups = new Map<string, { order: number; indexes: number[] }>();
+  features.forEach((feature, index) => {
+    const name = textProperty(feature, STRUCTURE_PROPERTY);
+    if (!name) return;
+    const group = groups.get(name) ?? { order: Infinity, indexes: [] };
+    group.order = Math.min(group.order, orderOf(feature, index));
+    group.indexes.push(index);
+    groups.set(name, group);
+  });
+  return [...groups.entries()]
+    .sort((a, b) => a[1].order - b[1].order || a[0].localeCompare(b[0]))
+    .map(([name, group]) => ({
+      name,
+      featureIndexes: group.indexes,
+      summary: computeProgress(
+        group.indexes.map((index) => features[index]),
+        config,
+        { scope: true },
+      ),
+    }));
+}
+
+export type CellState = "done" | "wip" | "partial" | "none";
+
+export interface MatrixCell {
+  component: string;
+  itemKey: string;
+  /** Measured totals in the item's unit. */
+  total: number;
+  done: number;
+  wip: number;
+  /** Feature counts by state, for the cell's label. */
+  counts: { done: number; wip: number; none: number };
+  pct: number;
+  state: CellState;
+  featureIndexes: number[];
+}
+
+export interface ComponentMatrix {
+  components: { name: string; featureIndexes: number[] }[];
+  /** The items the structure holds, in setup order. */
+  items: ProgressItem[];
+  cells: Map<string, MatrixCell>;
+}
+
+/** Key of a cell in {@link ComponentMatrix.cells}. */
+export const cellKey = (component: string, itemKey: string) => `${component}\u0000${itemKey}`;
+
+/** The state a cell shows: all done, all in progress or not started, or a mix. */
+export function cellState(counts: { done: number; wip: number; none: number }): CellState {
+  const total = counts.done + counts.wip + counts.none;
+  if (total === 0 || counts.none === total) return "none";
+  if (counts.done === total) return "done";
+  if (counts.wip === total) return "wip";
+  return "partial";
+}
+
+/**
+ * One structure as a grid of its components (columns, in route order) by the
+ * items they hold (rows): the survey sheet's "support × stage" table. A cell
+ * gathers the features of one component that belong to one item.
+ */
+export function componentMatrix(
+  features: readonly Feature[],
+  config: ConstructionProgress,
+  structure: string,
+): ComponentMatrix {
+  const components = new Map<string, { order: number; indexes: number[] }>();
+  features.forEach((feature, index) => {
+    if (textProperty(feature, STRUCTURE_PROPERTY) !== structure) return;
+    const name = textProperty(feature, COMPONENT_PROPERTY) || "—";
+    const entry = components.get(name) ?? { order: Infinity, indexes: [] };
+    // Without an order, components fall back to their names (M1, T2, T10).
+    entry.order = Math.min(entry.order, orderOf(feature, Infinity));
+    entry.indexes.push(index);
+    components.set(name, entry);
+  });
+  const cells = new Map<string, MatrixCell>();
+  const present = new Set<string>();
+  for (const [component, entry] of components) {
+    for (const item of config.items) {
+      const wanted = new Set(item.cadLayers);
+      const cell: MatrixCell = {
+        component,
+        itemKey: item.key,
+        total: 0,
+        done: 0,
+        wip: 0,
+        counts: { done: 0, wip: 0, none: 0 },
+        pct: 0,
+        state: "none",
+        featureIndexes: [],
+      };
+      for (const index of entry.indexes) {
+        const feature = features[index];
+        if (!wanted.has(cadLayerOf(feature))) continue;
+        const size = geometryMeasure(feature.geometry, item.measure);
+        const status = featureStatus(feature);
+        cell.total += size;
+        cell.featureIndexes.push(index);
+        if (status === "done") {
+          cell.done += size;
+          cell.counts.done += 1;
+        } else if (status === "wip") {
+          cell.wip += size;
+          cell.counts.wip += 1;
+        } else cell.counts.none += 1;
+      }
+      if (cell.featureIndexes.length === 0) continue;
+      present.add(item.key);
+      cell.pct = cell.total > 0 ? ((cell.done + WIP_CREDIT * cell.wip) / cell.total) * 100 : 0;
+      cell.state = cellState(cell.counts);
+      cells.set(cellKey(component, item.key), cell);
+    }
+  }
+  return {
+    components: [...components.entries()]
+      .sort(
+        (a, b) => a[1].order - b[1].order || a[0].localeCompare(b[0], undefined, { numeric: true }),
+      )
+      .map(([name, entry]) => ({ name, featureIndexes: entry.indexes })),
+    items: config.items.filter((item) => present.has(item.key)),
+    cells,
+  };
 }

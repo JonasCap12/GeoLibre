@@ -114,6 +114,7 @@ test("shows drawing progress on one screen without scrolling", async ({ page }, 
   await expectFits(page);
 
   // Sweep the left part of the map cell: some piles and girders become done.
+  await side.getByRole("radio", { name: "Sweep a rectangle" }).click();
   await side.getByRole("button", { name: "Done" }).click();
   const box = (await page.locator("main.isolate .maplibregl-canvas").boundingBox())!;
   await page.mouse.move(box.x + 4, box.y + 4);
@@ -177,4 +178,62 @@ test("shows drawing progress on one screen without scrolling", async ({ page }, 
   expect(
     await page.evaluate(() => document.documentElement.hasAttribute("data-progress-screen")),
   ).toBe(false);
+});
+
+/** Two piers and a span of a bridge, each part named for the structure view. */
+function bridgeDrawing() {
+  const parts: [string, string, number, number][] = [
+    ["COC", "M1", 1, 106.0],
+    ["BE", "M1", 1, 106.0],
+    ["DAM", "N1", 2, 106.0004],
+    ["COC", "M2", 3, 106.0008],
+    ["BE", "M2", 3, 106.0008],
+  ];
+  const features = parts.map(([layer, component, order, x]) => ({
+    type: "Feature",
+    properties: {
+      Layer: layer,
+      cong_trinh: "Cầu thử",
+      cau_kien: component,
+      thu_tu: order,
+      name: `${layer}-${component}`,
+    },
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [x, 10],
+          [x + 0.0002, 10],
+          [x + 0.0002, 10.0002],
+          [x, 10.0002],
+          [x, 10],
+        ],
+      ],
+    },
+  }));
+  return JSON.stringify({ type: "FeatureCollection", features });
+}
+
+test("marks a bridge component from the structure table", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await waitForMap(page);
+  await dropGeoJson(page, "cau-thu", bridgeDrawing());
+  const row = layerRow(page, "cau-thu");
+  await expect(row).toBeVisible();
+  await row.locator('button[aria-label="Layer actions"]').click();
+  await page.getByRole("menuitem", { name: "Construction progress screen" }).click();
+
+  const side = page.locator(".progress-screen-side");
+  await side.getByRole("listitem", { name: /Cầu thử/ }).click();
+  const grid = side.getByRole("grid", { name: "Cầu thử" });
+  await expect(grid.getByRole("columnheader")).toHaveText(["M1", "N1", "M2"]);
+  await expectFits(page);
+
+  await grid.getByRole("gridcell", { name: /^M2 · COC/ }).click();
+  await page.getByRole("menuitem", { name: "Done" }).click();
+  await expect(grid.getByRole("gridcell", { name: /^M2 · COC/ })).toHaveAttribute(
+    "data-state-cell",
+    "done",
+  );
+  await expect(side.getByRole("listitem", { name: /Cầu thử/ })).not.toContainText(/0%/);
 });

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } fr
 import { useTranslation } from "react-i18next";
 import {
   computeProgress,
+  progressStructures,
   isoWeek,
   progressConfigPatch,
   progressIssues,
@@ -27,6 +28,7 @@ import {
   type ProgressScreenCamera,
 } from "./ProgressScreenBlocks";
 import { ProgressSettingsDialog } from "./ProgressSettingsDialog";
+import { MatrixBlock, StructuresBlock } from "./ProgressStructureBlocks";
 
 /**
  * Full-viewport construction progress screen over a drawing layer.
@@ -89,6 +91,10 @@ function ProgressScreen({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const features = useMemo(() => layer.geojson?.features ?? [], [layer.geojson]);
   const summary = useMemo(() => computeProgress(features, config), [features, config]);
+  const structures = useMemo(() => progressStructures(features, config), [features, config]);
+  // The structure the side column details; null is the whole project.
+  const [scope, setScope] = useState<string | null>(null);
+  const picked = structures.find((structure) => structure.name === scope) ?? null;
   const today = todayIso();
   const save = (next: ConstructionProgress) =>
     useAppStore.getState().updateLayer(layer.id, progressConfigPatch(layer, next));
@@ -138,9 +144,32 @@ function ProgressScreen({
         aria-label={t("progress.title")}
       >
         <MarkBlock layer={layer} config={config} />
-        <ItemsBlock layer={layer} items={summary.items} camera={camera} />
-        <HistoryBlock weekly={config.weekly} summary={summary} today={today} />
-        <IssuesBlock issues={progressIssues(config)} />
+        {structures.length > 0 ? (
+          <StructuresBlock
+            layer={layer}
+            project={summary}
+            structures={structures}
+            scope={picked?.name ?? null}
+            onScope={setScope}
+            camera={camera}
+          />
+        ) : null}
+        {picked ? (
+          <MatrixBlock
+            layer={layer}
+            config={config}
+            structure={picked}
+            summary={picked.summary}
+            camera={camera}
+            onClose={() => setScope(null)}
+          />
+        ) : (
+          <ItemsBlock layer={layer} items={summary.items} camera={camera} />
+        )}
+        <div data-block="footer" className="grid min-h-0 flex-[1.6] grid-cols-2 gap-2">
+          <HistoryBlock weekly={config.weekly} summary={summary} today={today} />
+          <IssuesBlock issues={progressIssues(config)} />
+        </div>
       </aside>
       {settingsOpen ? (
         <ProgressSettingsDialog

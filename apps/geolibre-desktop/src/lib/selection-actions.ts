@@ -76,6 +76,27 @@ export function paintSelection(color: string | null, extra?: PaintProperties): n
 }
 
 /**
+ * Paint given features of a layer `color` (or with null, strip the paint),
+ * such as one cell of the progress screen's component table. Unlike
+ * {@link paintSelection} it leaves the live selection alone. Returns how many
+ * features were painted.
+ */
+export function paintFeatures(
+  layerId: string,
+  featureIds: ReadonlySet<string>,
+  color: string | null,
+  extra?: PaintProperties,
+): number {
+  const store = useAppStore.getState();
+  const layer = store.layers.find((item) => item.id === layerId);
+  if (!layer) return 0;
+  const patch = featureColorPatch(layer, featureIds, color, extra);
+  if (!patch) return 0;
+  store.updateLayer(layer.id, patch);
+  return featureIds.size;
+}
+
+/**
  * Paint `color` (or with null, strip the paint) on only what lies inside a
  * drawn area of a layer, splitting features its edge crosses. Returns whether
  * anything was inside.
