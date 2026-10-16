@@ -51,6 +51,7 @@ export function useStylePanelDrafts(
   const [showBasemapStyleLayers, setShowBasemapStyleLayers] = useState(false);
   const [draftColorExpression, setDraftColorExpression] = useState("");
   const [draftHeightExpression, setDraftHeightExpression] = useState("");
+  const [draftBaseExpression, setDraftBaseExpression] = useState("");
   const [draftVectorStyleMode, setDraftVectorStyleMode] = useState<VectorStyleMode>(
     DEFAULT_LAYER_STYLE.vectorStyleMode,
   );
@@ -118,6 +119,7 @@ export function useStylePanelDrafts(
       setDraftBeforeId("");
       setDraftColorExpression("");
       setDraftHeightExpression("");
+      setDraftBaseExpression("");
       setDraftVectorStyleMode(DEFAULT_LAYER_STYLE.vectorStyleMode);
       setDraftVectorStyleProperty(DEFAULT_LAYER_STYLE.vectorStyleProperty);
       setDraftVectorStyleClassCount(DEFAULT_LAYER_STYLE.vectorStyleClassCount);
@@ -140,6 +142,7 @@ export function useStylePanelDrafts(
     setDraftBeforeId(layer.beforeId ?? "");
     setDraftColorExpression(styleValue(layer.style, "extrusionColorExpression"));
     setDraftHeightExpression(styleValue(layer.style, "extrusionHeightExpression"));
+    setDraftBaseExpression(styleValue(layer.style, "extrusionBaseExpression"));
     const vectorStyleMode = styleValue(layer.style, "vectorStyleMode");
     setDraftVectorStyleMode(vectorStyleMode);
     const vectorStyleProperty = styleValue(layer.style, "vectorStyleProperty");
@@ -184,6 +187,7 @@ export function useStylePanelDrafts(
     layer?.style.extrusionColorExpression,
     layer?.style.extrusionHeightProperty,
     layer?.style.extrusionHeightExpression,
+    layer?.style.extrusionBaseExpression,
     layer?.style.extrusionHeightScale,
     layer?.style.extrusionOpacity,
     layer?.style.vectorStyleExpression,
@@ -496,6 +500,8 @@ export function useStylePanelDrafts(
     setDraftColorExpression,
     draftHeightExpression,
     setDraftHeightExpression,
+    draftBaseExpression,
+    setDraftBaseExpression,
     draftVectorStyleMode,
     setDraftVectorStyleMode,
     draftVectorStyleProperty,

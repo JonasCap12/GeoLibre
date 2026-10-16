@@ -457,6 +457,13 @@ export interface LayerStyle {
   extrusionColorExpression: string;
   extrusionHeightExpression: string;
   /**
+   * Advanced mode only: a MapLibre expression for where each feature's
+   * extrusion starts, in metres, such as `["get", "base"]`. Lets one layer
+   * hold parts that float (a bridge deck, a girder) next to parts on the
+   * ground. Empty uses the flat `extrusionBase`.
+   */
+  extrusionBaseExpression: string;
+  /**
    * When true, a vector layer whose coordinates carry Z values (e.g. a GPX
    * track with elevations) renders in true 3D through the shared deck.gl
    * overlay instead of MapLibre's flat 2D layers, so features sit at their
@@ -695,6 +702,7 @@ export const DEFAULT_LAYER_STYLE: LayerStyle = {
   extrusionAdvancedStyleEnabled: false,
   extrusionColorExpression: "",
   extrusionHeightExpression: "",
+  extrusionBaseExpression: "",
   elevation3dEnabled: false,
   elevation3dVerticalScale: 1,
   elevation3dOffset: 0,

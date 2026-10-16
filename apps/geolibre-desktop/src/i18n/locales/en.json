@@ -9100,6 +9100,7 @@
       "opacity": "Extrusion opacity",
       "advanced": "Advanced height expression",
       "heightExpression": "Height expression",
+      "baseExpression": "Base expression (optional)",
       "heightProperty": "Height property",
       "heightScale": "Height scale",
       "base": "Base height",
@@ -9109,7 +9110,8 @@
     "expressionLabels": {
       "style": "Style expression",
       "color": "Color expression",
-      "height": "Height expression"
+      "height": "Height expression",
+      "base": "Base expression"
     },
     "expressionErrors": {
       "notArray": "{{label}} must be a JSON array expression.",

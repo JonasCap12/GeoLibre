@@ -2,6 +2,7 @@ import type { FeatureCollection, Geometry } from "geojson";
 import {
   circleRadiusValue,
   documentLocale,
+  extrusionBaseValue,
   extrusionColorValue,
   extrusionHeightValue,
   isInlineImageValue,
@@ -730,7 +731,7 @@ function buildLayerSpec(
           "fill-extrusion-color": extrusionColorValue(layer.style),
           "fill-extrusion-opacity": styleValue(layer.style, "extrusionOpacity"),
           "fill-extrusion-height": extrusionHeightValue(layer.style),
-          "fill-extrusion-base": styleValue(layer.style, "extrusionBase"),
+          "fill-extrusion-base": extrusionBaseValue(layer.style),
           "fill-extrusion-vertical-gradient": true,
         },
       };
