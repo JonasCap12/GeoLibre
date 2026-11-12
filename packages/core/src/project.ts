@@ -1828,6 +1828,10 @@ function withoutZarrHeaders(layer: GeoLibreLayer): GeoLibreLayer {
  * @returns The layer as it may be written to a project file.
  */
 function portableLayer(layer: GeoLibreLayer): GeoLibreLayer {
+  if (layer.progressDashboard !== undefined) {
+    const { progressDashboard: _dashboard, ...rest } = layer;
+    layer = rest;
+  }
   return withoutZarrHeaders(withoutLocalRasterBytes(layer));
 }
 
@@ -1838,6 +1842,7 @@ function normalizeLayer(layer: GeoLibreLayer): GeoLibreLayer {
   // boolean flag) must not survive into the normalized layer and be written
   // back out on the next save.
   const {
+    progressDashboard: _dashboard,
     capabilities: rawCapabilities,
     filterExpression: rawFilterExpression,
     descriptiveMetadata: rawDescriptiveMetadata,
@@ -2165,6 +2170,10 @@ function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
   // with a stale time-window filter hiding most of a layer's features. The
   // binding config in `metadata.timeBinding` persists, and the Time Slider
   // re-applies the filter the next time it activates.
+  if (layer.progressDashboard !== undefined) {
+    const { progressDashboard: _progressDashboard, ...rest } = layer;
+    layer = rest;
+  }
   if (layer.timeFilter !== undefined) {
     const { timeFilter: _timeFilter, ...rest } = layer;
     layer = rest;

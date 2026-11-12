@@ -56,7 +56,8 @@ function todayIso(): string {
 export function ConstructionProgressScreen({ camera }: { camera: ProgressScreenCamera | null }) {
   const layerId = useSyncExternalStore(subscribeProgressScreen, getProgressScreenLayerId);
   const layer = useAppStore((s) => (layerId ? s.layers.find((l) => l.id === layerId) : undefined));
-  const config = useMemo(() => (layer ? readStoredProgressConfig(layer) : null), [layer]);
+  const metadata = layer?.metadata;
+  const config = useMemo(() => (metadata ? readStoredProgressConfig({ metadata }) : null), [metadata]);
   const open = Boolean(layer && config);
 
   useEffect(() => {

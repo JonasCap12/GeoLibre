@@ -279,3 +279,5 @@ export {
   patchJpegCogSource,
   withJpegTablesPatch,
 } from "./cog-jpeg-tables";
+
+export { progressDashboardLayer } from "./progress-dashboard-view";

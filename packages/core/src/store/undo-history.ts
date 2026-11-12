@@ -150,7 +150,11 @@ function pruneHistoryBySize(): void {
  */
 export function partializeHistory(s: AppState): HistoryState {
   return {
-    layers: s.layers,
+    layers: s.layers.map((layer) => {
+      if (!layer.progressDashboard) return layer;
+      const { progressDashboard: _dashboard, ...saved } = layer;
+      return saved;
+    }),
     layerGroups: s.layerGroups,
     basemapStyleUrl: s.basemapStyleUrl,
     basemapVisible: s.basemapVisible,
@@ -174,7 +178,8 @@ export function createHistoryOptions(): ZundoOptions<AppState, HistoryState> {
     partialize: partializeHistory,
     // Records a history entry only when the tracked slice really changed.
     // Basemap fields compare with ===; `layers` is compared element-by-element
-    // (Object.is per element) via shallow. Every mutating action creates new
+    // by reference, with shallow comparison for transient view-only changes.
+    // Every mutating authoring action creates new
     // layer/group objects, so real changes differ; two distinct empty arrays
     // compare equal, so resetting them (e.g. newProject) records nothing.
     // `storymap` is compared by reference: every authoring action creates a
@@ -189,7 +194,8 @@ export function createHistoryOptions(): ZundoOptions<AppState, HistoryState> {
       a.basemapOpacity === b.basemapOpacity &&
       a.blankBackgroundColor === b.blankBackgroundColor &&
       a.storymap === b.storymap &&
-      shallow(a.layers, b.layers) &&
+      a.layers.length === b.layers.length &&
+      a.layers.every((layer, index) => layer === b.layers[index] || shallow(layer, b.layers[index])) &&
       shallow(a.comments, b.comments) &&
       shallow(a.widgets, b.widgets) &&
       a.legend === b.legend &&

@@ -192,7 +192,7 @@ export function readProgressConfig(layer: GeoLibreLayer): ConstructionProgress |
 }
 
 /** A stored v1 or v2 setup. Callers branch on `version`. */
-export function readStoredProgressConfig(layer: GeoLibreLayer): StoredConstructionProgress | null {
+export function readStoredProgressConfig(layer: Pick<GeoLibreLayer, "metadata">): StoredConstructionProgress | null {
   const raw = layer.metadata?.[PROGRESS_METADATA_KEY];
   return normalizeProgressV2(raw) ?? normalizeProgressConfig(raw);
 }

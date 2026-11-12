@@ -1,6 +1,7 @@
 import { arcgisOpacity, arcgisVectorStyle } from "./vector-style";
 import {
   compileLayerFilters,
+  progressDashboardLayer,
   controlRendersLayer,
   DEFAULT_LAYER_STYLE,
   generatorCircleRadiusValue,
@@ -476,6 +477,7 @@ function intersectZoomRange(
 }
 
 export function syncLayer(map: maplibregl.Map, layer: GeoLibreLayer, beforeId?: string): void {
+  layer = progressDashboardLayer(layer);
   if (isExternalNativeLayer(layer) || isVectorControlLayer(layer)) {
     syncExternalNativeLayer(map, layer, beforeId);
     return;

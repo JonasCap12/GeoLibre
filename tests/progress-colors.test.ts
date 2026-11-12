@@ -124,6 +124,7 @@ describe("stateColors", () => {
       id: "drawing",
       name: "drawing",
       type: "geojson",
+      source: { type: "geojson" },
       visible: true,
       opacity: 1,
       geojson,

@@ -11201,7 +11201,65 @@
       "addPackage": "Thêm gói",
       "removePackage": "Xóa gói",
       "weightsPlan": "Trọng số và kế hoạch theo gói",
-      "road": "Đường cao tốc"
+      "road": "Đường cao tốc",
+      "dashboard": {
+        "title": "Dashboard",
+        "edit": "Chỉnh sửa tiến độ",
+        "week": "Tuần báo cáo",
+        "current": "Trạng thái hiện tại",
+        "filters": "Bộ lọc",
+        "clear": "Xóa bộ lọc",
+        "kind": "Loại công trình",
+        "kinds": {
+          "bridge": "Cầu",
+          "road": "Đường",
+          "underpass": "Hầm chui"
+        },
+        "status": "Trạng thái",
+        "statuses": {
+          "empty": "Chưa làm",
+          "wip": "Đang làm",
+          "done": "Hoàn thành",
+          "late": "Đang trễ"
+        },
+        "station": "Khoảng lý trình (m)",
+        "from": "Từ",
+        "to": "Đến",
+        "bridges": "Cầu",
+        "girderTypes": "Loại dầm",
+        "colorMode": "Tô màu bản đồ",
+        "colorModes": {
+          "status": "Theo trạng thái",
+          "deviation": "Chênh lệch kế hoạch",
+          "girder": "Giai đoạn dầm"
+        },
+        "fit": "Zoom tới kết quả",
+        "visible_other": "{{count}} đối tượng hiển thị",
+        "criticalAlerts": "Cảnh báo nghiêm trọng",
+        "forecast": "Dự báo hoàn thành",
+        "insufficientHistory": "Chưa đủ lịch sử",
+        "quantities": "Khối lượng đã hoàn thành",
+        "roadKm": "Đường hoàn thành (km)",
+        "legend": "Chú giải",
+        "empty": "Không có cấu kiện phù hợp bộ lọc.",
+        "sCurve": "Đường cong S theo tuần",
+        "historyScope": "Lịch sử và dự báo dùng số tổng hợp đã chốt của dự án/gói thầu. Bộ lọc cấu kiện áp dụng cho bản đồ, chỉ số và các biểu đồ hiện tại; lịch sử chưa lưu trạng thái từng cấu kiện.",
+        "itemsChart": "Hạng mục · trễ nhiều nhất trước",
+        "bridgesChart": "Tiến độ theo cầu",
+        "packagesChart": "Tiến độ theo gói thầu",
+        "yardChart": "Dây chuyền sản xuất dầm",
+        "yardNote": "Các phần cột chồng không trùng nhau. Tổng đã đúc gồm cả dầm sẵn sàng và đã lao.",
+        "unknownType": "Chưa xác định loại",
+        "castCount_other": "Đã đúc {{count}}",
+        "yard": {
+          "onBed": "Trên bệ",
+          "ready": "Sẵn sàng lao",
+          "erected": "Đã lao",
+          "remaining": "Chưa làm"
+        },
+        "statusChart": "Cấu kiện theo trạng thái",
+        "delays": "Trễ nhiều nhất và cảnh báo"
+      }
     }
   }
 }

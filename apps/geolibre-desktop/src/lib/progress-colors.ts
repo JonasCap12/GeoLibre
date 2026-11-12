@@ -9,6 +9,7 @@ import {
   type GirderStage,
   type ProgressV2,
   type RoadItemKey,
+  type ProgressV2ItemKey,
 } from "./progress-v2";
 
 export const PROGRESS_V2_COLORS = {
@@ -37,7 +38,9 @@ function propertyText(feature: Feature, key: string): string {
 }
 
 function propertyIndex(feature: Feature, key: string): number | null {
-  const value = Number(feature.properties?.[key]);
+  const raw = feature.properties?.[key];
+  if (raw == null || raw === "") return null;
+  const value = Number(raw);
   return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
@@ -70,6 +73,50 @@ function bridgeApproachPct(bridge: BridgeState): number {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
+function supportKey(feature: Feature): "be" | "than" | "xm" | null {
+  const item = fold(
+    propertyText(feature, "progress_item") ||
+      `${propertyText(feature, "Layer")} ${propertyText(feature, "bo_phan")}`,
+  );
+  if (/^(be)$|\bbe\b/.test(item)) return "be";
+  if (/^(than)$|than mo|than tru|cot tru|tuong than/.test(item)) return "than";
+  if (/^(xm)$|xa mu|tuong dinh/.test(item)) return "xm";
+  return null;
+}
+
+/** Item links shared by map colors and dashboard cross-filtering. */
+export function progressFeatureItems(feature: Feature): ProgressV2ItemKey[] {
+  if (propertyText(feature, "support_id")) {
+    if (propertyIndex(feature, "pile_index") !== null) return ["coc"];
+    const key = supportKey(feature);
+    return key ? [key] : [];
+  }
+  if (propertyText(feature, "span_id")) {
+    if (propertyIndex(feature, "girder_index") !== null) return ["duc", "gac"];
+    const item = fold(
+      propertyText(feature, "progress_item") ||
+        `${propertyText(feature, "Layer")} ${propertyText(feature, "bo_phan")}`,
+    );
+    if (/^(bmc)$|ban mat cau/.test(item)) return ["bmc"];
+    if (/^(ht)$|lan can|hoan thien/.test(item)) return ["ht"];
+    return [];
+  }
+  if (propertyText(feature, "km_id")) {
+    const key = roadKey(feature);
+    return key ? [key] : [];
+  }
+  if (propertyText(feature, "underpass_id")) {
+    const item = fold(
+      propertyText(feature, "progress_item") ||
+        propertyText(feature, "bo_phan") ||
+        propertyText(feature, "Layer"),
+    );
+    if (/ham_tuong|tuong/.test(item)) return ["ham_tuong"];
+    if (/ham_nap|nap/.test(item)) return ["ham_nap"];
+  }
+  return [];
+}
+
 function supportColor(feature: Feature, bridge: BridgeState): ProgressFeatureColor | null {
   const supportId = propertyText(feature, "support_id");
   const support = bridge.supports.find((item) => item.id === supportId);
@@ -80,18 +127,11 @@ function supportColor(feature: Feature, bridge: BridgeState): ProgressFeatureCol
     return state === 2
       ? progressStateColor(100)
       : state === 1
-        ? progressStateColor(50)
-        : progressStateColor(0);
+      ? progressStateColor(50)
+      : progressStateColor(0);
   }
-  const item = fold(
-    propertyText(feature, "progress_item") ||
-      `${propertyText(feature, "Layer")} ${propertyText(feature, "bo_phan")}`,
-  );
-  if (/^(be)$|\bbe\b/.test(item)) return progressStateColor(support.be);
-  if (/^(than)$|than mo|than tru|cot tru|tuong than/.test(item))
-    return progressStateColor(support.than);
-  if (/^(xm)$|xa mu|tuong dinh/.test(item)) return progressStateColor(support.xm);
-  return null;
+  const key = supportKey(feature);
+  return key ? progressStateColor(support[key]) : null;
 }
 
 function spanColor(feature: Feature, bridge: BridgeState): ProgressFeatureColor | null {
@@ -130,7 +170,8 @@ function featureColor(feature: Feature, state: ProgressV2): ProgressFeatureColor
     if (propertyText(feature, "support_id")) return supportColor(feature, bridge);
     if (propertyText(feature, "span_id")) return spanColor(feature, bridge);
     const item = fold(propertyText(feature, "progress_item"));
-    if (item === "ht" || item === "approach") return progressStateColor(bridgeApproachPct(bridge));
+    if (item === "ht" || item === "approach")
+      return progressStateColor(bridgeApproachPct(bridge));
   }
   const kmId = propertyText(feature, "km_id");
   if (kmId) {
@@ -190,7 +231,8 @@ function paintedProperties(
     "marker-color": color,
   };
   if (status === "empty" || status === "stage-0") delete next[PROGRESS_STATUS_PROPERTY];
-  else next[PROGRESS_STATUS_PROPERTY] = status === "done" || status === "stage-5" ? "done" : "wip";
+  else
+    next[PROGRESS_STATUS_PROPERTY] = status === "done" || status === "stage-5" ? "done" : "wip";
   return next;
 }
 

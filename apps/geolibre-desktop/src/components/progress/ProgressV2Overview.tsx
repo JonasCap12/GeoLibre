@@ -79,15 +79,21 @@ export function ProgressV2Overview({
                 alert.supportId && alert.bridgeId
                   ? { kind: "support" as const, bridgeId: alert.bridgeId, id: alert.supportId }
                   : alert.spanId && alert.bridgeId
-                    ? { kind: "span" as const, bridgeId: alert.bridgeId, id: alert.spanId }
-                    : null;
+                  ? { kind: "span" as const, bridgeId: alert.bridgeId, id: alert.spanId }
+                  : null;
               return (
                 <li
                   key={`${alert.code}-${index}`}
                   className="flex min-h-7 items-center gap-1.5 border-b border-border/50 last:border-0"
                 >
                   <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${alert.severity === 3 ? "bg-red-600" : alert.severity === 2 ? "bg-amber-500" : "bg-blue-500"}`}
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      alert.severity === 3
+                        ? "bg-red-600"
+                        : alert.severity === 2
+                        ? "bg-amber-500"
+                        : "bg-blue-500"
+                    }`}
                   />
                   {target ? (
                     <button
@@ -157,9 +163,10 @@ function structureRows(state: ProgressV2, packageId: string | null, roadName: st
     rows.unshift({
       id: "road",
       name: roadName,
-      pct:
-        km.reduce((sum, item) => sum + Object.values(item.pct).reduce((a, b) => a + b, 0) / 6, 0) /
-        km.length,
+      pct: computeProgressV2(
+        { ...state, bridges: [], underpasses: [], road: { km } },
+        packageId,
+      ).overallPct,
     });
   for (const underpass of state.underpasses) {
     if (packageId && packageForStation(state.packages, underpass.station)?.id !== packageId)
@@ -167,13 +174,16 @@ function structureRows(state: ProgressV2, packageId: string | null, roadName: st
     rows.push({
       id: underpass.id,
       name: underpass.id,
-      pct: (underpass.pct.tuong + underpass.pct.nap) / 2,
+      pct: computeProgressV2(
+        { ...state, bridges: [], road: { km: [] }, underpasses: [underpass] },
+        packageId,
+      ).overallPct,
     });
   }
   return rows;
 }
 
-function alertText(t: TFunction, alert: ProgressAlert): string {
+export function alertText(t: TFunction, alert: ProgressAlert): string {
   const translate = t as unknown as (key: string, options?: Record<string, unknown>) => string;
   const item = alert.itemKey ? translate(`progress.v2.items.${alert.itemKey}`) : "";
   return translate(`progress.v2.alert.${alert.code}`, {
