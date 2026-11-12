@@ -1,8 +1,8 @@
 import type { GeoLibreLayer } from "./types";
 import { compileQuickFilters } from "./quick-filters";
 
-/** The layer fields needed to inspect project-authored feature filters. */
-type LayerFilterSource = Pick<GeoLibreLayer, "filterExpression" | "quickFilters">;
+/** Fields needed to compose authored filters with a transient dashboard view. */
+type LayerFilterSource = Pick<GeoLibreLayer, "filterExpression" | "quickFilters" | "progressDashboard">;
 
 /**
  * Return a layer's persisted expression filter when it has a usable array
@@ -19,7 +19,7 @@ export function activeLayerFilterExpression(layer: LayerFilterSource): unknown[]
 /**
  * Compile all project-authored filters for a layer into one MapLibre boolean
  * expression. An explicit expression and Quick Filter controls narrow the
- * layer together.
+ * layer together. The transient dashboard filter narrows the rendered view too.
  *
  * @param layer - The layer whose authored filters should be composed.
  * @returns A MapLibre filter expression, or null when no authored filter is active.
@@ -28,6 +28,7 @@ export function compileLayerFilters(layer: LayerFilterSource): unknown[] | null 
   const filters = [
     activeLayerFilterExpression(layer),
     compileQuickFilters(layer.quickFilters),
+    layer.progressDashboard?.filter ?? null,
   ].filter((filter): filter is unknown[] => filter !== null);
   if (filters.length === 0) return null;
   return filters.length === 1 ? filters[0] : ["all", ...filters];
@@ -41,5 +42,5 @@ export function compileLayerFilters(layer: LayerFilterSource): unknown[] | null 
  * @returns True when at least one persisted filter is active.
  */
 export function hasActiveLayerFilter(layer: LayerFilterSource): boolean {
-  return compileLayerFilters(layer) !== null;
+  return compileLayerFilters({ ...layer, progressDashboard: undefined }) !== null;
 }

@@ -1,8 +1,8 @@
 import { featureSelectionId, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import { startFeatureSelection } from "@geolibre/map";
 import { Button, Select } from "@geolibre/ui";
-import { CalendarCheck, Settings2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CalendarCheck, LayoutDashboard, Settings2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { featuresBounds, isoWeek } from "../../lib/construction-progress";
 import {
@@ -19,6 +19,7 @@ import {
 } from "../../lib/progress-v2";
 import { closeProgressScreen } from "../../lib/progress-screen";
 import { fmt, type ProgressScreenCamera } from "./ProgressScreenBlocks";
+import { ProgressV2Dashboard } from "./ProgressV2Dashboard";
 import { ProgressV2Items } from "./ProgressV2Items";
 import { ProgressV2Overview } from "./ProgressV2Overview";
 import { ProgressV2Profile } from "./ProgressV2Profile";
@@ -37,15 +38,29 @@ export function ProgressV2Screen({
   config: ProgressV2;
   camera: ProgressScreenCamera | null;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const features = useMemo(() => layer.geojson?.features ?? [], [layer.geojson]);
   const [packageId, setPackageId] = useState<string | null>(null);
   const [tab, setTab] = useState<ProgressV2Tab>("overview");
   const [target, setTarget] = useState<ProgressFeatureTarget | null>(null);
   const [bridgeId, setBridgeId] = useState(config.bridges[0]?.id ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const summary = useMemo(() => computeProgressV2(config, packageId), [config, packageId]);
-  const bridges = useMemo(() => bridgesInPackage(config, packageId), [config, packageId]);
+  const [dashboard, setDashboard] = useState(false);
+  const [throughDate, setThroughDate] = useState("");
+  const activePackageId =
+    packageId && config.packages.some((item) => item.id === packageId) ? packageId : null;
+  useEffect(() => {
+    if (packageId !== activePackageId) setPackageId(activePackageId);
+  }, [packageId, activePackageId]);
+  useEffect(() => setThroughDate(""), [activePackageId]);
+  const summary = useMemo(
+    () => computeProgressV2(config, activePackageId),
+    [config, activePackageId],
+  );
+  const bridges = useMemo(
+    () => bridgesInPackage(config, activePackageId),
+    [config, activePackageId],
+  );
   const selectedBridge = bridges.find((bridge) => bridge.id === bridgeId) ?? bridges[0] ?? null;
 
   useEffect(() => {
@@ -60,18 +75,37 @@ export function ProgressV2Screen({
   const save = (next: ProgressV2) =>
     useAppStore.getState().updateLayer(layer.id, progressV2LayerPatch(layer, next));
 
-  const fitIndexes = (indexes: number[]) => {
-    const bounds = featuresBounds(indexes.map((index) => features[index]).filter(Boolean));
-    if (bounds) camera?.fitBounds(bounds);
-  };
+  const fitIndexes = useCallback(
+    (indexes: number[]) => {
+      const bounds = featuresBounds(indexes.map((index) => features[index]).filter(Boolean));
+      if (bounds) camera?.fitBounds(bounds);
+    },
+    [features, camera],
+  );
 
+  const lastFit = useRef<{
+    packageId: string | null;
+    camera: ProgressScreenCamera;
+    layerId: string;
+  } | null>(null);
   useEffect(() => {
-    const indexes = packageFeatureIndexes(features, config, packageId);
+    if (!camera) return;
+    if (
+      lastFit.current?.packageId === activePackageId &&
+      lastFit.current?.camera === camera &&
+      lastFit.current?.layerId === layer.id
+    )
+      return;
+    lastFit.current = { packageId: activePackageId, camera, layerId: layer.id };
+    const indexes = packageFeatureIndexes(features, config, activePackageId);
     fitIndexes(indexes);
-    const first = bridgesInPackage(config, packageId)[0];
-    if (first && !bridgesInPackage(config, packageId).some((bridge) => bridge.id === bridgeId))
+    const first = bridgesInPackage(config, activePackageId)[0];
+    if (
+      first &&
+      !bridgesInPackage(config, activePackageId).some((bridge) => bridge.id === bridgeId)
+    )
       setBridgeId(first.id);
-  }, [packageId]); // Fit only when the user changes the package.
+  }, [activePackageId, bridgeId, camera, config, features, fitIndexes, layer.id]);
 
   // Every save rebuilds the drawing's features, so the selection reads them
   // through a ref: re-arming on each edit would clear the user's selection and
@@ -132,17 +166,22 @@ export function ProgressV2Screen({
             {config.meta.title || layer.name}
           </div>
           <div className="truncate text-[11px] text-header-muted">
-            {config.meta.subtitle} ·{" "}
+            {config.meta.cdt || config.meta.subtitle} ·{" "}
             {t("progress.week", {
               week: isoWeek(config.meta.reportDate),
-              date: config.meta.reportDate,
+              date: Number.isFinite(Date.parse(config.meta.reportDate))
+                ? new Intl.DateTimeFormat(i18n.language, {
+                    dateStyle: "medium",
+                    timeZone: "UTC",
+                  }).format(new Date(config.meta.reportDate))
+                : "?",
             })}
           </div>
         </div>
         <Select
           aria-label={t("progress.v2.package")}
           className="h-8 w-36 border-white/20 bg-header text-xs text-header-foreground"
-          value={packageId ?? ""}
+          value={activePackageId ?? ""}
           onChange={(event) => setPackageId(event.target.value || null)}
         >
           <option value="">{t("progress.wholeProject")}</option>
@@ -152,16 +191,59 @@ export function ProgressV2Screen({
             </option>
           ))}
         </Select>
-        <HeaderKpi label={t("progress.actual")} value={`${fmt(summary.overallPct)}%`} strong />
-        <HeaderKpi label={t("progress.planned")} value={`${fmt(summary.plannedPct)}%`} />
-        <HeaderKpi
-          label={t("progress.deviation")}
-          value={`${summary.deviation > 0 ? "+" : ""}${fmt(summary.deviation)}%`}
-          className={deviationClass}
-        />
+        {dashboard ? (
+          <Select
+            aria-label={t("progress.v2.dashboard.week")}
+            className="h-8 w-32 border-white/20 bg-header text-xs text-header-foreground"
+            value={throughDate}
+            onChange={(event) => setThroughDate(event.target.value)}
+          >
+            <option value="">{t("progress.v2.dashboard.current")}</option>
+            {config.history
+              .filter((point) => point.packageId === activePackageId)
+              .map((point) => (
+                <option key={point.week} value={point.date}>
+                  {point.week}
+                </option>
+              ))}
+          </Select>
+        ) : null}
+        <HeaderButton
+          label={t(dashboard ? "progress.v2.dashboard.edit" : "progress.v2.dashboard.title")}
+          onClick={() => setDashboard((value) => !value)}
+        >
+          <LayoutDashboard className="h-4 w-4" />
+        </HeaderButton>
+        {!dashboard ? (
+          <>
+            <HeaderKpi
+              label={t("progress.actual")}
+              value={`${fmt(summary.overallPct)}%`}
+              strong
+            />
+            <HeaderKpi label={t("progress.planned")} value={`${fmt(summary.plannedPct)}%`} />
+            <HeaderKpi
+              label={t("progress.deviation")}
+              value={`${summary.deviation > 0 ? "+" : ""}${fmt(summary.deviation)}%`}
+              className={deviationClass}
+            />
+          </>
+        ) : null}
         <HeaderButton
           label={t("progress.closeWeek")}
-          onClick={() => save(recordProgressV2Week(config, config.meta.reportDate, packageId))}
+          onClick={() =>
+            save(
+              recordProgressV2Week(
+                config,
+                new Intl.DateTimeFormat("en-CA", {
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                }).format(new Date()),
+                activePackageId,
+              ),
+            )
+          }
         >
           <CalendarCheck className="h-4 w-4" />
         </HeaderButton>
@@ -173,51 +255,67 @@ export function ProgressV2Screen({
         </HeaderButton>
       </header>
 
-      <ProgressV2Profile
-        state={config}
-        packageId={packageId}
-        bridges={bridges}
-        bridge={selectedBridge}
-        onBridge={setBridgeId}
-        onOpen={openTarget}
-      />
+      {dashboard ? (
+        <ProgressV2Dashboard
+          layer={layer}
+          state={config}
+          packageId={activePackageId}
+          throughDate={throughDate}
+          onPackage={setPackageId}
+          onOpen={openTarget}
+          onFit={fitIndexes}
+        />
+      ) : (
+        <>
+          <ProgressV2Profile
+            state={config}
+            packageId={packageId}
+            bridges={bridges}
+            bridge={selectedBridge}
+            onBridge={setBridgeId}
+            onOpen={openTarget}
+          />
 
-      <aside className="progress-screen-side flex min-h-0 flex-col border-border bg-background text-foreground">
-        <div className="grid shrink-0 grid-cols-4 border-b border-border text-[11px] font-semibold">
-          {(["overview", "items", "yard", "update"] as const).map((item) => (
-            <button
-              key={item}
-              type="button"
-              aria-pressed={tab === item}
-              onClick={() => setTab(item)}
-              className={`min-h-10 px-1 py-1 ${tab === item ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
-            >
-              {t(`progress.v2.tabs.${item}`)}
-            </button>
-          ))}
-        </div>
-        <div className="min-h-0 flex-1 overflow-hidden p-2">
-          {tab === "overview" ? (
-            <ProgressV2Overview state={config} packageId={packageId} onOpen={openTarget} />
-          ) : tab === "items" ? (
-            <ProgressV2Items
-              state={config}
-              packageId={packageId}
-              onChange={save}
-              onOpen={openTarget}
-            />
-          ) : tab === "yard" ? (
-            <ProgressV2Yard
-              state={config}
-              bridge={selectedBridge}
-              onChange={save}
-              onOpen={openTarget}
-            />
-          ) : (
-            <ProgressV2Update state={config} target={target} onChange={save} />
-          )}
-        </div>
-      </aside>
+          <aside className="progress-screen-side flex min-h-0 flex-col border-border bg-background text-foreground">
+            <div className="grid shrink-0 grid-cols-4 border-b border-border text-[11px] font-semibold">
+              {(["overview", "items", "yard", "update"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={tab === item}
+                  onClick={() => setTab(item)}
+                  className={`min-h-10 px-1 py-1 ${
+                    tab === item ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+                  }`}
+                >
+                  {t(`progress.v2.tabs.${item}`)}
+                </button>
+              ))}
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden p-2">
+              {tab === "overview" ? (
+                <ProgressV2Overview state={config} packageId={packageId} onOpen={openTarget} />
+              ) : tab === "items" ? (
+                <ProgressV2Items
+                  state={config}
+                  packageId={packageId}
+                  onChange={save}
+                  onOpen={openTarget}
+                />
+              ) : tab === "yard" ? (
+                <ProgressV2Yard
+                  state={config}
+                  bridge={selectedBridge}
+                  onChange={save}
+                  onOpen={openTarget}
+                />
+              ) : (
+                <ProgressV2Update state={config} target={target} onChange={save} />
+              )}
+            </div>
+          </aside>
+        </>
+      )}
 
       {settingsOpen ? (
         <ProgressV2SettingsDialog
@@ -246,12 +344,16 @@ function HeaderKpi({
 }) {
   return (
     <div
-      className={`shrink-0 flex-col items-end leading-tight ${strong ? "flex" : "hidden sm:flex"}`}
+      className={`shrink-0 flex-col items-end leading-tight ${
+        strong ? "flex" : "hidden sm:flex"
+      }`}
     >
       <span className="text-[10px] font-semibold uppercase tracking-wider text-header-muted">
         {label}
       </span>
-      <span className={`${strong ? "text-2xl" : "text-lg"} font-bold tabular-nums ${className}`}>
+      <span
+        className={`${strong ? "text-2xl" : "text-lg"} font-bold tabular-nums ${className}`}
+      >
         {value}
       </span>
     </div>

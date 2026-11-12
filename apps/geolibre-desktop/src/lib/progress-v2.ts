@@ -275,7 +275,7 @@ function normalizeBridge(raw: unknown, index: number): BridgeState {
   return {
     id: stringValue(value.id, `bridge-${index + 1}`),
     name: stringValue(value.name, stringValue(value.id, `Bridge ${index + 1}`)),
-    station: finite(value.station),
+    station: value.station == null ? Number.NaN : finite(value.station, Number.NaN),
     ...(typeof value.quyen === "string" ? { quyen: value.quyen } : {}),
     yard: { beds: Math.max(0, Math.round(finite(yard.beds))) },
     supports: Array.isArray(value.supports)
@@ -340,7 +340,7 @@ export function normalizeProgressV2(raw: unknown): ProgressV2 | null {
       const pct = objectValue(item.pct);
       return {
         id: stringValue(item.id, `underpass-${index + 1}`),
-        station: finite(item.station),
+        station: item.station == null ? Number.NaN : finite(item.station, Number.NaN),
         pct: { tuong: clampProgressPct(pct.tuong), nap: clampProgressPct(pct.nap) },
       };
     },
@@ -397,13 +397,19 @@ export function packageForStation(
     packages.find(
       (item, index) =>
         station >= item.fromStation &&
-        (station < item.toStation || (index === packages.length - 1 && station === item.toStation)),
+        (station < item.toStation ||
+          (index === packages.length - 1 && station === item.toStation)),
     ) ?? null
   );
 }
 
-export function packageById(state: ProgressV2, packageId: string | null): ProgressPackage | null {
-  return packageId === null ? null : (state.packages.find((item) => item.id === packageId) ?? null);
+export function packageById(
+  state: ProgressV2,
+  packageId: string | null,
+): ProgressPackage | null {
+  return packageId === null
+    ? null
+    : state.packages.find((item) => item.id === packageId) ?? null;
 }
 
 export function bridgesInPackage(state: ProgressV2, packageId: string | null): BridgeState[] {
@@ -542,17 +548,20 @@ function plannedItemPct(
 export function computeProgressV2(
   state: ProgressV2,
   packageId: string | null = null,
+  filteredItems?: ProgressV2ItemResult[],
 ): ProgressV2Summary {
-  const items = PROGRESS_V2_ITEM_KEYS.map((key): ProgressV2ItemResult => {
-    const [numerator, denominator] = itemNumeratorDenominator(state, key, packageId);
-    return {
-      key,
-      pct: denominator > 0 ? numerator / denominator : 0,
-      plannedPct: plannedItemPct(state, key, packageId),
-      denominator,
-      applicable: denominator > 0,
-    };
-  });
+  const items =
+    filteredItems ??
+    PROGRESS_V2_ITEM_KEYS.map((key): ProgressV2ItemResult => {
+      const [numerator, denominator] = itemNumeratorDenominator(state, key, packageId);
+      return {
+        key,
+        pct: denominator > 0 ? numerator / denominator : 0,
+        plannedPct: plannedItemPct(state, key, packageId),
+        denominator,
+        applicable: denominator > 0,
+      };
+    });
   const counted = items.filter((item) => item.applicable && state.weights[item.key] > 0);
   const weight = counted.reduce((sum, item) => sum + state.weights[item.key], 0);
   const weighted = (pick: (item: ProgressV2ItemResult) => number) =>
@@ -572,7 +581,7 @@ export function supportOverallPct(
   let numerator = 0;
   let denominator = 0;
   for (const key of keys) {
-    const weight = finite(weights[key]) || 1;
+    const weight = Math.max(0, finite(weights[key]));
     numerator += weight * supportItemPct(support, key);
     denominator += weight;
   }
@@ -606,7 +615,10 @@ export function bridgeItemQuantityText(
         totalMetres += support.coc.t * support.coc.L;
       }
     }
-    return `${done}/${total} cọc · ${htmlNumber(doneMetres, 0)}/${htmlNumber(totalMetres, 0)} m`;
+    return `${done}/${total} cọc · ${htmlNumber(doneMetres, 0)}/${htmlNumber(
+      totalMetres,
+      0,
+    )} m`;
   }
   if (key === "duc" || key === "gac") {
     let done = 0;
@@ -622,8 +634,12 @@ export function bridgeItemQuantityText(
     return `${done}/${total} dầm`;
   }
   if (key === "be" || key === "than" || key === "xm") {
-    const supports = bridges.flatMap((bridge) => bridge.supports.filter((support) => support.inc));
-    return `${supports.filter((support) => support[key] >= 100).length}/${supports.length} trụ xong`;
+    const supports = bridges.flatMap((bridge) =>
+      bridge.supports.filter((support) => support.inc),
+    );
+    return `${supports.filter((support) => support[key] >= 100).length}/${
+      supports.length
+    } trụ xong`;
   }
   let done = 0;
   let total = 0;
@@ -769,7 +785,7 @@ export function computeProgressAlerts(
   const alerts: ProgressAlert[] = [];
   if (!hasPlan) alerts.push({ severity: 2, code: "no-plan" });
   for (const item of summary.items) {
-    if (item.plannedPct <= 0) continue;
+    if (!item.applicable || item.plannedPct <= 0) continue;
     const deviation = item.pct - item.plannedPct;
     if (evaluateProgress(item.pct, item.plannedPct, true) === "late")
       alerts.push({
@@ -953,8 +969,8 @@ function paintedPct(feature: Feature): number {
   return feature.properties?.tiendo === "done"
     ? 100
     : feature.properties?.tiendo === "wip"
-      ? 50
-      : 0;
+    ? 50
+    : 0;
 }
 
 /**
@@ -979,11 +995,24 @@ export function migrateProgressV1(
   features: readonly Feature[],
   reportDate: string,
 ): ProgressV2 {
-  const packages: ProgressPackage[] = [
-    { id: "goi-1", name: "Gói 1", fromStation: 183_000, toStation: 186_000 },
-    { id: "goi-2", name: "Gói 2", fromStation: 186_000, toStation: 193_000 },
-    { id: "goi-3", name: "Gói 3", fromStation: 193_000, toStation: 200_000 },
-  ];
+  const stations = features.flatMap((feature) =>
+    ["station", "km_tu", "km_den"].flatMap((key) => {
+      const value = feature.properties?.[key];
+      return value != null && value !== "" && Number.isFinite(Number(value))
+        ? [Number(value)]
+        : [];
+    }),
+  );
+  const packages: ProgressPackage[] = stations.length
+    ? [
+        {
+          id: "goi-1",
+          name: v1.subtitle || v1.title || "1",
+          fromStation: stations.reduce((min, value) => Math.min(min, value), Infinity),
+          toStation: stations.reduce((max, value) => Math.max(max, value), -Infinity) + 1,
+        },
+      ]
+    : [];
   const weights = emptyPct(PROGRESS_V2_ITEM_KEYS);
   Object.assign(weights, {
     coc: 20,
@@ -1019,11 +1048,16 @@ export function migrateProgressV1(
   }
   const bridges: BridgeState[] = [...bridgeFeatures.entries()].map(([id, group]) => {
     const name = featureText(group[0], "cong_trinh") || id;
-    const station = featureNumber(group[0], "station") || featureNumber(group[0], "km_tu");
+    const rawStation = group
+      .flatMap((feature) => [feature.properties?.station, feature.properties?.km_tu])
+      .find((value) => value != null && value !== "" && Number.isFinite(Number(value)));
+    const station = rawStation == null ? Number.NaN : Number(rawStation);
     const supportIds = orderSupports([
       ...new Set(
         group
-          .map((feature) => featureText(feature, "support_id") || featureText(feature, "cau_kien"))
+          .map(
+            (feature) => featureText(feature, "support_id") || featureText(feature, "cau_kien"),
+          )
           .filter((value) => /^(M|T)\d+$/i.test(value)),
       ),
     ]);
@@ -1037,7 +1071,8 @@ export function migrateProgressV1(
     const supports = supportIds.map((supportId): ProgressSupport => {
       const parts = group.filter(
         (feature) =>
-          (featureText(feature, "support_id") || featureText(feature, "cau_kien")) === supportId,
+          (featureText(feature, "support_id") || featureText(feature, "cau_kien")) ===
+          supportId,
       );
       const piles = parts.filter(
         (feature) =>
@@ -1049,7 +1084,9 @@ export function migrateProgressV1(
           0,
           ...parts
             .filter((feature) =>
-              pattern.test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
+              pattern.test(
+                featureText(feature, "Layer") + " " + featureText(feature, "bo_phan"),
+              ),
             )
             .map(paintedPct),
         );
@@ -1085,7 +1122,9 @@ export function migrateProgressV1(
           0,
           ...parts
             .filter((feature) =>
-              pattern.test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
+              pattern.test(
+                featureText(feature, "Layer") + " " + featureText(feature, "bo_phan"),
+              ),
             )
             .map(paintedPct),
         );
@@ -1127,7 +1166,9 @@ export function migrateProgressV1(
     };
     for (const key of ROAD_ITEM_KEYS) {
       const matching = group.filter((feature) =>
-        aliases[key].test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
+        aliases[key].test(
+          featureText(feature, "Layer") + " " + featureText(feature, "bo_phan"),
+        ),
       );
       pct[key] =
         matching.length > 0
@@ -1142,7 +1183,9 @@ export function migrateProgressV1(
     if (id) underpassGroups.set(id, [...(underpassGroups.get(id) ?? []), feature]);
   }
   const underpasses = [...underpassGroups.entries()].map(([id, group]): UnderpassState => {
-    const walls = group.filter((feature) => /tường|tuong/i.test(featureText(feature, "bo_phan")));
+    const walls = group.filter((feature) =>
+      /tường|tuong/i.test(featureText(feature, "bo_phan")),
+    );
     const lids = group.filter((feature) => /nắp|nap/i.test(featureText(feature, "bo_phan")));
     const average = (items: Feature[]) =>
       items.length > 0

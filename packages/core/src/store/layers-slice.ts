@@ -314,7 +314,9 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
         }
         layers = cascadeLayerJoinRefresh(layers, id);
       }
-      return { layers, isDirty: true };
+      // Dashboard controls change only the live view, not project contents.
+      const transient = Object.keys(patch).length === 1 && "progressDashboard" in patch;
+      return { layers, isDirty: transient ? s.isDirty : true };
     }),
 
   setLayerJoins: (id, joins) =>

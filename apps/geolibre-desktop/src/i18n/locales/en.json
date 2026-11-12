@@ -11434,7 +11434,67 @@
       "addPackage": "Add package",
       "removePackage": "Remove package",
       "weightsPlan": "Weights and package plans",
-      "road": "Expressway"
+      "road": "Expressway",
+      "dashboard": {
+        "title": "Dashboard",
+        "edit": "Edit progress",
+        "week": "Reporting week",
+        "current": "Current status",
+        "filters": "Filters",
+        "clear": "Clear filters",
+        "kind": "Structure type",
+        "kinds": {
+          "bridge": "Bridge",
+          "road": "Road",
+          "underpass": "Underpass"
+        },
+        "status": "Status",
+        "statuses": {
+          "empty": "Not started",
+          "wip": "In progress",
+          "done": "Complete",
+          "late": "Delayed"
+        },
+        "station": "Station range (m)",
+        "from": "From",
+        "to": "To",
+        "bridges": "Bridges",
+        "girderTypes": "Girder types",
+        "colorMode": "Map colors",
+        "colorModes": {
+          "status": "Status",
+          "deviation": "Deviation from plan",
+          "girder": "Girder stage"
+        },
+        "fit": "Zoom to results",
+        "visible_one": "{{count}} visible feature",
+        "visible_other": "{{count}} visible features",
+        "criticalAlerts": "Critical alerts",
+        "forecast": "Forecast completion",
+        "insufficientHistory": "Insufficient history",
+        "quantities": "Completed quantities",
+        "roadKm": "Completed road (km)",
+        "legend": "Legend",
+        "empty": "No components match these filters.",
+        "sCurve": "Weekly S-curve",
+        "historyScope": "History and forecast use saved project/package totals. Element filters apply to the current map, KPIs and other charts; historical element states were not recorded.",
+        "itemsChart": "Work items · largest delays first",
+        "bridgesChart": "Progress by bridge",
+        "packagesChart": "Progress by package",
+        "yardChart": "Girder production pipeline",
+        "yardNote": "Stacked stages are exclusive. Cast totals also include ready and erected girders.",
+        "unknownType": "Unspecified type",
+        "castCount_one": "{{count}} cast",
+        "castCount_other": "{{count}} cast",
+        "yard": {
+          "onBed": "On bed",
+          "ready": "Ready",
+          "erected": "Erected",
+          "remaining": "Not started"
+        },
+        "statusChart": "Components by status",
+        "delays": "Largest delays and alerts"
+      }
     }
   }
 }

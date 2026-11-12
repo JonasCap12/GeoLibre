@@ -1,5 +1,6 @@
 import {
   compileLayerFilters,
+  progressDashboardLayer,
   documentLocale,
   generatorCircleRadiusValue,
   labelFieldTextField,
@@ -127,6 +128,7 @@ export function compileMapboxLayer(
   layer: GeoLibreLayer,
   compileOptions: CompileMapboxLayerOptions = {},
 ): MapboxLayerPlan {
+  layer = progressDashboardLayer(layer);
   const arcgis = arcgisVectorStyle(layer);
   if (arcgis) {
     if (styleUsesUnsupportedSource(arcgis)) {
@@ -655,12 +657,12 @@ export function compileMapboxLayer(
               compileOptions.zoom === undefined
                 ? layer.geojson
                 : authoredClusterInput(layer, compileOptions.zoom),
-            generateId: true,
+            generateId: !layer.progressDashboard,
             cluster: true,
             clusterRadius,
             clusterMaxZoom,
           }
-        : { type: "geojson", data: layer.geojson, generateId: true },
+        : { type: "geojson", data: layer.geojson, generateId: !layer.progressDashboard },
       ...companionSources(),
       layers: vectorLayers(),
     };

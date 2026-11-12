@@ -4,7 +4,12 @@ import {
   PROGRESS_V2_COLORS,
   type ProgressFeatureTarget,
 } from "../../lib/progress-colors";
-import { supportOverallPct, type BridgeState, type ProgressV2 } from "../../lib/progress-v2";
+import {
+  computeProgressV2,
+  supportItemPct,
+  type BridgeState,
+  type ProgressV2,
+} from "../../lib/progress-v2";
 
 export function ProgressV2Profile({
   state,
@@ -33,14 +38,18 @@ export function ProgressV2Profile({
             key={item.id}
             type="button"
             onClick={() => onBridge(item.id)}
-            className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${bridge?.id === item.id ? "border-primary bg-primary text-primary-foreground" : "border-border hover:bg-muted"}`}
+            className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
+              bridge?.id === item.id
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border hover:bg-muted"
+            }`}
           >
             {item.name}
           </button>
         ))}
       </div>
       {bridge ? (
-        <BridgeProfile bridge={bridge} state={state} onOpen={onOpen} />
+        <BridgeProfile bridge={bridge} onOpen={onOpen} />
       ) : (
         <RoadProfile state={state} packageId={packageId} onOpen={onOpen} />
       )}
@@ -50,11 +59,9 @@ export function ProgressV2Profile({
 
 function BridgeProfile({
   bridge,
-  state,
   onOpen,
 }: {
   bridge: BridgeState;
-  state: ProgressV2;
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
   const width = Math.max(720, bridge.spans.length * 120 + 100);
@@ -118,12 +125,7 @@ function BridgeProfile({
         })}
         {bridge.supports.map((support, index) => {
           const x = 50 + index * gap;
-          const parts = [
-            support.piles.some((pile) => pile > 0) ? 50 : 0,
-            support.be,
-            support.than,
-            support.xm,
-          ];
+          const parts = [supportItemPct(support, "coc"), support.be, support.than, support.xm];
           return (
             <g
               key={support.id}
@@ -143,10 +145,7 @@ function BridgeProfile({
                   y={48 - part * 9}
                   width={14}
                   height={7}
-                  fill={
-                    progressStateColor(part === 0 ? supportOverallPct(support, state.weights) : pct)
-                      .color
-                  }
+                  fill={progressStateColor(pct).color}
                 />
               ))}
               <text x={x} y={89} textAnchor="middle" className="fill-foreground text-[9px]">
@@ -184,7 +183,10 @@ function RoadProfile({
   return (
     <div className="flex h-[92px] items-center gap-1 overflow-x-auto py-2">
       {km.map((item) => {
-        const pct = Object.values(item.pct).reduce((sum, value) => sum + value, 0) / 6;
+        const pct = computeProgressV2(
+          { ...state, bridges: [], underpasses: [], road: { km: [item] } },
+          packageId,
+        ).overallPct;
         return (
           <button
             key={item.id}
