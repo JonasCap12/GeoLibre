@@ -2528,3 +2528,41 @@ describe("MapboxEngine story camera", () => {
     );
   });
 });
+
+it("keeps Mapbox generated IDs and identifies original properties while a dashboard is open", () => {
+  const { engine, map } = makeEngine();
+  const features = [undefined, "1A3F", "012", 42].map((id, index) => ({
+    type: "Feature" as const,
+    ...(id == null ? {} : { id }),
+    properties: { name: `Component ${index}` },
+    geometry: { type: "Point" as const, coordinates: [0, 0] },
+  }));
+  engine.syncLayers([
+    geojsonLayer({
+      geojson: { type: "FeatureCollection", features },
+      progressDashboard: {
+        filter: ["in", ["get", "__progress_index"], ["literal", [0, 1, 2, 3]]],
+        colorExpression: '["case",true,"#ff0000","#000000"]',
+      },
+    }),
+  ]);
+  const source = map.sources.get(SOURCE)!;
+  assert.equal(source.generateId, true);
+  for (const index of [0, 1, 2, 3]) {
+    map.setQueried([
+      {
+        id: index,
+        layer: { id: CIRCLE },
+        properties: { name: `Component ${index}`, __progress_index: index },
+        geometry: null,
+      },
+    ]);
+    const hit = engine.identifyFeatures([0, 0])[0];
+    assert.equal(hit.featureId, String(features[index].id ?? index));
+    assert.deepEqual(hit.properties, features[index].properties);
+    assert.equal(
+      engine.featureIdAtPoint("layer-a", { x: 0, y: 0 }),
+      String(features[index].id ?? index),
+    );
+  }
+});

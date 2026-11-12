@@ -13,6 +13,7 @@ import type {
 } from "@geolibre/core";
 import {
   DEFAULT_LAYER_STYLE,
+  progressDashboardFeature,
   controlRendersLayer,
   geojsonHasZCoordinates,
   redactUrlCredentials,
@@ -1488,6 +1489,10 @@ export class MapboxEngine implements MapEngine {
       const id = byId.get(f.layer?.id ?? "");
       if (!id) return [];
       const featureId = this.featureIdForLayer(id, f);
+      const original = progressDashboardFeature(
+        this.layers.find((layer) => layer.id === id),
+        f.properties,
+      );
       const key = `${id}:${featureId ?? JSON.stringify(f.properties)}`;
       if (seen.has(key)) return [];
       seen.add(key);
@@ -1495,7 +1500,7 @@ export class MapboxEngine implements MapEngine {
         {
           layerId: id,
           featureId,
-          properties: f.properties ?? {},
+          properties: original ? (original.feature.properties ?? {}) : (f.properties ?? {}),
           geometry: f.geometry,
         },
       ];
@@ -1541,6 +1546,11 @@ export class MapboxEngine implements MapEngine {
     layerId: string,
     queried: { id?: string | number; properties?: Record<string, unknown> | null },
   ): string | null {
+    const original = progressDashboardFeature(
+      this.layers.find((layer) => layer.id === layerId),
+      queried.properties,
+    );
+    if (original) return String(original.feature.id ?? original.index);
     if (queried.id == null) return null;
     if (queried.properties?.cluster === true) return null;
     const features = this.layers.find((l) => l.id === layerId)?.geojson?.features;

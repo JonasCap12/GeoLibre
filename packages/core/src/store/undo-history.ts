@@ -151,7 +151,7 @@ function pruneHistoryBySize(): void {
 export function partializeHistory(s: AppState): HistoryState {
   return {
     layers: s.layers.map((layer) => {
-      if (!layer.progressDashboard) return layer;
+      if (!("progressDashboard" in layer)) return layer;
       const { progressDashboard: _dashboard, ...saved } = layer;
       return saved;
     }),
@@ -195,7 +195,9 @@ export function createHistoryOptions(): ZundoOptions<AppState, HistoryState> {
       a.blankBackgroundColor === b.blankBackgroundColor &&
       a.storymap === b.storymap &&
       a.layers.length === b.layers.length &&
-      a.layers.every((layer, index) => layer === b.layers[index] || shallow(layer, b.layers[index])) &&
+      a.layers.every(
+        (layer, index) => layer === b.layers[index] || shallow(layer, b.layers[index]),
+      ) &&
       shallow(a.comments, b.comments) &&
       shallow(a.widgets, b.widgets) &&
       a.legend === b.legend &&

@@ -2818,3 +2818,36 @@ describe("MapController search result lifecycle", () => {
     assert.equal(fake.layers.size, 1);
   });
 });
+
+it("identifies renderer copies by their original feature and hides the dashboard index", () => {
+  const { map, fake } = makeFakeMap();
+  const controller = controllerWith(map);
+  const layer = pointLayer("a");
+  layer.geojson = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        id: "1A3F",
+        properties: { name: "Original" },
+        geometry: { type: "Point", coordinates: [0, 0] },
+      },
+    ],
+  };
+  layer.progressDashboard = {
+    filter: ["in", ["get", "__progress_index"], ["literal", [0]]],
+    colorExpression: '["case",true,"#ff0000","#000000"]',
+  };
+  controller.syncLayers([layer]);
+  fake.queueRenderedFeatures([
+    {
+      id: 1,
+      layer: { id: circleId("a") },
+      properties: { name: "Original", __progress_index: 0 },
+      geometry: { type: "Point", coordinates: [0, 0] },
+    },
+  ]);
+  const hit = controller.identifyFeatures([0, 0])[0];
+  assert.equal(hit.featureId, "1A3F");
+  assert.deepEqual(hit.properties, { name: "Original" });
+});

@@ -4,7 +4,7 @@ import { Button, Select } from "@geolibre/ui";
 import { CalendarCheck, LayoutDashboard, Settings2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { featuresBounds, isoWeek } from "../../lib/construction-progress";
+import { featuresBounds, isoWeek, todayIso } from "../../lib/construction-progress";
 import {
   packageFeatureIndexes,
   progressFeatureTarget,
@@ -216,11 +216,7 @@ export function ProgressV2Screen({
         </HeaderButton>
         {!dashboard ? (
           <>
-            <HeaderKpi
-              label={t("progress.actual")}
-              value={`${fmt(summary.overallPct)}%`}
-              strong
-            />
+            <HeaderKpi label={t("progress.actual")} value={`${fmt(summary.overallPct)}%`} strong />
             <HeaderKpi label={t("progress.planned")} value={`${fmt(summary.plannedPct)}%`} />
             <HeaderKpi
               label={t("progress.deviation")}
@@ -231,19 +227,7 @@ export function ProgressV2Screen({
         ) : null}
         <HeaderButton
           label={t("progress.closeWeek")}
-          onClick={() =>
-            save(
-              recordProgressV2Week(
-                config,
-                new Intl.DateTimeFormat("en-CA", {
-                  year: "numeric",
-                  month: "2-digit",
-                  day: "2-digit",
-                }).format(new Date()),
-                activePackageId,
-              ),
-            )
-          }
+          onClick={() => save(recordProgressV2Week(config, todayIso(), activePackageId))}
         >
           <CalendarCheck className="h-4 w-4" />
         </HeaderButton>
@@ -344,16 +328,12 @@ function HeaderKpi({
 }) {
   return (
     <div
-      className={`shrink-0 flex-col items-end leading-tight ${
-        strong ? "flex" : "hidden sm:flex"
-      }`}
+      className={`shrink-0 flex-col items-end leading-tight ${strong ? "flex" : "hidden sm:flex"}`}
     >
       <span className="text-[10px] font-semibold uppercase tracking-wider text-header-muted">
         {label}
       </span>
-      <span
-        className={`${strong ? "text-2xl" : "text-lg"} font-bold tabular-nums ${className}`}
-      >
+      <span className={`${strong ? "text-2xl" : "text-lg"} font-bold tabular-nums ${className}`}>
         {value}
       </span>
     </div>

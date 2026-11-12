@@ -1,4 +1,5 @@
-﻿import type { Feature } from "geojson";
+﻿import { PROGRESS_DASHBOARD_INDEX_PROPERTY } from "@geolibre/core";
+import type { Feature } from "geojson";
 import {
   ROAD_ITEM_KEYS,
   PROGRESS_V2_ITEM_KEYS,
@@ -20,6 +21,8 @@ import {
   PROGRESS_V2_COLORS,
   progressFeatureTarget,
   progressFeatureItems,
+  propertyIndex,
+  fold,
   stateColors,
   type ProgressFeatureTarget,
 } from "./progress-colors";
@@ -69,15 +72,9 @@ export const DASHBOARD_STATUS_COLORS: Record<DashboardStatus, string> = {
 export const DASHBOARD_DEVIATION_COLORS = { late: "#dc4545", ok: "#d9a520", ahead: "#1f7a47" };
 
 /** Atomic item quantities retain the same denominators and plans as computeProgressV2. */
-export function dashboardRows(
-  state: ProgressV2,
-  packageId: string | null = null,
-): DashboardRow[] {
+export function dashboardRows(state: ProgressV2, packageId: string | null = null): DashboardRow[] {
   const rows: DashboardRow[] = [];
-  const add = (
-    row: Omit<DashboardRow, "planned" | "id" | "componentId">,
-    component: string,
-  ) => {
+  const add = (row: Omit<DashboardRow, "planned" | "id" | "componentId">, component: string) => {
     rows.push({
       ...row,
       componentId: component,
@@ -165,8 +162,7 @@ export function dashboardRows(
             target: { kind: "km", id: km.id },
             from: cuts[i],
             to: cuts[i + 1],
-            packageId:
-              packageForStation(state.packages, (cuts[i] + cuts[i + 1]) / 2)?.id ?? null,
+            packageId: packageForStation(state.packages, (cuts[i] + cuts[i + 1]) / 2)?.id ?? null,
             pct: km.pct[key],
             denominator: cuts[i + 1] - cuts[i],
           },
@@ -199,10 +195,38 @@ export function dashboardStatus(pct: number, planned: number): DashboardStatus {
   return evaluateProgress(pct, planned, planned > 0) === "late"
     ? "late"
     : pct >= 100
-    ? "done"
-    : pct > 0
-    ? "wip"
-    : "empty";
+      ? "done"
+      : pct > 0
+        ? "wip"
+        : "empty";
+}
+
+/** Reconcile package-specific selections while retaining item/type/status filters. */
+export function reconcileDashboardFilters(
+  filters: DashboardFilters,
+  rows: readonly DashboardRow[],
+): DashboardFilters {
+  const bridges = new Set(rows.map((row) => row.bridgeId));
+  const bridgeIds = filters.bridgeIds.filter((id) => bridges.has(id));
+  const extent = dashboardStationExtent(rows);
+  let station = filters.station;
+  if (station) {
+    if (
+      !extent ||
+      station[1] < extent[0] ||
+      station[0] > extent[1] ||
+      (extent[0] < extent[1] && (station[1] === extent[0] || station[0] === extent[1]))
+    )
+      station = null;
+    else {
+      const start = Math.max(station[0], extent[0]),
+        end = Math.min(station[1], extent[1]);
+      if (start !== station[0] || end !== station[1]) station = [start, end];
+    }
+  }
+  return bridgeIds.length === filters.bridgeIds.length && station === filters.station
+    ? filters
+    : { ...filters, bridgeIds, station };
 }
 
 /** Clip road quantities to the selected station interval; never mutate saved state. */
@@ -213,10 +237,7 @@ export function filterDashboardRows(
   const selected = rows.flatMap((row) => {
     if (filters.kinds.length && !filters.kinds.includes(row.kind)) return [];
     if (filters.items.length && !filters.items.includes(row.key)) return [];
-    if (
-      filters.bridgeIds.length &&
-      (!row.bridgeId || !filters.bridgeIds.includes(row.bridgeId))
-    )
+    if (filters.bridgeIds.length && (!row.bridgeId || !filters.bridgeIds.includes(row.bridgeId)))
       return [];
     if (
       filters.girderTypes.length &&
@@ -256,8 +277,7 @@ export function summarizeDashboardRows(
         ? selected.reduce((sum, row) => sum + row.pct * row.denominator, 0) / denominator
         : 0,
       plannedPct: plannedDenominator
-        ? selected.reduce((sum, row) => sum + row.planned * row.denominator, 0) /
-          plannedDenominator
+        ? selected.reduce((sum, row) => sum + row.planned * row.denominator, 0) / plannedDenominator
         : 0,
     };
   });
@@ -281,8 +301,8 @@ export function dashboardGroups(
     .map((id) => ({
       id,
       name:
-        (by === "package" ? state.packages : state.bridges).find((item) => item.id === id)
-          ?.name ?? id,
+        (by === "package" ? state.packages : state.bridges).find((item) => item.id === id)?.name ??
+        id,
       ...summarizeDashboardRows(
         state,
         rows.filter((row) => (by === "package" ? row.packageId : row.bridgeId) === id),
@@ -375,41 +395,26 @@ export function forecastDashboardCompletion(history: ProgressV2["history"]): str
 }
 
 export function dashboardYard(state: ProgressV2, rows: readonly DashboardRow[]) {
-  const types = new Map<
-    string,
-    {
-      type: string;
-      cast: number;
-      onBed: number;
-      ready: number;
-      erected: number;
-      remaining: number;
-    }
-  >();
+  const types = new Map<string, ReturnType<typeof computeYard>["byType"][number]>();
   const wanted = new Set(
     rows
       .filter((row) => row.girderType !== undefined)
       .map((row) => `${row.bridgeId}:${row.target.id}:${row.index}`),
   );
   for (const bridge of state.bridges) {
-    for (const entry of computeYard(bridge, state.meta.reportDate).girders) {
-      if (!wanted.has(`${bridge.id}:${entry.spanId}:${entry.girderIndex}`)) continue;
-      const type = entry.girder.t;
-      const row = types.get(type) ?? {
-        type,
-        cast: 0,
-        onBed: 0,
-        ready: 0,
-        erected: 0,
-        remaining: 0,
-      };
-      const stage = entry.girder.st;
-      if (stage >= 2) row.cast++;
-      if (stage >= 1 && stage <= 3) row.onBed++;
-      else if (stage === 4) row.ready++;
-      else if (stage === 5) row.erected++;
-      else row.remaining++;
-      types.set(type, row);
+    const selected = {
+      ...bridge,
+      spans: bridge.spans.map((span) => ({
+        ...span,
+        girders: span.girders.filter((_, index) => wanted.has(`${bridge.id}:${span.id}:${index}`)),
+      })),
+    };
+    for (const entry of computeYard(selected, state.meta.reportDate).byType) {
+      const current = types.get(entry.type);
+      if (!current) types.set(entry.type, { ...entry });
+      else
+        for (const key of ["total", "cast", "onBed", "ready", "erected", "remaining"] as const)
+          current[key] += entry[key];
     }
   }
   return [...types.values()].sort((a, b) => a.type.localeCompare(b.type));
@@ -423,9 +428,7 @@ export function dashboardComponentStatuses(rows: readonly DashboardRow[]) {
   for (const [id, group] of components) {
     // A girder is one physical component even though it contributes to casting and erection.
     const total = group.reduce((sum, row) => sum + row.denominator, 0);
-    const pct = total
-      ? group.reduce((sum, row) => sum + row.pct * row.denominator, 0) / total
-      : 0;
+    const pct = total ? group.reduce((sum, row) => sum + row.pct * row.denominator, 0) / total : 0;
     const plan = total
       ? group.reduce((sum, row) => sum + row.planned * row.denominator, 0) / total
       : 0;
@@ -517,7 +520,7 @@ export function dashboardMapView(
   const colors = stateColors(features, state);
   const statuses = dashboardComponentStatuses(rows);
   const indexes: number[] = [];
-  const expression: unknown[] = ["match", ["to-string", ["id"]]];
+  const expression: unknown[] = ["match", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY]];
   const byTarget = new Map<string, DashboardRow[]>();
   const targetKey = (target: ProgressFeatureTarget) =>
     `${target.kind}:${"bridgeId" in target ? target.bridgeId : ""}:${target.id}`;
@@ -528,20 +531,17 @@ export function dashboardMapView(
   features.forEach((feature, index) => {
     const target = progressFeatureTarget(feature);
     const approach =
-      !target && ["ht", "approach"].includes(String(feature.properties?.progress_item));
+      !target && ["ht", "approach"].includes(fold(String(feature.properties?.progress_item ?? "")));
     if (!target && !approach) return;
     const keys = progressFeatureItems(feature);
     const candidates = target
-      ? byTarget.get(targetKey(target)) ?? []
-      : rows.filter(
-          (row) => row.bridgeId === feature.properties?.bridge_id && row.key === "ht",
-        );
+      ? (byTarget.get(targetKey(target)) ?? [])
+      : rows.filter((row) => row.bridgeId === feature.properties?.bridge_id && row.key === "ht");
     const matched = candidates.filter(
       (row) =>
         (!keys.length || keys.includes(row.key)) &&
         (row.index === undefined ||
-          Number(feature.properties?.[row.key === "coc" ? "pile_index" : "girder_index"]) ===
-            row.index),
+          propertyIndex(feature, row.key === "coc" ? "pile_index" : "girder_index") === row.index),
     );
     if (!matched.length) return;
     indexes.push(index);
@@ -551,21 +551,16 @@ export function dashboardMapView(
     const evaluation = evaluateProgress(pct, plan, true);
     const color =
       mode === "girder"
-        ? colors.get(index)?.color ?? DASHBOARD_STATUS_COLORS[status]
+        ? (colors.get(index)?.color ?? DASHBOARD_STATUS_COLORS[status])
         : mode === "deviation"
-        ? DASHBOARD_DEVIATION_COLORS[evaluation === "na" ? "ok" : evaluation]
-        : DASHBOARD_STATUS_COLORS[status];
-    // Renderer-only source IDs preserve explicit feature IDs and identify untagged features by index.
-    expression.push(String(feature.id ?? index), color);
+          ? DASHBOARD_DEVIATION_COLORS[evaluation === "na" ? "ok" : evaluation]
+          : DASHBOARD_STATUS_COLORS[status];
+    expression.push(index, color);
   });
   expression.push(PROGRESS_V2_COLORS.empty);
   return {
     indexes,
-    filter: [
-      "in",
-      ["to-string", ["id"]],
-      ["literal", indexes.map((index) => String(features[index].id ?? index))],
-    ],
+    filter: ["in", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY], ["literal", indexes]],
     colorExpression: indexes.length
       ? JSON.stringify(expression)
       : JSON.stringify(PROGRESS_V2_COLORS.empty),

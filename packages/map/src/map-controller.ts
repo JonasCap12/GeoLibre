@@ -1,6 +1,7 @@
 import { showGlSearchResult } from "./gl-search-result";
 import {
   BLANK_BASEMAP,
+  progressDashboardFeature,
   DEFAULT_BASEMAP,
   DEFAULT_PROJECT_PREFERENCES,
   horizontalBbox,
@@ -1865,10 +1866,13 @@ export class MapController implements MapEngine {
         layers: styleIds,
       });
       for (const feature of features) {
+        const original = progressDashboardFeature(layer, feature.properties);
         results.push({
           layerId: layer.id,
           featureId: featureIdForLayer(layer, feature),
-          properties: (feature.properties ?? {}) as Record<string, unknown>,
+          properties: (original
+            ? (original.feature.properties ?? {})
+            : (feature.properties ?? {})) as Record<string, unknown>,
           geometry: feature.geometry ?? null,
         });
       }
@@ -2773,6 +2777,8 @@ function featureIdForLayer(
   layer: GeoLibreLayer,
   feature: maplibregl.MapGeoJSONFeature,
 ): string | null {
+  const original = progressDashboardFeature(layer, feature.properties);
+  if (original) return String(original.feature.id ?? original.index);
   if (feature.id != null) return String(feature.id);
   if (!layer.geojson) return null;
   const properties = feature.properties ?? {};

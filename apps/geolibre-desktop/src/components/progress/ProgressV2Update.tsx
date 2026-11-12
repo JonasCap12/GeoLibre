@@ -231,7 +231,7 @@ function SpanEditor({
         <thead>
           <tr>
             <th className="p-1 text-start">{t("progress.v2.girder")}</th>
-            <th className="p-1 text-start">{t("progress.status.none")}</th>
+            <th className="p-1 text-start">{t("progress.v2.stageColumn")}</th>
             <th className="p-1 text-start">{t("progress.v2.pourDate")}</th>
             <th className="p-1 text-end">{t("progress.v2.bed")}</th>
           </tr>

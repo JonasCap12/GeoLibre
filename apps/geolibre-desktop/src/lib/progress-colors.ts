@@ -37,14 +37,14 @@ function propertyText(feature: Feature, key: string): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
-function propertyIndex(feature: Feature, key: string): number | null {
+export function propertyIndex(feature: Feature, key: string): number | null {
   const raw = feature.properties?.[key];
   if (raw == null || raw === "") return null;
   const value = Number(raw);
   return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-function fold(value: string): string {
+export function fold(value: string): string {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -127,8 +127,8 @@ function supportColor(feature: Feature, bridge: BridgeState): ProgressFeatureCol
     return state === 2
       ? progressStateColor(100)
       : state === 1
-      ? progressStateColor(50)
-      : progressStateColor(0);
+        ? progressStateColor(50)
+        : progressStateColor(0);
   }
   const key = supportKey(feature);
   return key ? progressStateColor(support[key]) : null;
@@ -170,8 +170,7 @@ function featureColor(feature: Feature, state: ProgressV2): ProgressFeatureColor
     if (propertyText(feature, "support_id")) return supportColor(feature, bridge);
     if (propertyText(feature, "span_id")) return spanColor(feature, bridge);
     const item = fold(propertyText(feature, "progress_item"));
-    if (item === "ht" || item === "approach")
-      return progressStateColor(bridgeApproachPct(bridge));
+    if (item === "ht" || item === "approach") return progressStateColor(bridgeApproachPct(bridge));
   }
   const kmId = propertyText(feature, "km_id");
   if (kmId) {
@@ -231,8 +230,7 @@ function paintedProperties(
     "marker-color": color,
   };
   if (status === "empty" || status === "stage-0") delete next[PROGRESS_STATUS_PROPERTY];
-  else
-    next[PROGRESS_STATUS_PROPERTY] = status === "done" || status === "stage-5" ? "done" : "wip";
+  else next[PROGRESS_STATUS_PROPERTY] = status === "done" || status === "stage-5" ? "done" : "wip";
   return next;
 }
 

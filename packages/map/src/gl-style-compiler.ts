@@ -657,12 +657,12 @@ export function compileMapboxLayer(
               compileOptions.zoom === undefined
                 ? layer.geojson
                 : authoredClusterInput(layer, compileOptions.zoom),
-            generateId: !layer.progressDashboard,
+            generateId: true,
             cluster: true,
             clusterRadius,
             clusterMaxZoom,
           }
-        : { type: "geojson", data: layer.geojson, generateId: !layer.progressDashboard },
+        : { type: "geojson", data: layer.geojson, generateId: true },
       ...companionSources(),
       layers: vectorLayers(),
     };
