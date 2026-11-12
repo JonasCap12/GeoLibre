@@ -6148,6 +6148,20 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   width: var(--progress-side-w);
   border-inline-start-width: 1px;
 }
+:root[data-progress-v2] {
+  --progress-profile-h: 8rem;
+}
+:root[data-progress-v2] main.isolate {
+  inset-block-end: var(--progress-profile-h);
+}
+.progress-screen-profile {
+  position: fixed;
+  z-index: 40;
+  inset-inline: 0 var(--progress-side-w);
+  inset-block-end: 0;
+  height: var(--progress-profile-h, 0px);
+  overflow: hidden;
+}
 @media (max-width: 899px) {
   :root[data-progress-screen] {
     --progress-header-h: 4rem;
@@ -6163,5 +6177,16 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
     height: var(--progress-strip-h);
     border-inline-start-width: 0;
     border-block-start-width: 1px;
+  }
+  :root[data-progress-v2] {
+    --progress-strip-h: 38dvh;
+    --progress-profile-h: 7rem;
+  }
+  :root[data-progress-v2] main.isolate {
+    inset-block-end: calc(var(--progress-strip-h) + var(--progress-profile-h));
+  }
+  :root[data-progress-v2] .progress-screen-profile {
+    inset-inline: 0;
+    inset-block-end: var(--progress-strip-h);
   }
 }

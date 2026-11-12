@@ -1,6 +1,6 @@
 import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import { Button } from "@geolibre/ui";
-import { CalendarCheck, Settings2, X } from "lucide-react";
+import { CalendarCheck, RefreshCw, Settings2, X } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -9,7 +9,7 @@ import {
   isoWeek,
   progressConfigPatch,
   progressIssues,
-  readProgressConfig,
+  readStoredProgressConfig,
   recordWeek,
   type ConstructionProgress,
 } from "../../lib/construction-progress";
@@ -29,6 +29,9 @@ import {
 } from "./ProgressScreenBlocks";
 import { ProgressSettingsDialog } from "./ProgressSettingsDialog";
 import { MatrixBlock, StructuresBlock } from "./ProgressStructureBlocks";
+import { ProgressV2Screen } from "./ProgressV2Screen";
+import { migrateProgressV1 } from "../../lib/progress-v2";
+import { progressV2LayerPatch } from "../../lib/progress-colors";
 
 /**
  * Full-viewport construction progress screen over a drawing layer.
@@ -53,7 +56,7 @@ function todayIso(): string {
 export function ConstructionProgressScreen({ camera }: { camera: ProgressScreenCamera | null }) {
   const layerId = useSyncExternalStore(subscribeProgressScreen, getProgressScreenLayerId);
   const layer = useAppStore((s) => (layerId ? s.layers.find((l) => l.id === layerId) : undefined));
-  const config = useMemo(() => (layer ? readProgressConfig(layer) : null), [layer]);
+  const config = useMemo(() => (layer ? readStoredProgressConfig(layer) : null), [layer]);
   const open = Boolean(layer && config);
 
   useEffect(() => {
@@ -75,7 +78,11 @@ export function ConstructionProgressScreen({ camera }: { camera: ProgressScreenC
   }, [open]);
 
   if (!layer || !config) return null;
-  return <ProgressScreen layer={layer} config={config} camera={camera} />;
+  return config.version === 2 ? (
+    <ProgressV2Screen layer={layer} config={config} camera={camera} />
+  ) : (
+    <ProgressScreen layer={layer} config={config} camera={camera} />
+  );
 }
 
 function ProgressScreen({
@@ -125,6 +132,16 @@ function ProgressScreen({
           className={behind ? "text-[#ffb4a0]" : undefined}
         />
         <div className="flex shrink-0 items-center gap-1">
+          <HeaderButton
+            label={t("progress.v2.migrate")}
+            onClick={() => {
+              if (!window.confirm(t("progress.v2.migrateConfirm"))) return;
+              const next = migrateProgressV1(config, features, today);
+              useAppStore.getState().updateLayer(layer.id, progressV2LayerPatch(layer, next));
+            }}
+          >
+            <RefreshCw className="h-4 w-4" />
+          </HeaderButton>
           <HeaderButton
             label={t("progress.closeWeek")}
             onClick={() => save(recordWeek(config, today, summary))}
