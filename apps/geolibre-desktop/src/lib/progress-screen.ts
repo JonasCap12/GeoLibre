@@ -2,7 +2,7 @@ import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import {
   findProgressLayer,
   progressConfigPatch,
-  readProgressConfig,
+  readStoredProgressConfig,
   suggestProgressConfig,
 } from "./construction-progress";
 import { notify } from "./notify";
@@ -62,7 +62,7 @@ export function openProgressScreen(requested?: string): string | null {
   const store = useAppStore.getState();
   const layer = progressScreenTarget(store.layers, store.selectedLayerId, requested);
   if (!layer) return null;
-  if (!readProgressConfig(layer)) {
+  if (!readStoredProgressConfig(layer)) {
     const config = suggestProgressConfig(layer.geojson?.features ?? [], layer.name);
     store.updateLayer(layer.id, progressConfigPatch(layer, config));
   }

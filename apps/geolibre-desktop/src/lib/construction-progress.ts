@@ -1,5 +1,6 @@
 import type { GeoLibreLayer } from "@geolibre/core";
 import type { Feature, Geometry, Position } from "geojson";
+import { normalizeProgressV2, type ProgressV2 } from "./progress-v2";
 
 /**
  * Construction progress read off a technical drawing.
@@ -71,6 +72,8 @@ export interface ConstructionProgress {
   /** Issues to watch, one per line. */
   notes: string;
 }
+
+export type StoredConstructionProgress = ConstructionProgress | ProgressV2;
 
 export interface ItemProgress {
   item: ProgressItem;
@@ -157,6 +160,7 @@ function normalizeWeek(raw: unknown): WeekRecord | null {
 export function normalizeProgressConfig(raw: unknown): ConstructionProgress | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
+  if (r.version === 2) return null;
   const items = Array.isArray(r.items)
     ? r.items.map(normalizeItem).filter((item): item is ProgressItem => item !== null)
     : [];
@@ -187,15 +191,21 @@ export function readProgressConfig(layer: GeoLibreLayer): ConstructionProgress |
   return normalizeProgressConfig(layer.metadata?.[PROGRESS_METADATA_KEY]);
 }
 
+/** A stored v1 or v2 setup. Callers branch on `version`. */
+export function readStoredProgressConfig(layer: GeoLibreLayer): StoredConstructionProgress | null {
+  const raw = layer.metadata?.[PROGRESS_METADATA_KEY];
+  return normalizeProgressV2(raw) ?? normalizeProgressConfig(raw);
+}
+
 /** The first layer in the project carrying a progress setup. */
 export function findProgressLayer(layers: readonly GeoLibreLayer[]): GeoLibreLayer | null {
-  return layers.find((layer) => readProgressConfig(layer) !== null) ?? null;
+  return layers.find((layer) => readStoredProgressConfig(layer) !== null) ?? null;
 }
 
 /** The layer patch that stores `config` on `layer` (or with null, removes it). */
 export function progressConfigPatch(
   layer: GeoLibreLayer,
-  config: ConstructionProgress | null,
+  config: StoredConstructionProgress | null,
 ): Partial<GeoLibreLayer> {
   const metadata: Record<string, unknown> = { ...layer.metadata };
   if (config === null) delete metadata[PROGRESS_METADATA_KEY];
