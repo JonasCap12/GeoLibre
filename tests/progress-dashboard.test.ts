@@ -7,6 +7,7 @@ import {
   dashboardStatus,
   dashboardComponentStatuses,
   filterDashboardRows,
+  reconcileDashboardFilters,
   summarizeDashboardRows,
   dashboardGroups,
   dashboardQuantities,
@@ -38,9 +39,14 @@ import {
   parseProject,
   serializeProject,
   progressDashboardLayer,
+  progressDashboardFeature,
+  PROGRESS_DASHBOARD_INDEX_PROPERTY,
+  compileFeatureExpression,
   useAppStore,
   clearHistory,
 } from "@geolibre/core";
+import { todayIso } from "../apps/geolibre-desktop/src/lib/construction-progress";
+import { buildMapboxStyle } from "../packages/map/src/mapbox-style-export";
 import { geojsonLayer } from "./helpers/layer-fixtures";
 
 const html = JSON.parse(
@@ -135,10 +141,7 @@ it("matches the reference HTML and existing engine for every item and scope", ()
       expected.items.forEach((item, index) => {
         assert.ok(Math.abs(actual.items[index].pct - item.pct) < 1e-8, item.key);
         if (item.applicable)
-          assert.ok(
-            Math.abs(actual.items[index].plannedPct - item.plannedPct) < 1e-8,
-            item.key,
-          );
+          assert.ok(Math.abs(actual.items[index].plannedPct - item.plannedPct) < 1e-8, item.key);
         assert.equal(actual.items[index].denominator, item.denominator);
       });
     }
@@ -217,8 +220,8 @@ it("builds exclusive yard stacks while retaining the overlapping cast total", ()
   const state = fixture();
   const yard = dashboardYard(state, dashboardRows(state));
   assert.deepEqual(yard, [
-    { type: "A", cast: 2, onBed: 2, ready: 1, erected: 0, remaining: 1 },
-    { type: "B", cast: 1, onBed: 0, ready: 0, erected: 1, remaining: 0 },
+    { type: "A", total: 4, cast: 2, onBed: 2, ready: 1, erected: 0, remaining: 2 },
+    { type: "B", total: 1, cast: 1, onBed: 0, ready: 0, erected: 1, remaining: 0 },
   ]);
   assert.equal(
     dashboardYard(
@@ -306,18 +309,18 @@ it("uses existing feature aliases, preserves IDs and matches map colors to statu
   });
   const view = dashboardMapView(features, state, rows, "status");
   assert.deepEqual(view.indexes, [0]);
-  assert.ok(JSON.stringify(view.filter).includes("pile"));
+  assert.deepEqual(view.filter, [
+    "in",
+    ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY],
+    ["literal", [0]],
+  ]);
   assert.ok(view.colorExpression.includes(DASHBOARD_STATUS_COLORS.wip));
   assert.deepEqual(dashboardMapView(features, state, [], "status").indexes, []);
-  assert.ok(
-    dashboardMapView(features, state, dashboardRows(state), "deviation").colorExpression,
-  );
+  assert.ok(dashboardMapView(features, state, dashboardRows(state), "deviation").colorExpression);
   assert.ok(dashboardMapView(features, state, dashboardRows(state), "girder").colorExpression);
   assert.deepEqual(progressFeatureItems(features[0]), ["coc"]);
   assert.deepEqual(
-    progressFeatureItems(
-      feature({ support_id: "M1", pile_index: null, progress_item: "than" }),
-    ),
+    progressFeatureItems(feature({ support_id: "M1", pile_index: null, progress_item: "than" })),
     ["than"],
   );
   assert.deepEqual(
@@ -332,10 +335,9 @@ it("uses existing feature aliases, preserves IDs and matches map colors to statu
   assert.deepEqual(progressFeatureItems(features[1]), ["be"]);
   assert.deepEqual(progressFeatureItems(features[2]), ["duc", "gac"]);
   assert.deepEqual(progressFeatureItems(features[3]), ["nen"]);
-  assert.deepEqual(
-    progressFeatureItems(feature({ underpass_id: "u", progress_item: "ham_nap" })),
-    ["ham_nap"],
-  );
+  assert.deepEqual(progressFeatureItems(feature({ underpass_id: "u", progress_item: "ham_nap" })), [
+    "ham_nap",
+  ]);
   assert.deepEqual(progressFeatureItems(features[4]), []);
 });
 
@@ -388,10 +390,12 @@ it("composes transient filters, keeps styles and data intact, excludes the view 
     colorExpression: '["case",true,"#ff0000","#000000"]',
   };
   const viewed = { ...layer, progressDashboard: dashboard };
-  assert.deepEqual(compileLayerFilters(viewed), ["all", authored, dashboard.filter]);
-  assert.equal(hasActiveLayerFilter({ ...viewed, filterExpression: undefined }), false);
+  assert.deepEqual(compileLayerFilters(viewed), compileLayerFilters(layer));
+  assert.equal(hasActiveLayerFilter({ ...layer, filterExpression: undefined }), false);
   const rendered = progressDashboardLayer(viewed);
-  assert.equal(rendered.geojson!.features[0].id, 0);
+  assert.equal(rendered.geojson!.features[0].id, undefined);
+  assert.equal(rendered.geojson!.features[0].properties?.[PROGRESS_DASHBOARD_INDEX_PROPERTY], 0);
+  assert.deepEqual(rendered.embedFilter, dashboard.filter);
   assert.equal(rendered.style.vectorStyleMode, "expression");
   assert.equal(progressDashboardLayer(viewed).geojson, rendered.geojson);
   assert.equal(layer.geojson!.features[0].id, undefined);
@@ -413,4 +417,159 @@ it("composes transient filters, keeps styles and data intact, excludes the view 
     useAppStore.temporal.getState().pastStates[0].layers![0].progressDashboard,
     undefined,
   );
+});
+
+it("keys renderer colors and filters by source index regardless of authored IDs", () => {
+  const state = fixture();
+  const features = [5, "1A3F", "012", 42, 42, undefined].map((id) =>
+    feature({ km_id: "Km0", progress_item: "nen" }, id),
+  );
+  const view = dashboardMapView(features, state, dashboardRows(state), "status");
+  const layer = geojsonLayer({
+    geojson: { type: "FeatureCollection", features },
+    embedFilter: ["==", ["get", "km_id"], "Km0"],
+    progressDashboard: { filter: view.filter, colorExpression: view.colorExpression },
+  });
+  const rendered = progressDashboardLayer(layer);
+  const filter = compileFeatureExpression(JSON.stringify(view.filter), { expectedType: "boolean" });
+  const colors = compileFeatureExpression(view.colorExpression, { expectedType: "color" });
+  assert.equal(filter.ok, true);
+  assert.equal(colors.ok, true); // No duplicate branch labels.
+  assert.deepEqual(view.indexes, [0, 1, 2, 3, 4, 5]);
+  rendered.geojson!.features.forEach((item, index) => {
+    assert.equal(item.id, features[index].id);
+    assert.equal(filter.evaluate!(item), true);
+    assert.ok(colors.evaluate!(item));
+    assert.deepEqual(progressDashboardFeature(layer, item.properties), {
+      feature: features[index],
+      index,
+    });
+  });
+  assert.equal(progressDashboardLayer(layer).geojson, rendered.geojson);
+  assert.deepEqual(rendered.embedFilter, ["all", layer.embedFilter, view.filter]);
+  const noDashboard = { ...layer, progressDashboard: undefined };
+  assert.deepEqual(
+    buildMapboxStyle(layer, layer.geojson!).style,
+    buildMapboxStyle(noDashboard, layer.geojson!).style,
+  );
+  assert.equal(
+    layer.geojson!.features[0].properties?.[PROGRESS_DASHBOARD_INDEX_PROPERTY],
+    undefined,
+  );
+  assert.ok(
+    !serializeProject({ ...createEmptyProject(), layers: [layer] }).includes(
+      PROGRESS_DASHBOARD_INDEX_PROPERTY,
+    ),
+  );
+  assert.equal(progressDashboardFeature(layer, { [PROGRESS_DASHBOARD_INDEX_PROPERTY]: -1 }), null);
+  assert.equal(progressDashboardFeature(layer, { [PROGRESS_DASHBOARD_INDEX_PROPERTY]: "0" }), null);
+});
+
+it("drops stale bridges and clamps or clears station ranges for the new package", () => {
+  const state = fixture();
+  state.bridges.push({ ...structuredClone(state.bridges[0]), id: "b2", station: 2000 });
+  const rows = dashboardRows(state, "p2");
+  const filters = {
+    ...EMPTY_DASHBOARD_FILTERS,
+    items: ["nen" as const],
+    bridgeIds: ["b", "b2"],
+    station: [0, 800] as [number, number],
+  };
+  const scoped = reconcileDashboardFilters(filters, rows);
+  assert.deepEqual(scoped.bridgeIds, ["b2"]);
+  assert.equal(scoped.station, null);
+  assert.deepEqual(scoped.items, filters.items);
+  const overlap = reconcileDashboardFilters({ ...filters, station: [500, 2500] }, rows);
+  assert.deepEqual(overlap.station, [1000, 2500]);
+  assert.equal(reconcileDashboardFilters(overlap, rows), overlap);
+  assert.equal(reconcileDashboardFilters(filters, []).station, null);
+  assert.equal(reconcileDashboardFilters({ ...filters, station: [0, 1000] }, rows).station, null);
+});
+
+it("closing a dashboard does not push history or discard an existing redo entry", () => {
+  const layer = geojsonLayer();
+  useAppStore.setState({ layers: [layer] });
+  clearHistory();
+  useAppStore.getState().updateLayer(layer.id, { name: "Author edit" });
+  useAppStore.temporal.getState().undo();
+  const before = useAppStore.temporal.getState();
+  const past = before.pastStates.length,
+    future = before.futureStates.length;
+  assert.equal(future, 1);
+  const view = { filter: ["==", 1, 1], colorExpression: '["case",true,"#fff","#000"]' };
+  useAppStore.getState().updateLayer(layer.id, { progressDashboard: view });
+  useAppStore.getState().updateLayer(layer.id, { progressDashboard: undefined });
+  assert.equal(useAppStore.temporal.getState().pastStates.length, past);
+  assert.equal(useAppStore.temporal.getState().futureStates.length, future);
+});
+
+it("uses the normal resolver for empty girder indexes and upper-case approach items", () => {
+  const state = fixture(),
+    rows = dashboardRows(state);
+  for (const value of ["", null, undefined]) {
+    const features = [
+      feature({ bridge_id: "b", span_id: "N1", girder_index: value, progress_item: "bmc" }),
+    ];
+    assert.deepEqual(
+      dashboardMapView(
+        features,
+        state,
+        rows.filter((row) => row.key === "duc"),
+        "girder",
+      ).indexes,
+      [],
+    );
+    assert.deepEqual(
+      dashboardMapView(
+        features,
+        state,
+        rows.filter((row) => row.key === "bmc"),
+        "girder",
+      ).indexes,
+      [0],
+    );
+  }
+  const approaches = [
+    feature({ bridge_id: "b", progress_item: "HT" }),
+    feature({ bridge_id: "b", progress_item: "APPROACH" }),
+  ];
+  assert.deepEqual(dashboardMapView(approaches, state, rows, "girder").indexes, [0, 1]);
+});
+
+it("shares the yard's remaining definition for stage-one girders and filtered types", () => {
+  const state = fixture();
+  state.bridges[0].spans[0].girders = Array.from({ length: 3 }, () => ({
+    t: "A",
+    st: 1 as const,
+    dob: "",
+    bed: 1,
+  }));
+  const row = dashboardYard(state, dashboardRows(state))[0];
+  assert.deepEqual(row, {
+    type: "A",
+    total: 3,
+    cast: 0,
+    onBed: 3,
+    ready: 0,
+    erected: 0,
+    remaining: 3,
+  });
+});
+
+it("keeps unknown stations out of packages and range filters and formats the local day", () => {
+  const state = fixture();
+  state.underpasses[0].station = Number.NaN;
+  assert.equal(
+    dashboardRows(state, "p2").some((row) => row.kind === "underpass"),
+    false,
+  );
+  const rows = dashboardRows(state);
+  assert.deepEqual(dashboardStationExtent(rows), [0, 3000]);
+  assert.equal(
+    filterDashboardRows(rows, { ...EMPTY_DASHBOARD_FILTERS, station: [0, 3000] }).some(
+      (row) => row.kind === "underpass",
+    ),
+    false,
+  );
+  assert.equal(todayIso(new Date(2026, 0, 2, 23, 59)), "2026-01-02");
 });

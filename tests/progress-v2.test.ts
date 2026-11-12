@@ -1,3 +1,4 @@
+import { createInstance } from "i18next";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,29 @@ import {
   type BridgeState,
   type ProgressV2,
 } from "../apps/geolibre-desktop/src/lib/progress-v2";
+
+const quantityI18n = createInstance();
+await quantityI18n.init({
+  lng: "vi",
+  resources: {
+    vi: {
+      translation: JSON.parse(
+        readFileSync(
+          new URL("../apps/geolibre-desktop/src/i18n/locales/vi.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    },
+    en: {
+      translation: JSON.parse(
+        readFileSync(
+          new URL("../apps/geolibre-desktop/src/i18n/locales/en.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    },
+  },
+});
 
 const htmlState = JSON.parse(
   readFileSync(
@@ -88,14 +112,38 @@ describe("the HTML progress sample", () => {
 
   it("reproduces the HTML quantity strings", () => {
     const bridges = state.bridges;
-    assert.equal(bridgeItemQuantityText(bridges, "coc"), "80/130 cọc · 2513/4280 m");
-    assert.equal(bridgeItemQuantityText(bridges, "be"), "5/13 trụ xong");
-    assert.equal(bridgeItemQuantityText(bridges, "than"), "3/13 trụ xong");
-    assert.equal(bridgeItemQuantityText(bridges, "xm"), "2/13 trụ xong");
-    assert.equal(bridgeItemQuantityText(bridges, "duc"), "24/140 dầm");
-    assert.equal(bridgeItemQuantityText(bridges, "gac"), "10/140 dầm");
-    assert.equal(bridgeItemQuantityText(bridges, "bmc"), "16/558 m");
-    assert.equal(bridgeItemQuantityText(bridges, "ht"), "0/558 m");
+    assert.equal(
+      bridgeItemQuantityText(bridges, "coc", quantityI18n.getFixedT("vi"), "vi"),
+      "80/130 cọc · 2513/4280 m",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "be", quantityI18n.getFixedT("vi"), "vi"),
+      "5/13 trụ xong",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "than", quantityI18n.getFixedT("vi"), "vi"),
+      "3/13 trụ xong",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "xm", quantityI18n.getFixedT("vi"), "vi"),
+      "2/13 trụ xong",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "duc", quantityI18n.getFixedT("vi"), "vi"),
+      "24/140 dầm",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "gac", quantityI18n.getFixedT("vi"), "vi"),
+      "10/140 dầm",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "bmc", quantityI18n.getFixedT("vi"), "vi"),
+      "16/558 m",
+    );
+    assert.equal(
+      bridgeItemQuantityText(bridges, "ht", quantityI18n.getFixedT("vi"), "vi"),
+      "0/558 m",
+    );
   });
 
   it("reproduces the HTML alert list and yard figures", () => {
@@ -338,4 +386,16 @@ describe("v1 migration", () => {
       { date: "2026-10-16", week: "2026-W42", packageId: null, actual: 20, planned: 22 },
     ]);
   });
+});
+
+it("translates bridge quantities through the caller's language", () => {
+  const bridges = fromHtmlSample().bridges;
+  assert.equal(
+    bridgeItemQuantityText(bridges, "coc", quantityI18n.getFixedT("en"), "en"),
+    "80/130 piles · 2513/4280 m",
+  );
+  assert.equal(
+    bridgeItemQuantityText(bridges, "duc", quantityI18n.getFixedT("en"), "en"),
+    "24/140 girders",
+  );
 });

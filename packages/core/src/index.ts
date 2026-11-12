@@ -280,4 +280,8 @@ export {
   withJpegTablesPatch,
 } from "./cog-jpeg-tables";
 
-export { progressDashboardLayer } from "./progress-dashboard-view";
+export {
+  progressDashboardLayer,
+  progressDashboardFeature,
+  PROGRESS_DASHBOARD_INDEX_PROPERTY,
+} from "./progress-dashboard-view";

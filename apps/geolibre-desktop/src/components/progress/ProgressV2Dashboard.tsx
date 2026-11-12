@@ -17,6 +17,7 @@ import {
   dashboardStatus,
   dashboardYard,
   filterDashboardRows,
+  reconcileDashboardFilters,
   forecastDashboardCompletion,
   summarizeDashboardRows,
   type DashboardColorMode,
@@ -51,6 +52,11 @@ export function ProgressV2Dashboard({
   const [mode, setMode] = useState<DashboardColorMode>("status");
   const features = layer.geojson?.features;
   const allRows = useMemo(() => dashboardRows(state, packageId), [state, packageId]);
+  const [filterScope, setFilterScope] = useState(packageId);
+  if (filterScope !== packageId) {
+    setFilterScope(packageId);
+    setFilters(reconcileDashboardFilters(filters, allRows));
+  }
   const rows = useMemo(() => filterDashboardRows(allRows, filters), [allRows, filters]);
   const summary = useMemo(() => summarizeDashboardRows(state, rows), [state, rows]);
   const quantities = useMemo(() => dashboardQuantities(state, rows), [state, rows]);
@@ -65,10 +71,7 @@ export function ProgressV2Dashboard({
   const forecast = useMemo(() => forecastDashboardCompletion(history), [history]);
   const counts = useMemo(() => dashboardStatusCounts(rows), [rows]);
   const yard = useMemo(() => dashboardYard(state, rows), [state, rows]);
-  const alerts = useMemo(
-    () => dashboardAlerts(state, packageId, rows),
-    [state, packageId, rows],
-  );
+  const alerts = useMemo(() => dashboardAlerts(state, packageId, rows), [state, packageId, rows]);
   const extent = useMemo(() => dashboardStationExtent(allRows), [allRows]);
   const view = useMemo(
     () => dashboardMapView(features ?? [], state, rows, mode),
@@ -338,24 +341,24 @@ export function ProgressV2Dashboard({
                 />
               ))
             : mode === "deviation"
-            ? (
-                Object.keys(DASHBOARD_DEVIATION_COLORS) as Array<
-                  keyof typeof DASHBOARD_DEVIATION_COLORS
-                >
-              ).map((key) => (
-                <Legend
-                  key={key}
-                  color={DASHBOARD_DEVIATION_COLORS[key]}
-                  label={t(`progress.v2.evaluation.${key}`)}
-                />
-              ))
-            : (Object.keys(counts) as DashboardStatus[]).map((key) => (
-                <Legend
-                  key={key}
-                  color={DASHBOARD_STATUS_COLORS[key]}
-                  label={t(`progress.v2.dashboard.statuses.${key}`)}
-                />
-              ))}
+              ? (
+                  Object.keys(DASHBOARD_DEVIATION_COLORS) as Array<
+                    keyof typeof DASHBOARD_DEVIATION_COLORS
+                  >
+                ).map((key) => (
+                  <Legend
+                    key={key}
+                    color={DASHBOARD_DEVIATION_COLORS[key]}
+                    label={t(`progress.v2.evaluation.${key}`)}
+                  />
+                ))
+              : (Object.keys(counts) as DashboardStatus[]).map((key) => (
+                  <Legend
+                    key={key}
+                    color={DASHBOARD_STATUS_COLORS[key]}
+                    label={t(`progress.v2.dashboard.statuses.${key}`)}
+                  />
+                ))}
         </section>
         {!rows.length ? (
           <p className="mt-3 text-xs" role="status">
@@ -486,7 +489,11 @@ export function ProgressV2Dashboard({
               { key: "onBed", count: entry.onBed, color: PROGRESS_V2_COLORS.girder[2] },
               { key: "ready", count: entry.ready, color: PROGRESS_V2_COLORS.girder[4] },
               { key: "erected", count: entry.erected, color: PROGRESS_V2_COLORS.girder[5] },
-              { key: "remaining", count: entry.remaining, color: PROGRESS_V2_COLORS.girder[0] },
+              {
+                key: "notStarted",
+                count: entry.total - entry.onBed - entry.ready - entry.erected,
+                color: PROGRESS_V2_COLORS.girder[0],
+              },
             ];
             const total = segments.reduce((sum, item) => sum + item.count, 0);
             return (
@@ -499,7 +506,10 @@ export function ProgressV2Dashboard({
               >
                 <span className="flex justify-between gap-2">
                   <b>{entry.type || t("progress.v2.dashboard.unknownType")}</b>
-                  <span>{t("progress.v2.dashboard.castCount", { count: entry.cast })}</span>
+                  <span>
+                    {t("progress.v2.dashboard.castCount", { count: entry.cast })} ·{" "}
+                    {t("progress.v2.dashboard.remainingCount", { count: entry.remaining })}
+                  </span>
                 </span>
                 <svg
                   viewBox="0 0 200 18"
@@ -531,7 +541,7 @@ export function ProgressV2Dashboard({
                       color={segment.color}
                       label={`${t(
                         `progress.v2.dashboard.yard.${
-                          segment.key as "onBed" | "ready" | "erected" | "remaining"
+                          segment.key as "onBed" | "ready" | "erected" | "notStarted"
                         }`,
                       )}: ${num(segment.count)}`}
                     />

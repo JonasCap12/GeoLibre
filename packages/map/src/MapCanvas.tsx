@@ -5,6 +5,7 @@ import {
 } from "./feature-popup";
 import {
   applyGroupEffects,
+  progressDashboardFeature,
   createPointerElevationResolver,
   effectiveLayerRenderState,
   getActiveEllipsoid,
@@ -116,6 +117,8 @@ function createIdentifyMessagePopupElement(layerName: string, message: string): 
 }
 
 function findFeatureId(layer: GeoLibreLayer, feature: maplibregl.MapGeoJSONFeature): string | null {
+  const original = progressDashboardFeature(layer, feature.properties);
+  if (original) return String(original.feature.id ?? original.index);
   if (feature.id != null) return String(feature.id);
   if (!layer.geojson) return null;
 
@@ -619,10 +622,11 @@ export const MapCanvas = memo(function MapCanvas({
         for (const feature of rendered) {
           const owner = owners.get(feature.layer.id);
           if (!owner) continue;
+          const original = progressDashboardFeature(owner, feature.properties);
           const hit: GlobalIdentifyHit = {
             layer: owner,
-            properties: feature.properties ?? {},
-            feature,
+            properties: original ? (original.feature.properties ?? {}) : (feature.properties ?? {}),
+            feature: original?.feature ?? feature,
             featureId: findFeatureId(owner, feature),
           };
           if (!acceptHit(hit.layer.id, hit.featureId, feature)) continue;
@@ -1079,14 +1083,15 @@ export const MapCanvas = memo(function MapCanvas({
       }
 
       const featureId = findFeatureId(layer, feature);
+      const original = progressDashboardFeature(layer, feature.properties);
       const content = createIdentifyPopupElement(
         layer.name,
-        feature.properties ?? {},
+        original ? (original.feature.properties ?? {}) : (feature.properties ?? {}),
         featureId ?? feature.id,
         {
           popup: layer.popup,
           fieldVisibility: layer.fieldVisibility,
-          feature,
+          feature: original?.feature ?? feature,
           zoom: map.getZoom(),
         },
       );
@@ -1307,12 +1312,17 @@ export const MapCanvas = memo(function MapCanvas({
         removeTooltip();
         return;
       }
-      const content = createHoverTooltipElement(layer.name, next.feature.properties ?? {}, {
-        popup: layer.popup,
-        fieldVisibility: layer.fieldVisibility,
-        feature: next.feature,
-        zoom: map.getZoom(),
-      });
+      const original = progressDashboardFeature(layer, next.feature.properties);
+      const content = createHoverTooltipElement(
+        layer.name,
+        original ? (original.feature.properties ?? {}) : (next.feature.properties ?? {}),
+        {
+          popup: layer.popup,
+          fieldVisibility: layer.fieldVisibility,
+          feature: original?.feature ?? next.feature,
+          zoom: map.getZoom(),
+        },
+      );
       if (!content) {
         removeTooltip();
         return;

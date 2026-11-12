@@ -11255,10 +11255,21 @@
           "onBed": "Trên bệ",
           "ready": "Sẵn sàng lao",
           "erected": "Đã lao",
-          "remaining": "Chưa làm"
+          "remaining": "Chưa làm",
+          "notStarted": "Chưa làm"
         },
         "statusChart": "Cấu kiện theo trạng thái",
-        "delays": "Trễ nhiều nhất và cảnh báo"
+        "delays": "Trễ nhiều nhất và cảnh báo",
+        "remainingCount_other": "Còn {{count}} chưa đúc"
+      },
+      "detailColumn": "Khối lượng / chi tiết",
+      "stageColumn": "Giai đoạn",
+      "approachShort": "ĐD",
+      "quantity": {
+        "piles": "{{done}}/{{total}} cọc · {{doneMetres}}/{{totalMetres}} m",
+        "girders": "{{done}}/{{total}} dầm",
+        "supports": "{{done}}/{{total}} trụ xong",
+        "length": "{{done}}/{{total}} m"
       }
     }
   }

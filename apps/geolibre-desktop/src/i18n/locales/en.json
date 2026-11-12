@@ -11490,10 +11490,22 @@
           "onBed": "On bed",
           "ready": "Ready",
           "erected": "Erected",
-          "remaining": "Not started"
+          "remaining": "Not started",
+          "notStarted": "Not started"
         },
         "statusChart": "Components by status",
-        "delays": "Largest delays and alerts"
+        "delays": "Largest delays and alerts",
+        "remainingCount_one": "{{count}} remaining to cast",
+        "remainingCount_other": "{{count}} remaining to cast"
+      },
+      "detailColumn": "Quantities / details",
+      "stageColumn": "Stage",
+      "approachShort": "App.",
+      "quantity": {
+        "piles": "{{done}}/{{total}} piles · {{doneMetres}}/{{totalMetres}} m",
+        "girders": "{{done}}/{{total}} girders",
+        "supports": "{{done}}/{{total}} supports complete",
+        "length": "{{done}}/{{total}} m"
       }
     }
   }

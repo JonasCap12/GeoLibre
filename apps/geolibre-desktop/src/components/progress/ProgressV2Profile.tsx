@@ -64,6 +64,7 @@ function BridgeProfile({
   bridge: BridgeState;
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
+  const { t } = useTranslation();
   const width = Math.max(720, bridge.spans.length * 120 + 100);
   const gap = (width - 100) / Math.max(1, bridge.supports.length - 1);
   return (
@@ -155,10 +156,10 @@ function BridgeProfile({
           );
         })}
         <text x={8} y={62} className="fill-muted-foreground text-[9px]">
-          ĐD
+          {t("progress.v2.approachShort")}
         </text>
         <text x={width - 22} y={62} className="fill-muted-foreground text-[9px]">
-          ĐD
+          {t("progress.v2.approachShort")}
         </text>
       </svg>
     </div>

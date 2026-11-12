@@ -31,7 +31,7 @@ export function ProgressV2Items({
   onChange: (state: ProgressV2) => void;
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [key, setKey] = useState<ProgressV2ItemKey>("coc");
   const summary = computeProgressV2(state, packageId);
   const result = summary.items.find((item) => item.key === key)!;
@@ -57,7 +57,7 @@ export function ProgressV2Items({
         <strong className="tabular-nums">{fmt(result.pct)}%</strong>
         <span className="hidden text-xs text-muted-foreground xl:inline">
           {BRIDGE_ITEM_KEYS.includes(key as BridgeItemKey)
-            ? bridgeItemQuantityText(bridges, key as BridgeItemKey)
+            ? bridgeItemQuantityText(bridges, key as BridgeItemKey, t, i18n.language)
             : null}
         </span>
       </div>
@@ -107,7 +107,7 @@ function BridgeRows({
           </th>
           <th className="p-2 text-start">{t("progress.v2.structure")}</th>
           <th className="p-2 text-end">{t("progress.actual")}</th>
-          <th className="p-2 text-end">{t("progress.status.none")}</th>
+          <th className="p-2 text-end">{t("progress.v2.detailColumn")}</th>
         </tr>
       </thead>
       <tbody>
@@ -283,7 +283,11 @@ function UnderpassRows({
                 {item.id}
               </button>
             </td>
-            <td className="p-2 text-end">{item.station}</td>
+            <td className="p-2 text-end">
+              {Number.isFinite(item.station)
+                ? new Intl.NumberFormat(undefined).format(item.station)
+                : "—"}
+            </td>
             <td className="p-2 text-end">
               <input
                 type="number"

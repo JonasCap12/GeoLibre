@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } fr
 import { useTranslation } from "react-i18next";
 import {
   computeProgress,
+  todayIso,
   progressStructures,
   isoWeek,
   progressConfigPatch,
@@ -43,12 +44,6 @@ import { progressV2LayerPatch } from "../../lib/progress-colors";
 
 export type { ProgressScreenCamera };
 
-function todayIso(): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
 /**
  * Mounts the screen while a drawing is open in it. Mounted beside the shell
  * (in `App`), so it reaches the map through the app API, not a shell ref.
@@ -57,7 +52,10 @@ export function ConstructionProgressScreen({ camera }: { camera: ProgressScreenC
   const layerId = useSyncExternalStore(subscribeProgressScreen, getProgressScreenLayerId);
   const layer = useAppStore((s) => (layerId ? s.layers.find((l) => l.id === layerId) : undefined));
   const metadata = layer?.metadata;
-  const config = useMemo(() => (metadata ? readStoredProgressConfig({ metadata }) : null), [metadata]);
+  const config = useMemo(
+    () => (metadata ? readStoredProgressConfig({ metadata }) : null),
+    [metadata],
+  );
   const open = Boolean(layer && config);
 
   useEffect(() => {

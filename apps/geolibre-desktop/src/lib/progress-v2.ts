@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import type { Feature } from "geojson";
 
 export const BRIDGE_ITEM_KEYS = ["coc", "be", "than", "xm", "duc", "gac", "bmc", "ht"] as const;
@@ -397,19 +398,13 @@ export function packageForStation(
     packages.find(
       (item, index) =>
         station >= item.fromStation &&
-        (station < item.toStation ||
-          (index === packages.length - 1 && station === item.toStation)),
+        (station < item.toStation || (index === packages.length - 1 && station === item.toStation)),
     ) ?? null
   );
 }
 
-export function packageById(
-  state: ProgressV2,
-  packageId: string | null,
-): ProgressPackage | null {
-  return packageId === null
-    ? null
-    : state.packages.find((item) => item.id === packageId) ?? null;
+export function packageById(state: ProgressV2, packageId: string | null): ProgressPackage | null {
+  return packageId === null ? null : (state.packages.find((item) => item.id === packageId) ?? null);
 }
 
 export function bridgesInPackage(state: ProgressV2, packageId: string | null): BridgeState[] {
@@ -588,19 +583,15 @@ export function supportOverallPct(
   return denominator > 0 ? numerator / denominator : 0;
 }
 
-function htmlNumber(value: number, digits = 1): string {
-  const factor = 10 ** digits;
-  return (Math.round(value * factor) / factor)
-    .toFixed(digits)
-    .replace(/\.0+$/, "")
-    .replace(".", ",");
-}
-
-/** Exact quantity text produced by the reference HTML for its eight bridge items. */
+/** Localized quantities for the eight bridge items. */
 export function bridgeItemQuantityText(
   bridges: readonly BridgeState[],
   key: BridgeItemKey,
+  t: TFunction,
+  locale?: string,
 ): string {
+  const number = (value: number) =>
+    new Intl.NumberFormat(locale, { maximumFractionDigits: 0, useGrouping: false }).format(value);
   if (key === "coc") {
     let done = 0;
     let total = 0;
@@ -615,10 +606,12 @@ export function bridgeItemQuantityText(
         totalMetres += support.coc.t * support.coc.L;
       }
     }
-    return `${done}/${total} cọc · ${htmlNumber(doneMetres, 0)}/${htmlNumber(
-      totalMetres,
-      0,
-    )} m`;
+    return t("progress.v2.quantity.piles", {
+      done: number(done),
+      total: number(total),
+      doneMetres: number(doneMetres),
+      totalMetres: number(totalMetres),
+    });
   }
   if (key === "duc" || key === "gac") {
     let done = 0;
@@ -631,15 +624,14 @@ export function bridgeItemQuantityText(
         total += span.girders.length;
       }
     }
-    return `${done}/${total} dầm`;
+    return t("progress.v2.quantity.girders", { done: number(done), total: number(total) });
   }
   if (key === "be" || key === "than" || key === "xm") {
-    const supports = bridges.flatMap((bridge) =>
-      bridge.supports.filter((support) => support.inc),
-    );
-    return `${supports.filter((support) => support[key] >= 100).length}/${
-      supports.length
-    } trụ xong`;
+    const supports = bridges.flatMap((bridge) => bridge.supports.filter((support) => support.inc));
+    return t("progress.v2.quantity.supports", {
+      done: number(supports.filter((support) => support[key] >= 100).length),
+      total: number(supports.length),
+    });
   }
   let done = 0;
   let total = 0;
@@ -649,7 +641,7 @@ export function bridgeItemQuantityText(
       total += span.L;
     }
   }
-  return `${htmlNumber(done, 0)}/${htmlNumber(total, 0)} m`;
+  return t("progress.v2.quantity.length", { done: number(done), total: number(total) });
 }
 
 export function evaluateProgress(
@@ -812,17 +804,15 @@ function concreteAge(reportDate: string, dob: string): number | null {
 
 export function computeYard(bridge: BridgeState, reportDate: string): YardSummary {
   const girders = bridge.spans.flatMap((span, spanIndex) =>
-    span.girders.map(
-      (girder, girderIndex): YardGirderRef => ({
-        bridgeId: bridge.id,
-        spanId: span.id,
-        spanIndex,
-        girderIndex,
-        id: `${span.id}-D${girderIndex + 1}`,
-        girder,
-        ageDays: concreteAge(reportDate, girder.dob),
-      }),
-    ),
+    span.girders.map((girder, girderIndex): YardGirderRef => ({
+      bridgeId: bridge.id,
+      spanId: span.id,
+      spanIndex,
+      girderIndex,
+      id: `${span.id}-D${girderIndex + 1}`,
+      girder,
+      ageDays: concreteAge(reportDate, girder.dob),
+    })),
   );
   const beds = Array.from({ length: bridge.yard.beds }, (_, index) => {
     const bed = index + 1;
@@ -931,7 +921,7 @@ export function recordProgressV2Week(
       left.date.localeCompare(right.date) ||
       String(left.packageId).localeCompare(String(right.packageId)),
   );
-  return { ...state, history };
+  return { ...state, meta: { ...state.meta, reportDate: date }, history };
 }
 
 export function cyclePileState(state: PileState): PileState {
@@ -969,8 +959,8 @@ function paintedPct(feature: Feature): number {
   return feature.properties?.tiendo === "done"
     ? 100
     : feature.properties?.tiendo === "wip"
-    ? 50
-    : 0;
+      ? 50
+      : 0;
 }
 
 /**
@@ -998,9 +988,7 @@ export function migrateProgressV1(
   const stations = features.flatMap((feature) =>
     ["station", "km_tu", "km_den"].flatMap((key) => {
       const value = feature.properties?.[key];
-      return value != null && value !== "" && Number.isFinite(Number(value))
-        ? [Number(value)]
-        : [];
+      return value != null && value !== "" && Number.isFinite(Number(value)) ? [Number(value)] : [];
     }),
   );
   const packages: ProgressPackage[] = stations.length
@@ -1055,9 +1043,7 @@ export function migrateProgressV1(
     const supportIds = orderSupports([
       ...new Set(
         group
-          .map(
-            (feature) => featureText(feature, "support_id") || featureText(feature, "cau_kien"),
-          )
+          .map((feature) => featureText(feature, "support_id") || featureText(feature, "cau_kien"))
           .filter((value) => /^(M|T)\d+$/i.test(value)),
       ),
     ]);
@@ -1071,8 +1057,7 @@ export function migrateProgressV1(
     const supports = supportIds.map((supportId): ProgressSupport => {
       const parts = group.filter(
         (feature) =>
-          (featureText(feature, "support_id") || featureText(feature, "cau_kien")) ===
-          supportId,
+          (featureText(feature, "support_id") || featureText(feature, "cau_kien")) === supportId,
       );
       const piles = parts.filter(
         (feature) =>
@@ -1084,9 +1069,7 @@ export function migrateProgressV1(
           0,
           ...parts
             .filter((feature) =>
-              pattern.test(
-                featureText(feature, "Layer") + " " + featureText(feature, "bo_phan"),
-              ),
+              pattern.test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
             )
             .map(paintedPct),
         );
@@ -1122,9 +1105,7 @@ export function migrateProgressV1(
           0,
           ...parts
             .filter((feature) =>
-              pattern.test(
-                featureText(feature, "Layer") + " " + featureText(feature, "bo_phan"),
-              ),
+              pattern.test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
             )
             .map(paintedPct),
         );
@@ -1166,9 +1147,7 @@ export function migrateProgressV1(
     };
     for (const key of ROAD_ITEM_KEYS) {
       const matching = group.filter((feature) =>
-        aliases[key].test(
-          featureText(feature, "Layer") + " " + featureText(feature, "bo_phan"),
-        ),
+        aliases[key].test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
       );
       pct[key] =
         matching.length > 0
@@ -1183,9 +1162,7 @@ export function migrateProgressV1(
     if (id) underpassGroups.set(id, [...(underpassGroups.get(id) ?? []), feature]);
   }
   const underpasses = [...underpassGroups.entries()].map(([id, group]): UnderpassState => {
-    const walls = group.filter((feature) =>
-      /tường|tuong/i.test(featureText(feature, "bo_phan")),
-    );
+    const walls = group.filter((feature) => /tường|tuong/i.test(featureText(feature, "bo_phan")));
     const lids = group.filter((feature) => /nắp|nap/i.test(featureText(feature, "bo_phan")));
     const average = (items: Feature[]) =>
       items.length > 0

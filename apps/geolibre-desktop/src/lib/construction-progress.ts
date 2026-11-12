@@ -192,7 +192,9 @@ export function readProgressConfig(layer: GeoLibreLayer): ConstructionProgress |
 }
 
 /** A stored v1 or v2 setup. Callers branch on `version`. */
-export function readStoredProgressConfig(layer: Pick<GeoLibreLayer, "metadata">): StoredConstructionProgress | null {
+export function readStoredProgressConfig(
+  layer: Pick<GeoLibreLayer, "metadata">,
+): StoredConstructionProgress | null {
   const raw = layer.metadata?.[PROGRESS_METADATA_KEY];
   return normalizeProgressV2(raw) ?? normalizeProgressConfig(raw);
 }
@@ -371,17 +373,15 @@ export function suggestProgressConfig(
   features: readonly Feature[],
   title: string,
 ): ConstructionProgress {
-  const items = cadLayerNames(features).map(
-    (name, index): ProgressItem => ({
-      key: `item-${index + 1}`,
-      name,
-      weight: 1,
-      cadLayers: [name],
-      measure: dominantMeasure(features, name),
-      plannedPct: 0,
-      overridePct: null,
-    }),
-  );
+  const items = cadLayerNames(features).map((name, index): ProgressItem => ({
+    key: `item-${index + 1}`,
+    name,
+    weight: 1,
+    cadLayers: [name],
+    measure: dominantMeasure(features, name),
+    plannedPct: 0,
+    overridePct: null,
+  }));
   return { version: 1, title, subtitle: "", items, weekly: [], notes: "" };
 }
 
@@ -675,4 +675,10 @@ export function componentMatrix(
     items: config.items.filter((item) => present.has(item.key)),
     cells,
   };
+}
+
+/** Current local calendar day, shared by progress editors and weekly reports. */
+export function todayIso(now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
