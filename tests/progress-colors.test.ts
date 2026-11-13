@@ -43,7 +43,8 @@ describe("legacy BL-LK drawing links", () => {
       bridge.spans[0].girders.map((g) => g.st),
       [5, 0, 5],
     );
-    assert.equal(bridge.spans[0].girders[1].t, "");
+    assert.equal(bridge.spans[0].girders[1].t, bridge.spans[0].girders[0].t);
+    assert.notEqual(bridge.spans[0].girders[1].t, "");
     assert.deepEqual(
       migrated.underpasses.map((u) => u.id),
       ["HC1"],
