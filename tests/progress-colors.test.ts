@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "@geolibre/core";
 import type { Feature, FeatureCollection } from "geojson";
 import {
   PROGRESS_V2_COLORS,
+  progressFeatureLink,
   packageFeatureIndexes,
   progressFeatureTarget,
   progressV2LayerPatch,
@@ -11,8 +13,118 @@ import {
 } from "../apps/geolibre-desktop/src/lib/progress-colors";
 import {
   PROGRESS_V2_ITEM_KEYS,
+  migrateProgressV1,
   type ProgressV2,
 } from "../apps/geolibre-desktop/src/lib/progress-v2";
+import {
+  dashboardMapView,
+  dashboardRows,
+} from "../apps/geolibre-desktop/src/lib/progress-dashboard";
+
+describe("legacy BL-LK drawing links", () => {
+  const drawing = JSON.parse(
+    readFileSync(new URL("fixtures/progress-bl-lk-sample.json", import.meta.url), "utf8"),
+  ) as FeatureCollection;
+  const sample = drawing.features;
+  const migrated = migrateProgressV1({}, sample, "2026-11-13");
+  const bridge = migrated.bridges[0];
+
+  it("migrates numbered parts in index order, fills gaps and retains underpasses", () => {
+    assert.equal(migrated.bridges.length, 1);
+    assert.deepEqual(
+      bridge.supports.map((s) => s.id),
+      ["M1", "T1", "M2"],
+    );
+    for (const support of bridge.supports) {
+      assert.equal(support.coc.t, 3);
+      assert.deepEqual(support.piles, [2, 0, 2]);
+    }
+    assert.deepEqual(
+      bridge.spans[0].girders.map((g) => g.st),
+      [5, 0, 5],
+    );
+    assert.equal(bridge.spans[0].girders[1].t, "");
+    assert.deepEqual(
+      migrated.underpasses.map((u) => u.id),
+      ["HC1"],
+    );
+    assert.equal(migrated.underpasses[0].pct.tuong, 50);
+    assert.equal(migrated.underpasses[0].pct.nap, 0);
+    assert.equal(
+      migrated.underpasses[0].station,
+      sample.find((f) => f.properties?.cau_kien === "HC1")!.properties!.km_tu,
+    );
+    assert.equal(migrated.road.km[0].pct.mat_phai, 100);
+  });
+
+  it("colours, filters and locates every tracked feature without writing link properties", () => {
+    const before = JSON.stringify(sample);
+    const colors = stateColors(sample, migrated);
+    const view = dashboardMapView(sample, migrated, dashboardRows(migrated), "status");
+    assert.equal(colors.size, sample.length - 1);
+    assert.deepEqual(
+      view.indexes,
+      sample.slice(0, -1).map((_, i) => i),
+    );
+    assert.equal(progressFeatureLink(sample.at(-1)!), null);
+    for (const f of sample.slice(0, -1)) {
+      const link = progressFeatureLink(f)!;
+      assert.ok(link);
+      if (link.kind === "approach") {
+        assert.equal(link.bridgeId, bridge.id);
+        assert.deepEqual(progressFeatureTarget(f), link);
+      } else {
+        const target =
+          "bridgeId" in link
+            ? { kind: link.kind, bridgeId: link.bridgeId, id: link.id }
+            : { kind: link.kind, id: link.id };
+        assert.deepEqual(progressFeatureTarget(f), target);
+      }
+    }
+    assert.deepEqual(
+      packageFeatureIndexes(sample, migrated, migrated.packages[0].id),
+      view.indexes,
+    );
+    progressV2LayerPatch({ geojson: drawing, metadata: {}, style: {} } as GeoLibreLayer, migrated);
+    assert.equal(JSON.stringify(sample), before);
+  });
+
+  it("prefers explicit IDs and indexes over conflicting legacy labels", () => {
+    const legacy = sample.find((f) => f.properties?.bo_phan === "cọc 3")!;
+    const mixed = {
+      ...legacy,
+      properties: { ...legacy.properties, bridge_id: "explicit", support_id: "S9", pile_index: 0 },
+    };
+    assert.deepEqual(progressFeatureLink(mixed), {
+      kind: "support",
+      bridgeId: "explicit",
+      id: "S9",
+      pileIndex: 0,
+    });
+    assert.deepEqual(progressFeatureTarget(mixed), {
+      kind: "support",
+      bridgeId: "explicit",
+      id: "S9",
+    });
+    assert.equal(
+      progressFeatureLink({ ...mixed, properties: { ...mixed.properties, pile_index: "" } })
+        ?.pileIndex,
+      undefined,
+    );
+    const approach = sample.find((f) => f.properties?.cau_kien === "ĐD1")!;
+    assert.equal(
+      progressFeatureLink({ ...approach, properties: { ...approach.properties, cau_kien: "DD1" } })
+        ?.kind,
+      "approach",
+    );
+    const explicitKm = { ...legacy, properties: { ...legacy.properties, km_id: "road-authored" } };
+    assert.deepEqual(progressFeatureLink(explicitKm), { kind: "km", id: "road-authored" });
+    const explicitState = migrateProgressV1({}, [mixed], "2026-11-13");
+    assert.equal(explicitState.bridges[0].id, "explicit");
+    assert.equal(explicitState.bridges[0].supports[0].id, "S9");
+    assert.deepEqual(explicitState.bridges[0].supports[0].piles, [2]);
+  });
+});
 
 const feature = (properties: Record<string, unknown>): Feature => ({
   type: "Feature",
@@ -144,6 +256,12 @@ describe("stateColors", () => {
 });
 
 describe("feature targets and package extents", () => {
+  it("keeps explicit underpass colour matching across Layer and part labels", () => {
+    const parts = [
+      feature({ underpass_id: "HC1", Layer: "Hầm chui - tường thân", bo_phan: "detail" }),
+    ];
+    assert.equal(stateColors(parts, state()).get(0)?.status, "wip");
+  });
   it("resolves editor targets without map-package changes", () => {
     assert.deepEqual(progressFeatureTarget(features[0]), {
       kind: "support",

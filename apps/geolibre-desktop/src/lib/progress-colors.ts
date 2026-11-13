@@ -1,5 +1,13 @@
 import type { GeoLibreLayer } from "@geolibre/core";
 import type { Feature, GeoJsonProperties } from "geojson";
+import {
+  progressFeatureLink,
+  propertyText,
+  propertyIndex,
+  fold,
+  type ProgressFeatureLink,
+} from "./progress-feature-link";
+export { progressFeatureLink, propertyText, propertyIndex, fold } from "./progress-feature-link";
 import { PROGRESS_METADATA_KEY, PROGRESS_STATUS_PROPERTY } from "./construction-progress";
 import {
   ROAD_ITEM_KEYS,
@@ -29,28 +37,9 @@ export interface ProgressFeatureColor {
 export type ProgressFeatureTarget =
   | { kind: "support"; bridgeId: string; id: string }
   | { kind: "span"; bridgeId: string; id: string }
+  | { kind: "approach"; bridgeId: string; id: string }
   | { kind: "km"; id: string }
   | { kind: "underpass"; id: string };
-
-export function propertyText(feature: Feature, key: string): string {
-  const value = feature.properties?.[key];
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
-}
-
-export function propertyIndex(feature: Feature, key: string): number | null {
-  const raw = feature.properties?.[key];
-  if (raw == null || raw === "") return null;
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 0 ? value : null;
-}
-
-export function fold(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/đ/g, "d");
-}
 
 export function progressStateColor(percent: number): ProgressFeatureColor {
   const value = clampProgressPct(percent);
@@ -86,13 +75,16 @@ function supportKey(feature: Feature): "be" | "than" | "xm" | null {
 
 /** Item links shared by map colors and dashboard cross-filtering. */
 export function progressFeatureItems(feature: Feature): ProgressV2ItemKey[] {
-  if (propertyText(feature, "support_id")) {
-    if (propertyIndex(feature, "pile_index") !== null) return ["coc"];
+  const link = progressFeatureLink(feature);
+  if (link?.kind === "support" || propertyText(feature, "support_id")) {
+    if (link?.pileIndex !== undefined || propertyIndex(feature, "pile_index") !== null)
+      return ["coc"];
     const key = supportKey(feature);
     return key ? [key] : [];
   }
-  if (propertyText(feature, "span_id")) {
-    if (propertyIndex(feature, "girder_index") !== null) return ["duc", "gac"];
+  if (link?.kind === "span" || propertyText(feature, "span_id")) {
+    if (link?.girderIndex !== undefined || propertyIndex(feature, "girder_index") !== null)
+      return ["duc", "gac"];
     const item = fold(
       propertyText(feature, "progress_item") ||
         `${propertyText(feature, "Layer")} ${propertyText(feature, "bo_phan")}`,
@@ -101,11 +93,11 @@ export function progressFeatureItems(feature: Feature): ProgressV2ItemKey[] {
     if (/^(ht)$|lan can|hoan thien/.test(item)) return ["ht"];
     return [];
   }
-  if (propertyText(feature, "km_id")) {
+  if (link?.kind === "km") {
     const key = roadKey(feature);
     return key ? [key] : [];
   }
-  if (propertyText(feature, "underpass_id")) {
+  if (link?.kind === "underpass") {
     const item = fold(
       propertyText(feature, "progress_item") ||
         propertyText(feature, "bo_phan") ||
@@ -114,15 +106,19 @@ export function progressFeatureItems(feature: Feature): ProgressV2ItemKey[] {
     if (/ham_tuong|tuong/.test(item)) return ["ham_tuong"];
     if (/ham_nap|nap/.test(item)) return ["ham_nap"];
   }
-  return [];
+  return link?.kind === "approach" ? ["ht"] : [];
 }
 
-function supportColor(feature: Feature, bridge: BridgeState): ProgressFeatureColor | null {
-  const supportId = propertyText(feature, "support_id");
+function supportColor(
+  feature: Feature,
+  bridge: BridgeState,
+  link: ProgressFeatureLink,
+): ProgressFeatureColor | null {
+  const supportId = link.id;
   const support = bridge.supports.find((item) => item.id === supportId);
   if (!support) return null;
-  const pileIndex = propertyIndex(feature, "pile_index");
-  if (pileIndex !== null) {
+  const pileIndex = link.pileIndex;
+  if (pileIndex !== undefined) {
     const state = support.piles[pileIndex] ?? 0;
     return state === 2
       ? progressStateColor(100)
@@ -134,12 +130,16 @@ function supportColor(feature: Feature, bridge: BridgeState): ProgressFeatureCol
   return key ? progressStateColor(support[key]) : null;
 }
 
-function spanColor(feature: Feature, bridge: BridgeState): ProgressFeatureColor | null {
-  const spanId = propertyText(feature, "span_id");
+function spanColor(
+  feature: Feature,
+  bridge: BridgeState,
+  link: ProgressFeatureLink,
+): ProgressFeatureColor | null {
+  const spanId = link.id;
   const span = bridge.spans.find((item) => item.id === spanId);
   if (!span) return null;
-  const girderIndex = propertyIndex(feature, "girder_index");
-  if (girderIndex !== null) return girderStageColor(span.girders[girderIndex]?.st ?? 0);
+  const girderIndex = link.girderIndex;
+  if (girderIndex !== undefined) return girderStageColor(span.girders[girderIndex]?.st ?? 0);
   const item = fold(
     propertyText(feature, "progress_item") ||
       `${propertyText(feature, "Layer")} ${propertyText(feature, "bo_phan")}`,
@@ -163,25 +163,22 @@ function roadKey(feature: Feature): RoadItemKey | null {
 }
 
 function featureColor(feature: Feature, state: ProgressV2): ProgressFeatureColor | null {
-  const bridgeId = propertyText(feature, "bridge_id");
-  if (bridgeId) {
-    const bridge = state.bridges.find((item) => item.id === bridgeId);
+  const link = progressFeatureLink(feature);
+  if (!link) return null;
+  if ("bridgeId" in link) {
+    const bridge = state.bridges.find((item) => item.id === link.bridgeId);
     if (!bridge) return null;
-    if (propertyText(feature, "support_id")) return supportColor(feature, bridge);
-    if (propertyText(feature, "span_id")) return spanColor(feature, bridge);
-    const item = fold(propertyText(feature, "progress_item"));
-    if (item === "ht" || item === "approach") return progressStateColor(bridgeApproachPct(bridge));
+    if (link.kind === "support") return supportColor(feature, bridge, link);
+    if (link.kind === "span") return spanColor(feature, bridge, link);
+    return progressStateColor(bridgeApproachPct(bridge));
   }
-  const kmId = propertyText(feature, "km_id");
-  if (kmId) {
-    const km = state.road.km.find((item) => item.id === kmId);
+  if (link.kind === "km") {
+    const km = state.road.km.find((item) => item.id === link.id);
     const key = roadKey(feature);
     return km && key ? progressStateColor(km.pct[key]) : null;
   }
-  const underpassId = propertyText(feature, "underpass_id");
-  if (underpassId) {
-    const underpass = state.underpasses.find((item) => item.id === underpassId);
-    if (!underpass) return null;
+  const underpass = state.underpasses.find((item) => item.id === link.id);
+  if (underpass) {
     const item = fold(
       propertyText(feature, "progress_item") ||
         `${propertyText(feature, "Layer")} ${propertyText(feature, "bo_phan")}`,
@@ -207,16 +204,11 @@ export function stateColors(
 
 /** Resolve a map-clicked feature to the editor entity it represents. */
 export function progressFeatureTarget(feature: Feature): ProgressFeatureTarget | null {
-  const bridgeId = propertyText(feature, "bridge_id");
-  const supportId = propertyText(feature, "support_id");
-  if (bridgeId && supportId) return { kind: "support", bridgeId, id: supportId };
-  const spanId = propertyText(feature, "span_id");
-  if (bridgeId && spanId) return { kind: "span", bridgeId, id: spanId };
-  const kmId = propertyText(feature, "km_id");
-  if (kmId) return { kind: "km", id: kmId };
-  const underpassId = propertyText(feature, "underpass_id");
-  if (underpassId) return { kind: "underpass", id: underpassId };
-  return null;
+  const link = progressFeatureLink(feature);
+  if (!link) return null;
+  return "bridgeId" in link
+    ? { kind: link.kind, bridgeId: link.bridgeId, id: link.id }
+    : { kind: link.kind, id: link.id };
 }
 
 function paintedProperties(
@@ -275,13 +267,14 @@ export function packageFeatureIndexes(
   if (packageId === null) return features.map((_, index) => index);
   const indexes: number[] = [];
   features.forEach((feature, index) => {
-    const bridgeId = propertyText(feature, "bridge_id");
+    const link = progressFeatureLink(feature);
+    const bridgeId = link && "bridgeId" in link ? link.bridgeId : "";
     const bridge = bridgeId ? state.bridges.find((item) => item.id === bridgeId) : null;
     if (bridge && packageForStation(state.packages, bridge.station)?.id === packageId) {
       indexes.push(index);
       return;
     }
-    const kmId = propertyText(feature, "km_id");
+    const kmId = link?.kind === "km" ? link.id : "";
     const km = kmId ? state.road.km.find((item) => item.id === kmId) : null;
     const packageItem = state.packages.find((item) => item.id === packageId);
     if (
@@ -292,7 +285,7 @@ export function packageFeatureIndexes(
       indexes.push(index);
       return;
     }
-    const underpassId = propertyText(feature, "underpass_id");
+    const underpassId = link?.kind === "underpass" ? link.id : "";
     const underpass = underpassId
       ? state.underpasses.find((item) => item.id === underpassId)
       : null;

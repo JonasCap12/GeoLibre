@@ -26,6 +26,7 @@ import {
 } from "../../lib/progress-dashboard";
 import { PROGRESS_V2_ITEM_KEYS, type ProgressV2 } from "../../lib/progress-v2";
 import { PROGRESS_V2_COLORS, type ProgressFeatureTarget } from "../../lib/progress-colors";
+import { usePercentFormat } from "./ProgressScreenBlocks";
 import { alertText } from "./ProgressV2Overview";
 
 export function ProgressV2Dashboard({
@@ -85,8 +86,7 @@ export function ProgressV2Dashboard({
         .slice(0, 10),
     [rows],
   );
-  const nf = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 });
-  const num = (value: number) => nf.format(value);
+  const num = usePercentFormat();
   const pct = (value: number) =>
     new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 1 }).format(
       value / 100,
@@ -654,7 +654,7 @@ function Quantity({ label, value }: { label: string; value: string }) {
 }
 function Legend({ color, label }: { color: string; label: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="me-3 inline-flex items-center gap-1.5">
       <span
         className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm border border-black/10"
         style={{ background: color }}

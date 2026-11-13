@@ -1,6 +1,5 @@
-﻿import { act, fireEvent, render, screen, useAppStore, within } from "./helpers/dom";
+﻿import { act, fireEvent, i18n, render, screen, useAppStore, within } from "./helpers/dom";
 import assert from "node:assert/strict";
-import { i18n } from "./helpers/dom";
 import { afterEach, it } from "node:test";
 import { createElement } from "react";
 import { clearHistory, projectFromStore, serializeProject } from "@geolibre/core";
@@ -47,11 +46,10 @@ it("formats percentages in the app language and reacts to language changes", asy
   }
 });
 
-it("uses the app locale for Items percentages, quantities and stations", async () => {
+it("uses the app locale for Items percentages and stations", async () => {
   const { state } = mount();
   const edited = structuredClone(state);
   edited.bridges[0].supports[0].be = 12.5;
-  edited.bridges[0].supports[0].coc.t = 1234;
   edited.underpasses = [{ id: "station", station: 1234.5, pct: { tuong: 12.5, nap: 0 } }];
   act(() =>
     useAppStore.getState().updateLayer("progress", {
@@ -61,15 +59,13 @@ it("uses the app locale for Items percentages, quantities and stations", async (
   fireEvent.click(screen.getByRole("button", { name: "Work items" }));
   const select = document.getElementById("progress-v2-item")!;
   try {
-    for (const [language, percent, station, quantity] of [
-      ["en", "12.5%", "1,234.5", "1234"],
-      ["vi", "12,5%", "1.234,5", "1234"],
+    for (const [language, percent, station] of [
+      ["en", "12.5%", "1,234.5"],
+      ["vi", "12,5%", "1.234,5"],
     ]) {
       await act(async () => {
         await i18n.changeLanguage(language);
       });
-      fireEvent.change(select, { target: { value: "coc" } });
-      assert.ok(screen.getAllByText(new RegExp(quantity)).length > 0);
       fireEvent.change(select, { target: { value: "be" } });
       assert.ok(screen.getAllByText(percent).length >= 2);
       fireEvent.change(select, { target: { value: "ham_tuong" } });

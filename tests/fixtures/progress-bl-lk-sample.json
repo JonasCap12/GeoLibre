@@ -1,0 +1,985 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.315942, 11.6890228],
+            [108.3159416, 11.6890248],
+            [108.3159403, 11.6890264],
+            [108.3159385, 11.6890272],
+            [108.3159364, 11.6890272],
+            [108.3159346, 11.6890264],
+            [108.3159333, 11.6890248],
+            [108.3159329, 11.6890228],
+            [108.3159333, 11.6890209],
+            [108.3159346, 11.6890193],
+            [108.3159364, 11.6890184],
+            [108.3159385, 11.6890184],
+            [108.3159403, 11.6890193],
+            [108.3159416, 11.6890209],
+            [108.315942, 11.6890228]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Cọc khoan nhồi D1.0",
+        "h": 0.6,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M2",
+        "thu_tu": 183193.005,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "chieu_dai_coc_m": 12,
+        "bo_phan": "cọc 3",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3159568, 11.6890656],
+            [108.3159564, 11.6890676],
+            [108.3159551, 11.6890692],
+            [108.3159532, 11.68907],
+            [108.3159512, 11.68907],
+            [108.3159494, 11.6890692],
+            [108.3159481, 11.6890676],
+            [108.3159476, 11.6890656],
+            [108.3159481, 11.6890637],
+            [108.3159494, 11.6890621],
+            [108.3159512, 11.6890612],
+            [108.3159532, 11.6890612],
+            [108.3159551, 11.6890621],
+            [108.3159563, 11.6890637],
+            [108.3159568, 11.6890656]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Cọc khoan nhồi D1.0",
+        "h": 0.6,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M2",
+        "thu_tu": 183193.005,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "chieu_dai_coc_m": 12,
+        "bo_phan": "cọc 1",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3159684, 11.6890817],
+            [108.3159163, 11.6890991],
+            [108.3158735, 11.688975],
+            [108.3159256, 11.6889576],
+            [108.3159684, 11.6890817]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Bệ mố, bệ trụ",
+        "h": 2,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M2",
+        "thu_tu": 183193.005,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3159393, 11.6890843],
+            [108.3159271, 11.6890884],
+            [108.3158887, 11.6889771],
+            [108.3159009, 11.688973],
+            [108.3159393, 11.6890843]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Thân mố, thân trụ",
+        "h": 5.85,
+        "base": 2,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M2",
+        "thu_tu": 183193.005,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "bo_phan": "tường thân",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3159271, 11.6890884],
+            [108.3159202, 11.6890907],
+            [108.3158818, 11.6889794],
+            [108.3158887, 11.6889771],
+            [108.3159271, 11.6890884]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Xà mũ, tường đỉnh mố",
+        "h": 8.12,
+        "base": 5.85,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M2",
+        "thu_tu": 183193.005,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "bo_phan": "tường đỉnh",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.316152, 11.6889525],
+            [108.3161516, 11.6889544],
+            [108.3161503, 11.688956],
+            [108.3161485, 11.6889569],
+            [108.3161464, 11.6889569],
+            [108.3161446, 11.688956],
+            [108.3161433, 11.6889544],
+            [108.3161428, 11.6889525],
+            [108.3161433, 11.6889505],
+            [108.3161446, 11.6889489],
+            [108.3161464, 11.6889481],
+            [108.3161484, 11.6889481],
+            [108.3161503, 11.6889489],
+            [108.3161516, 11.6889505],
+            [108.316152, 11.6889525]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Cọc khoan nhồi D1.0",
+        "h": 0.6,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "T1",
+        "thu_tu": 183193.003,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "trụ",
+        "chieu_dai_coc_m": 12,
+        "bo_phan": "cọc 3",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3161668, 11.6889953],
+            [108.3161663, 11.6889972],
+            [108.3161651, 11.6889988],
+            [108.3161632, 11.6889997],
+            [108.3161612, 11.6889997],
+            [108.3161593, 11.6889988],
+            [108.3161581, 11.6889972],
+            [108.3161576, 11.6889953],
+            [108.3161581, 11.6889933],
+            [108.3161593, 11.6889917],
+            [108.3161612, 11.6889909],
+            [108.3161632, 11.6889909],
+            [108.316165, 11.6889917],
+            [108.3161663, 11.6889933],
+            [108.3161668, 11.6889953]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Cọc khoan nhồi D1.0",
+        "h": 0.6,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "T1",
+        "thu_tu": 183193.003,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "trụ",
+        "chieu_dai_coc_m": 12,
+        "bo_phan": "cọc 1",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3161784, 11.6890113],
+            [108.3161393, 11.6890244],
+            [108.3160965, 11.6889003],
+            [108.3161356, 11.6888872],
+            [108.3161784, 11.6890113]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Bệ mố, bệ trụ",
+        "h": 2,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "T1",
+        "thu_tu": 183193.003,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "trụ",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3161535, 11.6889836],
+            [108.316153, 11.688986],
+            [108.3161516, 11.6889881],
+            [108.3161495, 11.6889895],
+            [108.316147, 11.68899],
+            [108.3161446, 11.6889895],
+            [108.3161425, 11.6889881],
+            [108.3161411, 11.6889861],
+            [108.3161406, 11.6889836],
+            [108.3161411, 11.6889812],
+            [108.3161425, 11.6889792],
+            [108.3161446, 11.6889778],
+            [108.316147, 11.6889773],
+            [108.3161495, 11.6889778],
+            [108.3161516, 11.6889792],
+            [108.316153, 11.6889812],
+            [108.3161535, 11.6889836]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Thân mố, thân trụ",
+        "h": 4.65,
+        "base": 2,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "T1",
+        "thu_tu": 183193.003,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "trụ",
+        "bo_phan": "cột trụ",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3161662, 11.6890111],
+            [108.3161488, 11.6890169],
+            [108.3161087, 11.6889005],
+            [108.316126, 11.6888947],
+            [108.3161662, 11.6890111]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Xà mũ, tường đỉnh mố",
+        "h": 6,
+        "base": 4.65,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "T1",
+        "thu_tu": 183193.003,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "trụ",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.316375, 11.6888777],
+            [108.3163746, 11.6888797],
+            [108.3163733, 11.6888813],
+            [108.3163714, 11.6888822],
+            [108.3163694, 11.6888822],
+            [108.3163676, 11.6888813],
+            [108.3163663, 11.6888797],
+            [108.3163658, 11.6888778],
+            [108.3163663, 11.6888758],
+            [108.3163676, 11.6888742],
+            [108.3163694, 11.6888733],
+            [108.3163714, 11.6888733],
+            [108.3163733, 11.6888742],
+            [108.3163745, 11.6888758],
+            [108.316375, 11.6888777]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Cọc khoan nhồi D1.0",
+        "h": 0.6,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M1",
+        "thu_tu": 183193.001,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "chieu_dai_coc_m": 12,
+        "bo_phan": "cọc 3",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3163898, 11.6889205],
+            [108.3163893, 11.6889225],
+            [108.316388, 11.6889241],
+            [108.3163862, 11.6889249],
+            [108.3163842, 11.688925],
+            [108.3163823, 11.6889241],
+            [108.3163811, 11.6889225],
+            [108.3163806, 11.6889206],
+            [108.316381, 11.6889186],
+            [108.3163823, 11.688917],
+            [108.3163842, 11.6889161],
+            [108.3163862, 11.6889161],
+            [108.316388, 11.688917],
+            [108.3163893, 11.6889186],
+            [108.3163898, 11.6889205]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Cọc khoan nhồi D1.0",
+        "h": 0.6,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M1",
+        "thu_tu": 183193.001,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "chieu_dai_coc_m": 12,
+        "bo_phan": "cọc 1",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3164014, 11.6889366],
+            [108.3163493, 11.6889541],
+            [108.3163065, 11.68883],
+            [108.3163586, 11.6888125],
+            [108.3164014, 11.6889366]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Bệ mố, bệ trụ",
+        "h": 2,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M1",
+        "thu_tu": 183193.001,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3163861, 11.6889345],
+            [108.316374, 11.6889386],
+            [108.3163356, 11.6888274],
+            [108.3163478, 11.6888233],
+            [108.3163861, 11.6889345]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Thân mố, thân trụ",
+        "h": 5.85,
+        "base": 2,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M1",
+        "thu_tu": 183193.001,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "bo_phan": "tường thân",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3163931, 11.6889322],
+            [108.3163861, 11.6889345],
+            [108.3163478, 11.6888233],
+            [108.3163547, 11.6888209],
+            [108.3163931, 11.6889322]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Xà mũ, tường đỉnh mố",
+        "h": 8.12,
+        "base": 5.85,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "M1",
+        "thu_tu": 183193.001,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "loai": "mố",
+        "bo_phan": "tường đỉnh",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3163547, 11.6889025],
+            [108.3161487, 11.6889715],
+            [108.316143, 11.6889551],
+            [108.3163491, 11.6888861],
+            [108.3163547, 11.6889025]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Dầm Super-T",
+        "h": 7.9,
+        "base": 6.15,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "N1",
+        "thu_tu": 183193.002,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "chieu_dai_nhip_m": 24.93,
+        "bo_phan": "dầm 3",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3163675, 11.6889396],
+            [108.3161615, 11.6890086],
+            [108.3161558, 11.6889922],
+            [108.3163619, 11.6889232],
+            [108.3163675, 11.6889396]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Dầm Super-T",
+        "h": 7.9,
+        "base": 6.15,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "N1",
+        "thu_tu": 183193.002,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "chieu_dai_nhip_m": 24.93,
+        "bo_phan": "dầm 1",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3163731, 11.6889389],
+            [108.3161566, 11.6890115],
+            [108.3161182, 11.6889002],
+            [108.3163347, 11.6888276],
+            [108.3163731, 11.6889389]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Bản mặt cầu",
+        "h": 8.12,
+        "base": 7.9,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "N1",
+        "thu_tu": 183193.002,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "chieu_dai_nhip_m": 24.93,
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3165747, 11.6889832],
+            [108.3164077, 11.6890392],
+            [108.3163001, 11.6887274],
+            [108.3164672, 11.6886714],
+            [108.3165747, 11.6889832]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Đường dẫn cầu vượt",
+        "h": 7.81,
+        "base": 0,
+        "cong_trinh": "Cầu vượt ngang Km183+193.356",
+        "cau_kien": "ĐD1",
+        "thu_tu": 183193,
+        "ly_trinh": "Km183+193",
+        "km_tu": 183193,
+        "km_den": 183193,
+        "quyen_hsdc": "IV.3.30",
+        "bo_phan": "đoạn 1/13",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3174624, 11.6964249],
+            [108.3171047, 11.6955924],
+            [108.3172027, 11.6955515],
+            [108.3175604, 11.696384],
+            [108.3174624, 11.6964249]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Nền đường (đào, đắp, taluy)",
+        "h": 1.2,
+        "base": 0,
+        "cong_trinh": "Nền, mặt đường cao tốc",
+        "cau_kien": "Km183",
+        "thu_tu": 183941,
+        "ly_trinh": "Km183+941 – Km184+044",
+        "km_tu": 183941,
+        "km_den": 184044,
+        "phia": "phải tuyến",
+        "loai_nen": "đắp",
+        "chieu_cao_nen_m": 1.2,
+        "nguon_cao_do": "ước tính",
+        "bo_phan": "thân nền",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3174708, 11.6964213],
+            [108.3171131, 11.6955889],
+            [108.3171799, 11.695561],
+            [108.3175375, 11.6963935],
+            [108.3174708, 11.6964213]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Mặt đường BTN - phải tuyến",
+        "h": 1.45,
+        "base": 1.2,
+        "cong_trinh": "Nền, mặt đường cao tốc",
+        "cau_kien": "Km183",
+        "thu_tu": 183941,
+        "ly_trinh": "Km183+941 – Km184+044",
+        "km_tu": 183941,
+        "km_den": 184044,
+        "phia": "phải tuyến",
+        "loai_nen": "đắp",
+        "chieu_cao_nen_m": 1.2,
+        "nguon_cao_do": "ước tính",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3174539, 11.6964284],
+            [108.3170962, 11.6955959],
+            [108.3170295, 11.6956238],
+            [108.3173872, 11.6964562],
+            [108.3174539, 11.6964284]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Mặt đường BTN - trái tuyến",
+        "h": 0.65,
+        "base": 0.4,
+        "cong_trinh": "Nền, mặt đường cao tốc",
+        "cau_kien": "Km183",
+        "thu_tu": 183941,
+        "ly_trinh": "Km183+941 – Km184+044",
+        "km_tu": 183941,
+        "km_den": 184044,
+        "phia": "trái tuyến",
+        "loai_nen": "đào",
+        "chieu_cao_nen_m": -2.8,
+        "nguon_cao_do": "3D",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3175375, 11.6963935],
+            [108.3171799, 11.695561],
+            [108.3172027, 11.6955515],
+            [108.3175604, 11.696384],
+            [108.3175375, 11.6963935]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Lề gia cố",
+        "h": 1.35,
+        "base": 1.2,
+        "cong_trinh": "Nền, mặt đường cao tốc",
+        "cau_kien": "Km183",
+        "thu_tu": 183941,
+        "ly_trinh": "Km183+941 – Km184+044",
+        "km_tu": 183941,
+        "km_den": 184044,
+        "phia": "phải tuyến",
+        "loai_nen": "đắp",
+        "chieu_cao_nen_m": 1.2,
+        "nguon_cao_do": "ước tính",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3174539, 11.6964284],
+            [108.3170962, 11.6955959],
+            [108.3171131, 11.6955889],
+            [108.3174708, 11.6964213],
+            [108.3174539, 11.6964284]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Dải phân cách giữa",
+        "h": 1.3,
+        "base": 0.4,
+        "cong_trinh": "Nền, mặt đường cao tốc",
+        "cau_kien": "Km183",
+        "thu_tu": 183941,
+        "ly_trinh": "Km183+941 – Km184+044",
+        "km_tu": 183941,
+        "km_den": 184044,
+        "phia": "giữa",
+        "loai_nen": "đắp",
+        "chieu_cao_nen_m": 1.2,
+        "nguon_cao_do": "ước tính"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3173576, 11.6964686],
+            [108.3169999, 11.6956361],
+            [108.3169915, 11.6956396],
+            [108.3173492, 11.6964721],
+            [108.3173576, 11.6964686]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Rãnh dọc",
+        "h": 0.15,
+        "base": 0,
+        "cong_trinh": "Nền, mặt đường cao tốc",
+        "cau_kien": "Km183",
+        "thu_tu": 183941,
+        "ly_trinh": "Km183+941 – Km184+044",
+        "km_tu": 183941,
+        "km_den": 184044,
+        "phia": "trái tuyến",
+        "loai_nen": "đào",
+        "chieu_cao_nen_m": -2.8,
+        "nguon_cao_do": "3D",
+        "tiendo": "done",
+        "fill": "#1f7a47",
+        "stroke": "#1f7a47",
+        "marker-color": "#1f7a47"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3913327, 11.7762475],
+            [108.3911944, 11.776752],
+            [108.39119, 11.7767508],
+            [108.3913282, 11.7762463],
+            [108.3913327, 11.7762475]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Hầm chui - tường thân",
+        "h": 9.5,
+        "base": 0,
+        "cong_trinh": "Hầm chui dân sinh",
+        "cau_kien": "HC1",
+        "thu_tu": 198259,
+        "ly_trinh": "Km198+259",
+        "km_tu": 198259,
+        "km_den": 198259,
+        "tiendo": "wip",
+        "fill": "#d9a520",
+        "stroke": "#d9a520",
+        "marker-color": "#d9a520"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.3913327, 11.7762475],
+            [108.3911944, 11.776752],
+            [108.3911147, 11.7767308],
+            [108.3912529, 11.7762263],
+            [108.3913327, 11.7762475]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Hầm chui - bản nắp",
+        "h": 9.95,
+        "base": 9.4,
+        "cong_trinh": "Hầm chui dân sinh",
+        "cau_kien": "HC1",
+        "thu_tu": 198259,
+        "ly_trinh": "Km198+259",
+        "km_tu": 198259,
+        "km_den": 198259
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [108.315971, 11.6890192],
+            [108.3159571, 11.6890239],
+            [108.3159523, 11.6890102],
+            [108.3159662, 11.6890055],
+            [108.315971, 11.6890192]
+          ]
+        ]
+      },
+      "properties": {
+        "Layer": "Lỗ khoan khảo sát (HSDC)",
+        "h": 1.2,
+        "base": 0,
+        "ten": "CVN-KM183-01",
+        "cao_do_mieng_m": 903.94,
+        "quyen_hsdc": "IV.3.30",
+        "cong_trinh_lien_quan": "Cầu vượt ngang Km183+193.356"
+      }
+    }
+  ]
+}

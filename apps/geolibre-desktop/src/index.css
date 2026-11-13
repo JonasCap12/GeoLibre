@@ -6206,18 +6206,27 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   inset: var(--progress-header-h) 0 0;
   pointer-events: none;
 }
-.progress-dashboard-filters, .progress-dashboard-metrics {
+.progress-dashboard-filters,
+.progress-dashboard-metrics {
   position: absolute;
   inset-block: 0 var(--dashboard-charts-h);
   overflow-y: auto;
   pointer-events: auto;
 }
-.progress-dashboard-filters { inset-inline-start: 0; width: var(--dashboard-filters-w); border-inline-end-width: 1px; }
-.progress-dashboard-metrics { inset-inline-end: 0; width: var(--dashboard-metrics-w); border-inline-start-width: 1px; }
+.progress-dashboard-filters {
+  inset-inline-start: 0;
+  width: var(--dashboard-filters-w);
+  border-inline-end-width: 1px;
+}
+.progress-dashboard-metrics {
+  inset-inline-end: 0;
+  width: var(--dashboard-metrics-w);
+  border-inline-start-width: 1px;
+}
 .progress-dashboard-map-toolbar {
   position: absolute;
-  inset-block-start: .5rem;
-  inset-inline: calc(var(--dashboard-filters-w) + .5rem) calc(var(--dashboard-metrics-w) + .5rem);
+  inset-block-start: 0.5rem;
+  inset-inline: calc(var(--dashboard-filters-w) + 0.5rem) calc(var(--dashboard-metrics-w) + 0.5rem);
   pointer-events: auto;
 }
 .progress-dashboard-charts {
@@ -6227,48 +6236,125 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   height: var(--dashboard-charts-h);
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: .5rem;
+  gap: 0.5rem;
   pointer-events: auto;
   border-block-start-width: 1px;
 }
-:root[data-progress-dashboard] .progress-screen-header { z-index: 42; }
+:root[data-progress-dashboard] .progress-screen-header {
+  z-index: 42;
+}
 @media (min-width: 900px) and (max-width: 1399px) {
-  .progress-dashboard-charts { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-y: auto; }
-  .progress-dashboard-charts > section { min-height: 13rem; overflow-y: visible; }
+  .progress-dashboard-charts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow-y: auto;
+  }
+  .progress-dashboard-charts > section {
+    min-height: 13rem;
+    overflow-y: visible;
+  }
 }
 @media (max-width: 899px) {
-  :root[data-progress-dashboard] { --progress-header-h: 6rem; }
-  :root[data-progress-dashboard] .progress-screen-header { flex-wrap: wrap; gap: .35rem; align-content: center; }
-  :root[data-progress-dashboard] .progress-screen-header > div:first-child { flex-basis: 100%; }
-  :root[data-progress-dashboard] .progress-screen-header > div:not(:first-child) { display: none; }
-  :root[data-progress-dashboard] .progress-screen-header select { width: 7rem; }
+  :root[data-progress-dashboard] {
+    --progress-header-h: 6rem;
+  }
+  :root[data-progress-dashboard] .progress-screen-header {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-content: center;
+  }
+  :root[data-progress-dashboard] .progress-screen-header > div:first-child {
+    flex-basis: 100%;
+  }
+  :root[data-progress-dashboard] .progress-screen-header > div:not(:first-child) {
+    display: none;
+  }
+  :root[data-progress-dashboard] .progress-screen-header select {
+    width: 7rem;
+  }
   :root[data-progress-dashboard] main.isolate {
     inset-inline: 0;
     inset-block: var(--dashboard-map-top, 35rem) auto;
     height: var(--dashboard-map-h, 18rem);
     clip-path: inset(max(0px, calc(var(--progress-header-h) - var(--dashboard-map-top))) 0 0);
   }
-  .progress-dashboard-panels { display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
-  .progress-dashboard-filters, .progress-dashboard-metrics, .progress-dashboard-charts, .progress-dashboard-map-toolbar {
-    position: static; width: 100%; height: auto; flex-shrink: 0; overflow: visible; min-width: 0;
+  .progress-dashboard-panels {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
   }
-  .progress-dashboard-metrics { order: 0; border-inline: 0; }
-  .progress-dashboard-metrics > div:first-child { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .progress-dashboard-metrics > section { display: inline-block; width: 100%; }
-  .progress-dashboard-map-toolbar { order: 1; min-height: 23rem; align-content: start; background: transparent; border-inline: 0; pointer-events: none; }
-  .progress-dashboard-map-toolbar > * { pointer-events: auto; background: var(--color-background); }
-  .progress-dashboard-charts { order: 2; grid-template-columns: minmax(0, 1fr); }
-  .progress-dashboard-charts > section { max-height: none; }
-  .progress-dashboard-filters { order: 3; border-inline: 0; }
+  .progress-dashboard-filters,
+  .progress-dashboard-metrics,
+  .progress-dashboard-charts,
+  .progress-dashboard-map-toolbar {
+    position: static;
+    width: 100%;
+    height: auto;
+    flex-shrink: 0;
+    overflow: visible;
+    min-width: 0;
+  }
+  .progress-dashboard-metrics {
+    order: 0;
+    border-inline: 0;
+  }
+  .progress-dashboard-metrics > div:first-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .progress-dashboard-metrics > section {
+    display: inline-block;
+    width: 100%;
+  }
+  .progress-dashboard-map-toolbar {
+    order: 1;
+    min-height: 23rem;
+    align-content: start;
+    background: transparent;
+    border-inline: 0;
+    pointer-events: none;
+  }
+  .progress-dashboard-map-toolbar > * {
+    pointer-events: auto;
+    background: var(--color-background);
+  }
+  .progress-dashboard-charts {
+    order: 2;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .progress-dashboard-charts > section {
+    max-height: none;
+  }
+  .progress-dashboard-filters {
+    order: 3;
+    border-inline: 0;
+  }
 }
 :root[data-progress-v2] .progress-screen-header select {
   background-color: hsl(var(--header));
   color: hsl(var(--header-foreground));
-  border-color: hsl(var(--header-foreground) / .2);
+  border-color: hsl(var(--header-foreground) / 0.2);
   height: 2rem;
-  font-size: .75rem;
+  font-size: 0.75rem;
 }
 @media (max-width: 899px) {
-  :root[data-progress-dashboard] .progress-screen-header > div.relative { display: block; width: 6.5rem; }
-  :root[data-progress-dashboard] .progress-screen-header > div.relative select { width: 100%; }
+  :root[data-progress-dashboard] .progress-screen-header > div.relative {
+    display: block;
+    width: 6.5rem;
+  }
+  :root[data-progress-dashboard] .progress-screen-header > div.relative select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 899px) {
+  :root[data-progress-dashboard] {
+    --progress-header-h: 8.25rem;
+  }
+  :root[data-progress-dashboard] .progress-screen-header > div.progress-dashboard-reporting-week {
+    order: 1;
+    flex-basis: 100%;
+    width: 100%;
+    min-width: 0;
+  }
 }

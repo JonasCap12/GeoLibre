@@ -1,5 +1,6 @@
 import type { TFunction } from "i18next";
 import type { Feature } from "geojson";
+import { progressFeatureLink, propertyText as featureText } from "./progress-feature-link";
 
 export const BRIDGE_ITEM_KEYS = ["coc", "be", "than", "xm", "duc", "gac", "bmc", "ht"] as const;
 export const ROAD_ITEM_KEYS = ["nen", "mat_trai", "mat_phai", "le", "dpc", "ranh"] as const;
@@ -804,15 +805,17 @@ function concreteAge(reportDate: string, dob: string): number | null {
 
 export function computeYard(bridge: BridgeState, reportDate: string): YardSummary {
   const girders = bridge.spans.flatMap((span, spanIndex) =>
-    span.girders.map((girder, girderIndex): YardGirderRef => ({
-      bridgeId: bridge.id,
-      spanId: span.id,
-      spanIndex,
-      girderIndex,
-      id: `${span.id}-D${girderIndex + 1}`,
-      girder,
-      ageDays: concreteAge(reportDate, girder.dob),
-    })),
+    span.girders.map(
+      (girder, girderIndex): YardGirderRef => ({
+        bridgeId: bridge.id,
+        spanId: span.id,
+        spanIndex,
+        girderIndex,
+        id: `${span.id}-D${girderIndex + 1}`,
+        girder,
+        ageDays: concreteAge(reportDate, girder.dob),
+      }),
+    ),
   );
   const beds = Array.from({ length: bridge.yard.beds }, (_, index) => {
     const bed = index + 1;
@@ -936,21 +939,6 @@ export type V1ProgressLike = {
   weekly?: Array<{ week?: string; date?: string; actualPct?: number; plannedPct?: number }>;
 };
 
-function slug(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/đ/g, "d")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-function featureText(feature: Feature, key: string): string {
-  const value = feature.properties?.[key];
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
-}
-
 function featureNumber(feature: Feature, key: string): number {
   return finite(feature.properties?.[key]);
 }
@@ -1025,13 +1013,12 @@ export function migrateProgressV1(
     if (PROGRESS_V2_ITEM_KEYS.includes(key) && Number.isFinite(item.weight))
       weights[key] = Math.max(0, item.weight ?? 0);
   }
+  const links = new Map(features.map((feature) => [feature, progressFeatureLink(feature)]));
   const bridgeFeatures = new Map<string, Feature[]>();
   for (const feature of features) {
-    const bridgeId = featureText(feature, "bridge_id");
-    const component = featureText(feature, "cau_kien");
-    if (!bridgeId && !/^(M|T|N)\d+$/i.test(component)) continue;
-    const name = featureText(feature, "cong_trinh") || bridgeId;
-    const id = bridgeId || slug(name);
+    const link = links.get(feature);
+    if (!link || !("bridgeId" in link)) continue;
+    const id = link.bridgeId;
     bridgeFeatures.set(id, [...(bridgeFeatures.get(id) ?? []), feature]);
   }
   const bridges: BridgeState[] = [...bridgeFeatures.entries()].map(([id, group]) => {
@@ -1042,28 +1029,33 @@ export function migrateProgressV1(
     const station = rawStation == null ? Number.NaN : Number(rawStation);
     const supportIds = orderSupports([
       ...new Set(
-        group
-          .map((feature) => featureText(feature, "support_id") || featureText(feature, "cau_kien"))
-          .filter((value) => /^(M|T)\d+$/i.test(value)),
+        group.flatMap((feature) => {
+          const link = links.get(feature);
+          return link?.kind === "support" ? [link.id] : [];
+        }),
       ),
     ]);
     const spanIds = [
       ...new Set(
-        group
-          .map((feature) => featureText(feature, "span_id") || featureText(feature, "cau_kien"))
-          .filter((value) => /^N\d+$/i.test(value)),
+        group.flatMap((feature) => {
+          const link = links.get(feature);
+          return link?.kind === "span" ? [link.id] : [];
+        }),
       ),
     ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     const supports = supportIds.map((supportId): ProgressSupport => {
       const parts = group.filter(
-        (feature) =>
-          (featureText(feature, "support_id") || featureText(feature, "cau_kien")) === supportId,
+        (feature) => links.get(feature)?.kind === "support" && links.get(feature)?.id === supportId,
       );
-      const piles = parts.filter(
-        (feature) =>
-          /cọc|coc/i.test(featureText(feature, "bo_phan")) ||
-          feature.properties?.pile_index !== undefined,
-      );
+      const piles = parts.filter((feature) => links.get(feature)?.pileIndex !== undefined);
+      const pileStates: PileState[] = [];
+      for (const feature of piles) {
+        const index = links.get(feature)!.pileIndex!;
+        pileStates[index] = Math.max(
+          pileStates[index] ?? 0,
+          paintedPct(feature) === 100 ? 2 : paintedPct(feature) > 0 ? 1 : 0,
+        ) as PileState;
+      }
       const stagePct = (pattern: RegExp) =>
         Math.max(
           0,
@@ -1078,13 +1070,11 @@ export function migrateProgressV1(
         kind: /^M/i.test(supportId) ? "mo" : "tru",
         inc: true,
         coc: {
-          t: piles.length,
+          t: pileStates.length,
           D: featureNumber(piles[0] ?? parts[0], "duong_kinh_coc_m") || 1,
           L: featureNumber(piles[0] ?? parts[0], "chieu_dai_coc_m") || 12,
         },
-        piles: piles.map((feature) =>
-          paintedPct(feature) === 100 ? 2 : paintedPct(feature) > 0 ? 1 : 0,
-        ),
+        piles: Array.from({ length: pileStates.length }, (_, index) => pileStates[index] ?? 0),
         be: stagePct(/\bbe\b|bệ/i),
         than: stagePct(/than|thân|cột trụ|tuong thân|tường thân/i),
         xm: stagePct(/\bxm\b|xà mũ|xa mu|tường đỉnh/i),
@@ -1092,14 +1082,23 @@ export function migrateProgressV1(
     });
     const spans = spanIds.map((spanId): ProgressSpan => {
       const parts = group.filter(
-        (feature) =>
-          (featureText(feature, "span_id") || featureText(feature, "cau_kien")) === spanId,
+        (feature) => links.get(feature)?.kind === "span" && links.get(feature)?.id === spanId,
       );
       const girderFeatures = parts.filter(
-        (feature) =>
-          /dầm|dam/i.test(featureText(feature, "bo_phan")) ||
-          feature.properties?.girder_index !== undefined,
+        (feature) => links.get(feature)?.girderIndex !== undefined,
       );
+      const girders: ProgressGirder[] = [];
+      for (const feature of girderFeatures) {
+        const index = links.get(feature)!.girderIndex!;
+        const st = paintedPct(feature) === 100 ? 5 : paintedPct(feature) > 0 ? 2 : 0;
+        if (!girders[index] || st > girders[index].st)
+          girders[index] = {
+            t: featureText(feature, "girder_type") || "Super-T 40",
+            st,
+            dob: paintedPct(feature) > 0 ? reportDate : "",
+            bed: 0,
+          };
+      }
       const percent = (pattern: RegExp) =>
         Math.max(
           0,
@@ -1118,20 +1117,18 @@ export function migrateProgressV1(
         lien: featureText(parts[0], "lien"),
         bmc: percent(/bmc|bản mặt cầu/i),
         ht: percent(/lan can|hoàn thiện|hoan thien/i),
-        girders: girderFeatures.map((feature) => ({
-          t: featureText(feature, "girder_type") || "Super-T 40",
-          st: paintedPct(feature) === 100 ? 5 : paintedPct(feature) > 0 ? 2 : 0,
-          dob: paintedPct(feature) > 0 ? reportDate : "",
-          bed: 0,
-        })),
+        girders: Array.from(
+          { length: girders.length },
+          (_, index) => girders[index] ?? { t: "", st: 0, dob: "", bed: 0 },
+        ),
       };
     });
     return { id, name, station, yard: { beds: 5 }, supports, spans };
   });
   const roadByKm = new Map<string, Feature[]>();
   for (const feature of features) {
-    const kmId = featureText(feature, "km_id") || featureText(feature, "cau_kien");
-    if (/^Km\d+$/i.test(kmId)) roadByKm.set(kmId, [...(roadByKm.get(kmId) ?? []), feature]);
+    const link = links.get(feature);
+    if (link?.kind === "km") roadByKm.set(link.id, [...(roadByKm.get(link.id) ?? []), feature]);
   }
   const km = [...roadByKm.entries()].map(([id, group]): RoadKmState => {
     const from = Math.min(...group.map((feature) => featureNumber(feature, "km_tu")));
@@ -1139,8 +1136,8 @@ export function migrateProgressV1(
     const pct = emptyPct(ROAD_ITEM_KEYS);
     const aliases: Record<RoadItemKey, RegExp> = {
       nen: /nền|nen/i,
-      mat_trai: /mặt trái|mat-trai|mat_trai/i,
-      mat_phai: /mặt phải|mat-phai|mat_phai/i,
+      mat_trai: /mặt.*trái|mat-trai|mat_trai/i,
+      mat_phai: /mặt.*phải|mat-phai|mat_phai/i,
       le: /lề|le/i,
       dpc: /dpc|phân cách/i,
       ranh: /rãnh|ranh/i,
@@ -1158,12 +1155,17 @@ export function migrateProgressV1(
   });
   const underpassGroups = new Map<string, Feature[]>();
   for (const feature of features) {
-    const id = featureText(feature, "underpass_id");
+    const link = links.get(feature);
+    const id = link?.kind === "underpass" ? link.id : "";
     if (id) underpassGroups.set(id, [...(underpassGroups.get(id) ?? []), feature]);
   }
   const underpasses = [...underpassGroups.entries()].map(([id, group]): UnderpassState => {
-    const walls = group.filter((feature) => /tường|tuong/i.test(featureText(feature, "bo_phan")));
-    const lids = group.filter((feature) => /nắp|nap/i.test(featureText(feature, "bo_phan")));
+    const walls = group.filter((feature) =>
+      /tường|tuong/i.test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
+    );
+    const lids = group.filter((feature) =>
+      /nắp|nap/i.test(featureText(feature, "Layer") + " " + featureText(feature, "bo_phan")),
+    );
     const average = (items: Feature[]) =>
       items.length > 0
         ? items.reduce((sum, feature) => sum + paintedPct(feature), 0) / items.length

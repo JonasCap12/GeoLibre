@@ -553,7 +553,6 @@ it("resolves rendered hits without changing ordinary features or authored IDs", 
     const resolved = resolveRenderedFeature(layer, hit);
     assert.equal(resolved.feature, originals[index]);
     assert.equal(resolved.properties, originals[index].properties);
-    assert.equal(resolved.featureIndex, index);
     assert.equal(resolved.featureId, String(originals[index].id ?? index));
   });
   const ordinary = feature({ name: "rendered" }, 12);
@@ -561,7 +560,6 @@ it("resolves rendered hits without changing ordinary features or authored IDs", 
     const resolved = resolveRenderedFeature(owner, ordinary);
     assert.equal(resolved.feature, ordinary);
     assert.equal(resolved.properties, ordinary.properties);
-    assert.equal(resolved.featureIndex, null);
     assert.equal(resolved.featureId, null);
   }
   assert.deepEqual(resolveRenderedFeature(undefined, { properties: null }).properties, {});
@@ -675,4 +673,26 @@ it("resets collapsed road-only ranges but keeps a non-road point at the boundary
   );
   assert.deepEqual(filters.station, [1000, 1000]);
   assert.ok(filterDashboardRows(rows, filters).every((row) => row.kind === "underpass"));
+});
+
+it("resets a touching station range when other filters exclude its point rows", () => {
+  const state = fixture();
+  state.bridges[0].station = 1000;
+  const rows = dashboardRows(state, "p2");
+  for (const extra of [
+    { kinds: ["road" as const] },
+    { items: ["nen" as const] },
+    { kinds: ["underpass" as const] },
+  ]) {
+    const filters = reconcileDashboardFilters(
+      { ...EMPTY_DASHBOARD_FILTERS, ...extra, station: [0, 1000] },
+      rows,
+    );
+    assert.equal(filters.station, null);
+  }
+  const roadOnly = reconcileDashboardFilters(
+    { ...EMPTY_DASHBOARD_FILTERS, kinds: ["road"], station: [200, 1000] },
+    rows,
+  );
+  assert.ok(filterDashboardRows(rows, roadOnly).length > 0);
 });

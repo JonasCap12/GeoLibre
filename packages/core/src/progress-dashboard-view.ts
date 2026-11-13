@@ -59,7 +59,6 @@ export function resolveRenderedFeature<T extends { properties?: Record<string, u
   return {
     feature,
     properties: feature.properties ?? {},
-    featureIndex: original?.index ?? null,
     featureId: original ? featureSelectionId(original.feature, original.index) : null,
   };
 }
