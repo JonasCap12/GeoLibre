@@ -2835,7 +2835,7 @@ it("identifies renderer copies by their original feature and hides the dashboard
     ],
   };
   layer.progressDashboard = {
-    filter: ["in", ["get", "__progress_index"], ["literal", [0]]],
+    filter: ["match", ["get", "__geolibre_progress_index"], [0], true, false],
     colorExpression: '["case",true,"#ff0000","#000000"]',
   };
   controller.syncLayers([layer]);
@@ -2843,7 +2843,7 @@ it("identifies renderer copies by their original feature and hides the dashboard
     {
       id: 1,
       layer: { id: circleId("a") },
-      properties: { name: "Original", __progress_index: 0 },
+      properties: { name: "Original", __geolibre_progress_index: 0 },
       geometry: { type: "Point", coordinates: [0, 0] },
     },
   ]);

@@ -13,7 +13,7 @@ import type {
 } from "@geolibre/core";
 import {
   DEFAULT_LAYER_STYLE,
-  progressDashboardFeature,
+  resolveRenderedFeature,
   controlRendersLayer,
   geojsonHasZCoordinates,
   redactUrlCredentials,
@@ -1488,11 +1488,8 @@ export class MapboxEngine implements MapEngine {
     return map.queryRenderedFeatures(map.project(lngLat), { layers: queryIds }).flatMap((f) => {
       const id = byId.get(f.layer?.id ?? "");
       if (!id) return [];
-      const featureId = this.featureIdForLayer(id, f);
-      const original = progressDashboardFeature(
-        this.layers.find((layer) => layer.id === id),
-        f.properties,
-      );
+      const layer = this.layers.find((layer) => layer.id === id);
+      const featureId = this.featureIdForLayer(id, f, layer);
       const key = `${id}:${featureId ?? JSON.stringify(f.properties)}`;
       if (seen.has(key)) return [];
       seen.add(key);
@@ -1500,7 +1497,7 @@ export class MapboxEngine implements MapEngine {
         {
           layerId: id,
           featureId,
-          properties: original ? (original.feature.properties ?? {}) : (f.properties ?? {}),
+          properties: resolveRenderedFeature(layer, f).properties,
           geometry: f.geometry,
         },
       ];
@@ -1527,7 +1524,7 @@ export class MapboxEngine implements MapEngine {
         { layers: queryIds },
       )
       .find((candidate) => queryable.has(candidate.layer?.id ?? ""));
-    return feature ? this.featureIdForLayer(layerId, feature) : null;
+    return feature ? this.featureIdForLayer(layerId, feature, layer) : null;
   }
   /**
    * Resolve a queried feature's id to the app's `String(feature.id ?? index)`
@@ -1545,15 +1542,13 @@ export class MapboxEngine implements MapEngine {
   private featureIdForLayer(
     layerId: string,
     queried: { id?: string | number; properties?: Record<string, unknown> | null },
+    layer: GeoLibreLayer | undefined,
   ): string | null {
-    const original = progressDashboardFeature(
-      this.layers.find((layer) => layer.id === layerId),
-      queried.properties,
-    );
-    if (original) return String(original.feature.id ?? original.index);
+    const hit = resolveRenderedFeature(layer, queried);
+    if (hit.featureIndex !== null) return String(hit.feature.id ?? hit.featureIndex);
     if (queried.id == null) return null;
     if (queried.properties?.cluster === true) return null;
-    const features = this.layers.find((l) => l.id === layerId)?.geojson?.features;
+    const features = layer?.geojson?.features;
     if (!features) return String(queried.id);
     const source = this.plans.get(layerId)?.source;
     const data = source?.type === "geojson" ? source.data : undefined;

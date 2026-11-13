@@ -2539,21 +2539,23 @@ it("keeps Mapbox generated IDs and identifies original properties while a dashbo
   }));
   engine.syncLayers([
     geojsonLayer({
+      style: { ...DEFAULT_LAYER_STYLE, pointRenderer: "cluster" },
       geojson: { type: "FeatureCollection", features },
       progressDashboard: {
-        filter: ["in", ["get", "__progress_index"], ["literal", [0, 1, 2, 3]]],
+        filter: ["match", ["get", "__geolibre_progress_index"], [0, 1, 2, 3], true, false],
         colorExpression: '["case",true,"#ff0000","#000000"]',
       },
     }),
   ]);
   const source = map.sources.get(SOURCE)!;
   assert.equal(source.generateId, true);
+  assert.equal(source.cluster, undefined);
   for (const index of [0, 1, 2, 3]) {
     map.setQueried([
       {
         id: index,
         layer: { id: CIRCLE },
-        properties: { name: `Component ${index}`, __progress_index: index },
+        properties: { name: `Component ${index}`, __geolibre_progress_index: index },
         geometry: null,
       },
     ]);

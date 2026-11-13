@@ -249,6 +249,7 @@ function UnderpassRows({
   onChange: (state: ProgressV2) => void;
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
+  const { i18n } = useTranslation();
   const rows = state.underpasses.filter(
     (item) => !packageId || packageForStation(state.packages, item.station)?.id === packageId,
   );
@@ -285,7 +286,7 @@ function UnderpassRows({
             </td>
             <td className="p-2 text-end">
               {Number.isFinite(item.station)
-                ? new Intl.NumberFormat(undefined).format(item.station)
+                ? new Intl.NumberFormat(i18n.language).format(item.station)
                 : "—"}
             </td>
             <td className="p-2 text-end">

@@ -22,6 +22,7 @@ import {
   progressFeatureTarget,
   progressFeatureItems,
   propertyIndex,
+  propertyText,
   fold,
   stateColors,
   type ProgressFeatureTarget,
@@ -208,25 +209,23 @@ export function reconcileDashboardFilters(
 ): DashboardFilters {
   const bridges = new Set(rows.map((row) => row.bridgeId));
   const bridgeIds = filters.bridgeIds.filter((id) => bridges.has(id));
+  const types = new Set(rows.map((row) => row.girderType));
+  const girderTypes = filters.girderTypes.filter((type) => types.has(type));
   const extent = dashboardStationExtent(rows);
   let station = filters.station;
   if (station) {
-    if (
-      !extent ||
-      station[1] < extent[0] ||
-      station[0] > extent[1] ||
-      (extent[0] < extent[1] && (station[1] === extent[0] || station[0] === extent[1]))
-    )
-      station = null;
+    if (!extent || station[1] < extent[0] || station[0] > extent[1]) station = null;
     else {
       const start = Math.max(station[0], extent[0]),
         end = Math.min(station[1], extent[1]);
       if (start !== station[0] || end !== station[1]) station = [start, end];
     }
   }
-  return bridgeIds.length === filters.bridgeIds.length && station === filters.station
+  return bridgeIds.length === filters.bridgeIds.length &&
+    girderTypes.length === filters.girderTypes.length &&
+    station === filters.station
     ? filters
-    : { ...filters, bridgeIds, station };
+    : { ...filters, bridgeIds, girderTypes, station };
 }
 
 /** Clip road quantities to the selected station interval; never mutate saved state. */
@@ -536,7 +535,9 @@ export function dashboardMapView(
     const keys = progressFeatureItems(feature);
     const candidates = target
       ? (byTarget.get(targetKey(target)) ?? [])
-      : rows.filter((row) => row.bridgeId === feature.properties?.bridge_id && row.key === "ht");
+      : rows.filter(
+          (row) => row.bridgeId === propertyText(feature, "bridge_id") && row.key === "ht",
+        );
     const matched = candidates.filter(
       (row) =>
         (!keys.length || keys.includes(row.key)) &&
@@ -560,7 +561,9 @@ export function dashboardMapView(
   expression.push(PROGRESS_V2_COLORS.empty);
   return {
     indexes,
-    filter: ["in", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY], ["literal", indexes]],
+    filter: indexes.length
+      ? ["match", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY], indexes, true, false]
+      : (false as const),
     colorExpression: indexes.length
       ? JSON.stringify(expression)
       : JSON.stringify(PROGRESS_V2_COLORS.empty),

@@ -440,7 +440,7 @@ export function dedupeViewportFeatures(
     const feature: Feature = {
       type: "Feature",
       geometry: raw.geometry,
-      properties: { ...props },
+      properties: stripEditorProperties(props),
     };
     if (raw.id != null) feature.id = raw.id as string | number;
     const group = groups.get(key);
@@ -623,7 +623,7 @@ export function tagViewFeaturesForImport(
 
 /** Whether a property key is an editor-internal tag that must not be exported. */
 function isInternalProperty(key: string): boolean {
-  return key.startsWith("__gm_") || key === VIEW_IMPORT_ID_PROPERTY;
+  return key.startsWith("__gm_") || key.startsWith("__geolibre_");
 }
 
 /** Strip editor-internal properties, returning a plain attribute map. */

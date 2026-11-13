@@ -283,5 +283,6 @@ export {
 export {
   progressDashboardLayer,
   progressDashboardFeature,
+  resolveRenderedFeature,
   PROGRESS_DASHBOARD_INDEX_PROPERTY,
 } from "./progress-dashboard-view";

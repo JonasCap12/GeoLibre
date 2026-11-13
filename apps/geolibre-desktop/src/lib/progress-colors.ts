@@ -32,7 +32,7 @@ export type ProgressFeatureTarget =
   | { kind: "km"; id: string }
   | { kind: "underpass"; id: string };
 
-function propertyText(feature: Feature, key: string): string {
+export function propertyText(feature: Feature, key: string): string {
   const value = feature.properties?.[key];
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
