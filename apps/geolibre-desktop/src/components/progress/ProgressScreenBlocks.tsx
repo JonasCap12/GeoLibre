@@ -12,6 +12,7 @@ import { LassoSelect, MousePointerClick, Pentagon, SquareDashed } from "lucide-r
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -49,10 +50,14 @@ const LIST_PADDING = 8;
 type SweepShape = "rectangle" | "polygon" | "freehand";
 type MarkTarget = SweepShape | "click" | "selection";
 
-const pctFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
-
-/** A percent or a percent-point figure, to one decimal in the user's locale. */
-export const fmt = (value: number) => pctFormat.format(value);
+/** A percent or percent-point figure, to one decimal in the app language. */
+export function usePercentFormat() {
+  const { i18n } = useTranslation();
+  return useMemo(
+    () => new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }).format,
+    [i18n.language],
+  );
+}
 
 /** The one camera call the screen makes; the app API provides it. */
 export interface ProgressScreenCamera {
@@ -267,6 +272,7 @@ export function ItemsBlock({
   camera: ProgressScreenCamera | null;
 }) {
   const { t } = useTranslation();
+  const fmt = usePercentFormat();
   const [listRef, height] = useHeight<HTMLDivElement>();
   const shown = rowsThatFit(items.length, height - LIST_PADDING, ITEM_ROW_MIN);
   const hidden = items.length - shown;
@@ -322,6 +328,7 @@ export function ItemsBlock({
 
 function ItemRow({ entry, onSelect }: { entry: ItemProgress; onSelect: () => void }) {
   const { t } = useTranslation();
+  const fmt = usePercentFormat();
   const { item, pct } = entry;
   const behind = pct + 0.05 < item.plannedPct;
   return (
@@ -368,6 +375,7 @@ export function HistoryBlock({
   today: string;
 }) {
   const { t } = useTranslation();
+  const fmt = usePercentFormat();
   const week = isoWeek(today);
   // The live figures stand in for this week until it is recorded.
   const points: WeekRecord[] = [

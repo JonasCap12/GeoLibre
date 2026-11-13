@@ -1,5 +1,6 @@
 ﻿import { act, fireEvent, render, screen, useAppStore, within } from "./helpers/dom";
 import assert from "node:assert/strict";
+import { i18n } from "./helpers/dom";
 import { afterEach, it } from "node:test";
 import { createElement } from "react";
 import { clearHistory, projectFromStore, serializeProject } from "@geolibre/core";
@@ -19,6 +20,67 @@ const { closeProgressScreen, openProgressScreen } =
   await import("../apps/geolibre-desktop/src/lib/progress-screen");
 const { PROGRESS_METADATA_KEY } =
   await import("../apps/geolibre-desktop/src/lib/construction-progress");
+const { usePercentFormat } =
+  await import("../apps/geolibre-desktop/src/components/progress/ProgressScreenBlocks");
+
+it("formats percentages in the app language and reacts to language changes", async () => {
+  function PercentProbe() {
+    const fmt = usePercentFormat();
+    return createElement("output", null, `${fmt(1234.56)}%`);
+  }
+  render(createElement(PercentProbe));
+  try {
+    for (const [language, expected] of [
+      ["en", "1,234.6%"],
+      ["vi", "1.234,6%"],
+      ["en", "1,234.6%"],
+    ]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      assert.equal(screen.getByRole("status").textContent, expected);
+    }
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+  }
+});
+
+it("uses the app locale for Items percentages, quantities and stations", async () => {
+  const { state } = mount();
+  const edited = structuredClone(state);
+  edited.bridges[0].supports[0].be = 12.5;
+  edited.bridges[0].supports[0].coc.t = 1234;
+  edited.underpasses = [{ id: "station", station: 1234.5, pct: { tuong: 12.5, nap: 0 } }];
+  act(() =>
+    useAppStore.getState().updateLayer("progress", {
+      metadata: { [PROGRESS_METADATA_KEY]: edited },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Work items" }));
+  const select = document.getElementById("progress-v2-item")!;
+  try {
+    for (const [language, percent, station, quantity] of [
+      ["en", "12.5%", "1,234.5", "1234"],
+      ["vi", "12,5%", "1.234,5", "1234"],
+    ]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      fireEvent.change(select, { target: { value: "coc" } });
+      assert.ok(screen.getAllByText(new RegExp(quantity)).length > 0);
+      fireEvent.change(select, { target: { value: "be" } });
+      assert.ok(screen.getAllByText(percent).length >= 2);
+      fireEvent.change(select, { target: { value: "ham_tuong" } });
+      assert.ok(screen.getByText(station));
+    }
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+  }
+});
 function config(): ProgressV2 {
   return normalizeProgressV2({
     version: 2,

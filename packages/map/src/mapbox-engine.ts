@@ -1489,7 +1489,8 @@ export class MapboxEngine implements MapEngine {
       const id = byId.get(f.layer?.id ?? "");
       if (!id) return [];
       const layer = this.layers.find((layer) => layer.id === id);
-      const featureId = this.featureIdForLayer(id, f, layer);
+      const resolved = resolveRenderedFeature(layer, f);
+      const featureId = this.featureIdForLayer(id, f, layer, resolved);
       const key = `${id}:${featureId ?? JSON.stringify(f.properties)}`;
       if (seen.has(key)) return [];
       seen.add(key);
@@ -1497,7 +1498,7 @@ export class MapboxEngine implements MapEngine {
         {
           layerId: id,
           featureId,
-          properties: resolveRenderedFeature(layer, f).properties,
+          properties: resolved.properties,
           geometry: f.geometry,
         },
       ];
@@ -1543,9 +1544,9 @@ export class MapboxEngine implements MapEngine {
     layerId: string,
     queried: { id?: string | number; properties?: Record<string, unknown> | null },
     layer: GeoLibreLayer | undefined,
+    hit = resolveRenderedFeature(layer, queried),
   ): string | null {
-    const hit = resolveRenderedFeature(layer, queried);
-    if (hit.featureIndex !== null) return String(hit.feature.id ?? hit.featureIndex);
+    if (hit.featureId !== null) return hit.featureId;
     if (queried.id == null) return null;
     if (queried.properties?.cluster === true) return null;
     const features = layer?.geojson?.features;

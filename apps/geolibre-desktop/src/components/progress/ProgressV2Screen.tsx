@@ -18,7 +18,7 @@ import {
   type ProgressV2,
 } from "../../lib/progress-v2";
 import { closeProgressScreen } from "../../lib/progress-screen";
-import { fmt, type ProgressScreenCamera } from "./ProgressScreenBlocks";
+import { usePercentFormat, type ProgressScreenCamera } from "./ProgressScreenBlocks";
 import { ProgressV2Dashboard } from "./ProgressV2Dashboard";
 import { ProgressV2Items } from "./ProgressV2Items";
 import { ProgressV2Overview } from "./ProgressV2Overview";
@@ -39,6 +39,7 @@ export function ProgressV2Screen({
   camera: ProgressScreenCamera | null;
 }) {
   const { t, i18n } = useTranslation();
+  const fmt = usePercentFormat();
   const features = useMemo(() => layer.geojson?.features ?? [], [layer.geojson]);
   const [packageId, setPackageId] = useState<string | null>(null);
   const [tab, setTab] = useState<ProgressV2Tab>("overview");

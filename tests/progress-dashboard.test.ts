@@ -319,7 +319,7 @@ it("uses existing feature aliases, preserves IDs and matches map colors to statu
   ]);
   assert.ok(view.colorExpression.includes(DASHBOARD_STATUS_COLORS.wip));
   assert.deepEqual(dashboardMapView(features, state, [], "status").indexes, []);
-  assert.equal(dashboardMapView(features, state, [], "status").filter, false);
+  assert.deepEqual(dashboardMapView(features, state, [], "status").filter, ["literal", false]);
   assert.ok(dashboardMapView(features, state, dashboardRows(state), "deviation").colorExpression);
   assert.ok(dashboardMapView(features, state, dashboardRows(state), "girder").colorExpression);
   assert.deepEqual(progressFeatureItems(features[0]), ["coc"]);
@@ -489,7 +489,7 @@ it("drops stale bridges and clamps or clears station ranges for the new package"
   assert.equal(reconcileDashboardFilters(filters, []).station, null);
   assert.deepEqual(
     reconcileDashboardFilters({ ...filters, station: [0, 1000] }, rows).station,
-    [1000, 1000],
+    null,
   );
 });
 
@@ -521,7 +521,7 @@ it("keeps a station range touching the package boundary and selects its bridge",
     { ...EMPTY_DASHBOARD_FILTERS, station: [3000, 4000] },
     rows,
   );
-  assert.deepEqual(last.station, [3000, 3000]);
+  assert.equal(last.station, null);
 });
 
 it("matches numeric bridge IDs on approach features just like the normal map", () => {
@@ -542,7 +542,7 @@ it("resolves rendered hits without changing ordinary features or authored IDs", 
   const originals = [feature({ name: "original" }, "1A3F"), feature({}, 42), feature({})];
   const layer = geojsonLayer({
     geojson: { type: "FeatureCollection", features: originals },
-    progressDashboard: { filter: false, colorExpression: '"#fff"' },
+    progressDashboard: { filter: ["literal", false], colorExpression: '"#fff"' },
   });
   layer.style.pointRenderer = "cluster";
   const rendered = progressDashboardLayer(layer);
@@ -554,6 +554,7 @@ it("resolves rendered hits without changing ordinary features or authored IDs", 
     assert.equal(resolved.feature, originals[index]);
     assert.equal(resolved.properties, originals[index].properties);
     assert.equal(resolved.featureIndex, index);
+    assert.equal(resolved.featureId, String(originals[index].id ?? index));
   });
   const ordinary = feature({ name: "rendered" }, 12);
   for (const owner of [undefined, { ...layer, progressDashboard: undefined }, layer]) {
@@ -561,6 +562,7 @@ it("resolves rendered hits without changing ordinary features or authored IDs", 
     assert.equal(resolved.feature, ordinary);
     assert.equal(resolved.properties, ordinary.properties);
     assert.equal(resolved.featureIndex, null);
+    assert.equal(resolved.featureId, null);
   }
   assert.deepEqual(resolveRenderedFeature(undefined, { properties: null }).properties, {});
 });
@@ -651,4 +653,26 @@ it("keeps unknown stations out of packages and range filters and formats the loc
     false,
   );
   assert.equal(todayIso(new Date(2026, 0, 2, 23, 59)), "2026-01-02");
+});
+
+it("resets collapsed road-only ranges but keeps a non-road point at the boundary", () => {
+  const state = fixture();
+  const roadRows = dashboardRows(state, "p2").filter((row) => row.kind === "road");
+  for (const station of [
+    [0, 1000],
+    [200, 1000],
+    [1000, 1000],
+  ] as [number, number][]) {
+    const filters = reconcileDashboardFilters({ ...EMPTY_DASHBOARD_FILTERS, station }, roadRows);
+    assert.equal(filters.station, null);
+    assert.ok(filterDashboardRows(roadRows, filters).length > 0);
+  }
+  state.underpasses[0].station = 1000;
+  const rows = dashboardRows(state, "p2");
+  const filters = reconcileDashboardFilters(
+    { ...EMPTY_DASHBOARD_FILTERS, station: [0, 1000] },
+    rows,
+  );
+  assert.deepEqual(filters.station, [1000, 1000]);
+  assert.ok(filterDashboardRows(rows, filters).every((row) => row.kind === "underpass"));
 });

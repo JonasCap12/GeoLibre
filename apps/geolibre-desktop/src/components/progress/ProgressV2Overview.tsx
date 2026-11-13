@@ -14,7 +14,7 @@ import {
   type ProgressAlert,
   type ProgressV2,
 } from "../../lib/progress-v2";
-import { fmt } from "./ProgressScreenBlocks";
+import { usePercentFormat } from "./ProgressScreenBlocks";
 
 export function ProgressV2Overview({
   state,
@@ -26,6 +26,7 @@ export function ProgressV2Overview({
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
   const { t } = useTranslation();
+  const fmt = usePercentFormat();
   const summary = computeProgressV2(state, packageId);
   const alerts = computeProgressAlerts(state, packageId);
   const hasPlan = summary.items.some((item) => item.plannedPct > 0);
@@ -79,8 +80,8 @@ export function ProgressV2Overview({
                 alert.supportId && alert.bridgeId
                   ? { kind: "support" as const, bridgeId: alert.bridgeId, id: alert.supportId }
                   : alert.spanId && alert.bridgeId
-                  ? { kind: "span" as const, bridgeId: alert.bridgeId, id: alert.spanId }
-                  : null;
+                    ? { kind: "span" as const, bridgeId: alert.bridgeId, id: alert.spanId }
+                    : null;
               return (
                 <li
                   key={`${alert.code}-${index}`}
@@ -91,8 +92,8 @@ export function ProgressV2Overview({
                       alert.severity === 3
                         ? "bg-red-600"
                         : alert.severity === 2
-                        ? "bg-amber-500"
-                        : "bg-blue-500"
+                          ? "bg-amber-500"
+                          : "bg-blue-500"
                     }`}
                   />
                   {target ? (
@@ -101,10 +102,10 @@ export function ProgressV2Overview({
                       className="truncate text-start hover:underline"
                       onClick={() => onOpen(target)}
                     >
-                      {alertText(t, alert)}
+                      {alertText(t, alert, fmt)}
                     </button>
                   ) : (
-                    <span className="truncate">{alertText(t, alert)}</span>
+                    <span className="truncate">{alertText(t, alert, fmt)}</span>
                   )}
                 </li>
               );
@@ -163,10 +164,8 @@ function structureRows(state: ProgressV2, packageId: string | null, roadName: st
     rows.unshift({
       id: "road",
       name: roadName,
-      pct: computeProgressV2(
-        { ...state, bridges: [], underpasses: [], road: { km } },
-        packageId,
-      ).overallPct,
+      pct: computeProgressV2({ ...state, bridges: [], underpasses: [], road: { km } }, packageId)
+        .overallPct,
     });
   for (const underpass of state.underpasses) {
     if (packageId && packageForStation(state.packages, underpass.station)?.id !== packageId)
@@ -183,7 +182,11 @@ function structureRows(state: ProgressV2, packageId: string | null, roadName: st
   return rows;
 }
 
-export function alertText(t: TFunction, alert: ProgressAlert): string {
+export function alertText(
+  t: TFunction,
+  alert: ProgressAlert,
+  fmt: (value: number) => string,
+): string {
   const translate = t as unknown as (key: string, options?: Record<string, unknown>) => string;
   const item = alert.itemKey ? translate(`progress.v2.items.${alert.itemKey}`) : "";
   return translate(`progress.v2.alert.${alert.code}`, {

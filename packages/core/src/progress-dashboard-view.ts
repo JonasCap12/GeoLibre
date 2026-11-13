@@ -1,5 +1,6 @@
 ﻿import type { Feature, FeatureCollection } from "geojson";
 import type { GeoLibreLayer } from "./types";
+import { featureSelectionId } from "./selection";
 
 /** Private property on renderer copies; never added to the store's feature data. */
 export const PROGRESS_DASHBOARD_INDEX_PROPERTY = "__geolibre_progress_index";
@@ -24,9 +25,7 @@ export function progressDashboardLayer(layer: GeoLibreLayer): GeoLibreLayer {
     geojson: geojson ? identified.get(geojson) : undefined,
     embedFilter: layer.embedFilter?.length
       ? ["all", layer.embedFilter, dashboard.filter]
-      : dashboard.filter === false
-        ? ["literal", false]
-        : dashboard.filter,
+      : dashboard.filter,
     style: {
       ...layer.style,
       pointRenderer: "single",
@@ -57,5 +56,10 @@ export function resolveRenderedFeature<T extends { properties?: Record<string, u
 ) {
   const original = progressDashboardFeature(layer, rendered.properties);
   const feature = original?.feature ?? rendered;
-  return { feature, properties: feature.properties ?? {}, featureIndex: original?.index ?? null };
+  return {
+    feature,
+    properties: feature.properties ?? {},
+    featureIndex: original?.index ?? null,
+    featureId: original ? featureSelectionId(original.feature, original.index) : null,
+  };
 }
