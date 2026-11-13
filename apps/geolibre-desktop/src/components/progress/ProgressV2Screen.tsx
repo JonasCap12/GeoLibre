@@ -248,7 +248,10 @@ export function ProgressV2Screen({
           packageId={activePackageId}
           throughDate={throughDate}
           onPackage={setPackageId}
-          onOpen={openTarget}
+          onOpen={(target) => {
+            setDashboard(false);
+            openTarget(target);
+          }}
           onFit={fitIndexes}
           camera={camera}
         />

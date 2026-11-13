@@ -17,6 +17,7 @@ import {
   dashboardMatrix,
   dashboardStrip,
   dashboardAlertGroups,
+  dashboardAlertTarget,
   dashboardBrush,
   dashboardSchedule,
 } from "../apps/geolibre-desktop/src/lib/progress-dashboard-analysis";
@@ -137,6 +138,35 @@ it("estimates schedule dates per package and limits old-week forecasts to availa
   assert.equal(dashboardSchedule(state, "q").forecast, null);
   assert.equal(dashboardSchedule(state, "p", "2026-10-30").history.length, 1);
   assert.equal(dashboardSchedule(state, "p", "2026-10-30").forecast, null);
+});
+
+it("resolves alert targets by item and explicit support/span rather than the first structure row", () => {
+  const state = fixture();
+  state.bridges[0].supports.push({
+    ...structuredClone(state.bridges[0].supports[0]),
+    id: "T1",
+    be: 90,
+  });
+  const structure = dashboardMatrix(state, dashboardRows(state)).find((s) => s.id === "bridge:b")!;
+  const entry = { id: "late", itemKey: "be" as const, actual: 50, planned: 80, deviation: -30 };
+  assert.deepEqual(dashboardAlertTarget(structure, entry), {
+    kind: "support",
+    bridgeId: "b",
+    id: "M1",
+  });
+  assert.deepEqual(
+    dashboardAlertTarget(structure, {
+      ...entry,
+      alert: { severity: 2, code: "cap-before-piles", bridgeId: "b", supportId: "T1" },
+    }),
+    { kind: "support", bridgeId: "b", id: "T1" },
+  );
+  assert.deepEqual(dashboardAlertTarget(structure, { ...entry, itemKey: "bmc" }), {
+    kind: "span",
+    bridgeId: "b",
+    id: "N1",
+  });
+  assert.equal(dashboardAlertTarget({ ...structure, rows: [] }, entry), undefined);
 });
 it("keeps missing-plan warnings grouped with their structures", () => {
   const state = fixture();

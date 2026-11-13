@@ -14,6 +14,7 @@ export function DashboardMapViewport({
   layer,
   camera,
   view,
+  focus,
   mode,
   onMode,
   onFit,
@@ -23,6 +24,7 @@ export function DashboardMapViewport({
   layer: GeoLibreLayer;
   camera?: DashboardCamera | null;
   view: ReturnType<typeof dashboardMapView>;
+  focus: { name: string; indexes: number[] } | null;
   mode: DashboardColorMode;
   onMode: (mode: DashboardColorMode) => void;
   onFit: (indexes: number[]) => void;
@@ -34,9 +36,11 @@ export function DashboardMapViewport({
   const slot = useRef<HTMLElement>(null),
     latest = useRef(layer),
     manual = useRef(false),
+    wholeRoute = useRef(false),
     lastToken = useRef(fitToken);
   latest.current = layer;
   const [hover, setHover] = useState<{ index: number; x: number; y: number } | null>(null);
+  const [viewingName, setViewingName] = useState<string | null>(null);
   useEffect(
     () =>
       watchDashboardMap(
@@ -44,6 +48,7 @@ export function DashboardMapViewport({
         () => latest.current,
         () => {
           manual.current = true;
+          setViewingName(null);
         },
         setHover,
       ),
@@ -52,6 +57,7 @@ export function DashboardMapViewport({
   useEffect(() => {
     if (lastToken.current !== fitToken) {
       manual.current = false;
+      wholeRoute.current = false;
       lastToken.current = fitToken;
     }
     if (manual.current) return;
@@ -59,15 +65,18 @@ export function DashboardMapViewport({
     const frame = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() => {
         if (manual.current) return;
-        if (camera) fitDashboardMap(camera, latest.current, view.indexes);
-        else onFit(view.indexes);
+        const framed = wholeRoute.current ? null : focus;
+        const indexes = framed?.indexes ?? view.indexes;
+        if (camera) fitDashboardMap(camera, latest.current, indexes);
+        else onFit(indexes);
+        setViewingName(framed?.name ?? null);
       });
     });
     return () => {
       cancelAnimationFrame(frame);
       cancelAnimationFrame(inner);
     };
-  }, [camera, onFit, view.indexes, fitToken]);
+  }, [camera, onFit, view.indexes, focus, fitToken]);
   useEffect(() => {
     const el = slot.current,
       panel = el?.closest(".progress-dashboard-panels");
@@ -97,6 +106,13 @@ export function DashboardMapViewport({
   }, []);
   const details = hover ? view.details.get(hover.index) : null,
     feature = hover ? layer.geojson?.features[hover.index] : null;
+  const fitResults = () => {
+    manual.current = false;
+    wholeRoute.current = true;
+    setViewingName(null);
+    if (camera) fitDashboardMap(camera, latest.current, view.indexes);
+    else onFit(view.indexes);
+  };
   return (
     <section ref={slot} className="dashboard-map-slot">
       <div className="dashboard-map-tools">
@@ -114,19 +130,20 @@ export function DashboardMapViewport({
             ))}
           </select>
         </label>
-        <button
-          type="button"
-          onClick={() => {
-            manual.current = false;
-            if (camera) fitDashboardMap(camera, latest.current, view.indexes);
-            else onFit(view.indexes);
-          }}
-        >
+        <button type="button" onClick={fitResults}>
           {t("progress.v2.dashboard.fit")}
         </button>
         <span aria-live="polite">
           {t("progress.v2.dashboard.visible", { count: view.indexes.length })}
         </span>
+        {viewingName ? (
+          <span className="dashboard-map-viewing">
+            {t("progress.v2.dashboard.viewing", { name: viewingName })} ·{" "}
+            <button type="button" onClick={fitResults}>
+              {t("progress.v2.dashboard.fullRoute")}
+            </button>
+          </span>
+        ) : null}
       </div>
       {printImage ? (
         <img

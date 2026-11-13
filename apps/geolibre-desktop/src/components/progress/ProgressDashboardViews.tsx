@@ -8,6 +8,7 @@ import {
 } from "../../lib/progress-dashboard";
 import {
   dashboardBrush,
+  dashboardAlertTarget,
   type DashboardStructure,
   type dashboardStrip,
   type dashboardAlertGroups,
@@ -15,6 +16,7 @@ import {
 } from "../../lib/progress-dashboard-analysis";
 import { usePercentFormat } from "./ProgressScreenBlocks";
 import { alertText } from "./ProgressV2Overview";
+import type { ProgressFeatureTarget } from "../../lib/progress-colors";
 
 export function CompactSelect({
   label,
@@ -82,7 +84,7 @@ export function DashboardMatrix({
         </button>
       </div>
       <div className="dashboard-matrix-scroll">
-        {(["bridge", "underpass", "road"] as const).map((kind) => {
+        {[...new Set(structures.map((s) => s.kind))].map((kind) => {
           const group = structures
             .filter((s) => s.kind === kind)
             .sort((a, b) => (reverse ? -1 : 1) * (a.summary.deviation - b.summary.deviation));
@@ -193,13 +195,11 @@ export function ChainageStrip({
     fmt = usePercentFormat();
   const [drag, setDrag] = useState<[number, number] | null>(null);
   if (!extent) return null;
-  const x = (n: number) => 125 + ((n - extent[0]) / Math.max(1, extent[1] - extent[0])) * 850;
+  const x = (n: number) => ((n - extent[0]) / Math.max(1, extent[1] - extent[0])) * 1000;
   const lines = [...ROAD_ITEM_KEYS, "bridge", "underpass"] as const;
   const fromPointer = (clientX: number, element: SVGSVGElement) => {
     const r = element.getBoundingClientRect();
-    return (
-      extent[0] + ((((clientX - r.left) / r.width) * 1000 - 125) / 850) * (extent[1] - extent[0])
-    );
+    return extent[0] + ((clientX - r.left) / r.width) * (extent[1] - extent[0]);
   };
   const selection = drag ? dashboardBrush(extent, ...drag) : station;
   return (
@@ -211,89 +211,89 @@ export function ChainageStrip({
         <h2>{t("progress.v2.dashboard.chainage")}</h2>
         <span>{t("progress.v2.dashboard.brushHint")}</span>
       </div>
-      <svg
-        viewBox="0 0 1000 120"
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={t("progress.v2.dashboard.chainage")}
-        style={{ touchAction: "none" }}
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture?.(e.pointerId);
-          const p = fromPointer(e.clientX, e.currentTarget);
-          setDrag([p, p]);
-        }}
-        onPointerMove={(e) => {
-          if (drag) setDrag([drag[0], fromPointer(e.clientX, e.currentTarget)]);
-        }}
-        onPointerUp={(e) => {
-          if (drag) {
-            onBrush(dashboardBrush(extent, drag[0], fromPointer(e.clientX, e.currentTarget)));
-            setDrag(null);
-          }
-        }}
-        onPointerCancel={() => setDrag(null)}
-      >
-        {lines.map((key, i) => (
-          <g key={key}>
-            <text x="2" y={11 + i * 11} fontSize="9" fill="currentColor">
+      <div className="dashboard-chainage-grid">
+        <div className="dashboard-chainage-labels">
+          {lines.map((key) => (
+            <span key={key}>
               {key === "bridge" || key === "underpass"
                 ? t(`progress.v2.dashboard.kinds.${key}`)
                 : t(`progress.v2.items.${key}`)}
-            </text>
-            <line
-              x1="125"
-              x2="975"
-              y1={7 + i * 11}
-              y2={7 + i * 11}
-              stroke="currentColor"
-              opacity=".08"
-            />
-          </g>
-        ))}
-        {segments.map((s) => {
-          const i = lines.indexOf(
-            s.kind === "road" ? (s.key as (typeof ROAD_ITEM_KEYS)[number]) : s.kind,
-          );
-          return (
-            <rect
-              key={s.id}
-              x={x(s.from)}
-              y={2 + i * 11}
-              width={Math.max(3, x(s.to) - x(s.from))}
-              height="9"
-              fill={DASHBOARD_STATUS_COLORS[s.status]}
-            >
-              <title>
-                {s.structureId}: {fmt(s.pct)}% / {fmt(s.planned)}%
-              </title>
-            </rect>
-          );
-        })}
-        {[0, 0.25, 0.5, 0.75, 1].map((f) => (
-          <text
-            key={f}
-            x={125 + 850 * f}
-            y="115"
-            textAnchor={f === 1 ? "end" : "start"}
-            fontSize="9"
-            fill="currentColor"
+            </span>
+          ))}
+        </div>
+        <div className="dashboard-chainage-track">
+          <svg
+            viewBox="0 0 1000 96"
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={t("progress.v2.dashboard.chainage")}
+            style={{ touchAction: "none" }}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+              const p = fromPointer(e.clientX, e.currentTarget);
+              setDrag([p, p]);
+            }}
+            onPointerMove={(e) => {
+              if (drag) setDrag([drag[0], fromPointer(e.clientX, e.currentTarget)]);
+            }}
+            onPointerUp={(e) => {
+              if (drag) {
+                onBrush(dashboardBrush(extent, drag[0], fromPointer(e.clientX, e.currentTarget)));
+                setDrag(null);
+              }
+            }}
+            onPointerCancel={() => setDrag(null)}
           >
-            {fmt((extent[0] + (extent[1] - extent[0]) * f) / 1000)} km
-          </text>
-        ))}
-        {selection ? (
-          <rect
-            x={x(selection[0])}
-            y="0"
-            width={Math.max(2, x(selection[1]) - x(selection[0]))}
-            height="100"
-            fill="#176b4a"
-            fillOpacity=".15"
-            stroke="#176b4a"
-            pointerEvents="none"
-          />
-        ) : null}
-      </svg>
+            {lines.map((key, i) => (
+              <line
+                key={key}
+                x1="0"
+                x2="1000"
+                y1={6 + i * 12}
+                y2={6 + i * 12}
+                stroke="currentColor"
+                opacity=".08"
+              />
+            ))}
+            {segments.map((s) => {
+              const i = lines.indexOf(
+                s.kind === "road" ? (s.key as (typeof ROAD_ITEM_KEYS)[number]) : s.kind,
+              );
+              return (
+                <rect
+                  key={s.id}
+                  x={x(s.from)}
+                  y={1 + i * 12}
+                  width={Math.max(3, x(s.to) - x(s.from))}
+                  height="10"
+                  fill={DASHBOARD_STATUS_COLORS[s.status]}
+                >
+                  <title>
+                    {s.structureId}: {fmt(s.pct)}% / {fmt(s.planned)}%
+                  </title>
+                </rect>
+              );
+            })}
+            {selection ? (
+              <rect
+                x={x(selection[0])}
+                y="0"
+                width={Math.max(2, x(selection[1]) - x(selection[0]))}
+                height="96"
+                fill="#176b4a"
+                fillOpacity=".15"
+                stroke="#176b4a"
+                pointerEvents="none"
+              />
+            ) : null}
+          </svg>
+          <div className="dashboard-chainage-ticks">
+            {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+              <span key={f}>{fmt((extent[0] + (extent[1] - extent[0]) * f) / 1000)} km</span>
+            ))}
+          </div>
+        </div>
+      </div>
       <div className="dashboard-station-sliders">
         {([0, 1] as const).map((end) => (
           <label key={end}>
@@ -417,9 +417,11 @@ export function HistoryCurve({
 export function GroupedAlerts({
   groups,
   onSelect,
+  onOpen,
 }: {
   groups: ReturnType<typeof dashboardAlertGroups>;
   onSelect: (id: string, key?: ProgressV2ItemKey) => void;
+  onOpen: (target: ProgressFeatureTarget) => void;
 }) {
   const { t } = useTranslation(),
     fmt = usePercentFormat();
@@ -452,26 +454,26 @@ export function GroupedAlerts({
                   ) : null}
                 </button>
               </span>
+              <OpenAlert target={dashboardAlertTarget(g.structure, g.worst)} onOpen={onOpen} />
               <b>{g.entries.length}</b>
             </summary>
             <div className="dashboard-alert-entries">
               {g.entries.map((e) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => onSelect(g.structure.id, e.itemKey)}
-                >
-                  {e.alert
-                    ? alertText(t, e.alert, fmt)
-                    : e.itemKey
-                      ? t(`progress.v2.items.${e.itemKey}`)
-                      : ""}
-                  <span>
-                    {e.itemKey
-                      ? `${fmt(e.actual)}% / ${fmt(e.planned)}% · ${fmt(e.deviation)}%`
-                      : ""}
-                  </span>
-                </button>
+                <div key={e.id} className="dashboard-alert-entry">
+                  <button type="button" onClick={() => onSelect(g.structure.id, e.itemKey)}>
+                    {e.alert
+                      ? alertText(t, e.alert, fmt)
+                      : e.itemKey
+                        ? t(`progress.v2.items.${e.itemKey}`)
+                        : ""}
+                    <span>
+                      {e.itemKey
+                        ? `${fmt(e.actual)}% / ${fmt(e.planned)}% · ${fmt(e.deviation)}%`
+                        : ""}
+                    </span>
+                  </button>
+                  <OpenAlert target={dashboardAlertTarget(g.structure, e)} onOpen={onOpen} />
+                </div>
               ))}
             </div>
           </details>
@@ -481,4 +483,28 @@ export function GroupedAlerts({
       )}
     </div>
   );
+}
+
+function OpenAlert({
+  target,
+  onOpen,
+}: {
+  target: ProgressFeatureTarget | undefined;
+  onOpen: (target: ProgressFeatureTarget) => void;
+}) {
+  const { t } = useTranslation();
+  return target ? (
+    <button
+      type="button"
+      className="dashboard-open-component"
+      aria-label={t("progress.v2.dashboard.openComponent", { name: target.id })}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen(target);
+      }}
+    >
+      {t("progress.v2.dashboard.openComponent", { name: target.id })}
+    </button>
+  ) : null;
 }

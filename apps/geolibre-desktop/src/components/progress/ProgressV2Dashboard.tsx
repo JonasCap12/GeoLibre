@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import {
   dashboardRows,
+  dashboardGroups,
   filterDashboardRows,
   reconcileDashboardFilters,
   summarizeDashboardRows,
@@ -51,6 +52,7 @@ export function ProgressV2Dashboard({
   packageId,
   throughDate,
   onPackage,
+  onOpen,
   onFit,
   camera,
 }: {
@@ -98,6 +100,7 @@ export function ProgressV2Dashboard({
   );
   const matrix = useMemo(() => dashboardMatrix(state, contextRows), [state, contextRows]);
   const summary = useMemo(() => summarizeDashboardRows(state, rows), [state, rows]);
+  const packages = useMemo(() => dashboardGroups(state, rows, "package"), [state, rows]);
   const schedule = useMemo(
     () => dashboardSchedule(state, packageId, throughDate || undefined),
     [state, packageId, throughDate],
@@ -118,6 +121,24 @@ export function ProgressV2Dashboard({
     () => dashboardMapView(features ?? [], state, rows, mode),
     [features, state, rows, mode],
   );
+  const focus = useMemo(() => {
+    const filtered =
+      packageId ||
+      filters.packageIds?.length ||
+      filters.structureIds?.length ||
+      filters.bridgeIds.length ||
+      filters.kinds.length ||
+      filters.items.length ||
+      filters.statuses.length ||
+      filters.girderTypes.length ||
+      filters.station;
+    if (filtered || !matrix.length) return null;
+    const first = matrix[0];
+    return {
+      name: first.name,
+      indexes: dashboardMapView(features ?? [], state, first.rows, mode).indexes,
+    };
+  }, [packageId, filters, matrix, features, state, mode]);
   const availableStructures = useMemo(() => dashboardMatrix(state, allRows), [state, allRows]);
   const girderTypes = useMemo(
     () => [...new Set(allRows.flatMap((r) => (r.girderType ? [r.girderType] : [])))].sort(),
@@ -369,7 +390,14 @@ export function ProgressV2Dashboard({
         />
         <Kpi
           label={t("progress.v2.dashboard.spi")}
-          value={planned > 0 ? num(actual / planned) : "—"}
+          value={
+            planned > 0
+              ? new Intl.NumberFormat(i18n.language, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                }).format(actual / planned)
+              : "—"
+          }
         />
         <Kpi
           label={t("progress.v2.dashboard.forecast")}
@@ -393,6 +421,7 @@ export function ProgressV2Dashboard({
           layer={layer}
           camera={camera}
           view={view}
+          focus={focus}
           mode={mode}
           onMode={setMode}
           onFit={onFit}
@@ -424,10 +453,23 @@ export function ProgressV2Dashboard({
           <p className="dashboard-history-note">{t("progress.v2.dashboard.historyScope")}</p>
         </Card>
         <Card title={t("progress.v2.dashboard.delays")}>
-          <GroupedAlerts groups={alertGroups} onSelect={selectStructure} />
+          <GroupedAlerts groups={alertGroups} onSelect={selectStructure} onOpen={onOpen} />
         </Card>
         <Card title={t("progress.v2.dashboard.itemsChart")}>
           <div className="dashboard-scroll">
+            <section aria-label={t("progress.v2.dashboard.packagesChart")}>
+              <h3>{t("progress.v2.dashboard.packagesChart")}</h3>
+              {packages.map((group) => (
+                <Bars
+                  key={group.id}
+                  name={group.name}
+                  actual={group.overallPct}
+                  planned={group.plannedPct}
+                  active={selectedPackages.includes(group.id)}
+                  onClick={() => togglePackage(group.id)}
+                />
+              ))}
+            </section>
             {summary.items
               .filter((i) => i.applicable)
               .sort((a, b) => a.pct - a.plannedPct - (b.pct - b.plannedPct))

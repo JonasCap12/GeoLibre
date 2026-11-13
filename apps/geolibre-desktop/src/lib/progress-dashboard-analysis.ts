@@ -95,6 +95,19 @@ export interface DashboardAlertEntry {
   deviation: number;
   alert?: ProgressAlert;
 }
+
+/** Open a real component of this item, respecting support/span-specific alerts. */
+export function dashboardAlertTarget(structure: DashboardStructure, entry: DashboardAlertEntry) {
+  const candidates = entry.alert ? dashboardAlertRows(structure.rows, entry.alert) : structure.rows;
+  const matching = entry.itemKey
+    ? candidates.filter((row) => row.key === entry.itemKey)
+    : candidates;
+  const rows = matching.length ? matching : candidates;
+  return rows.reduce<DashboardRow | undefined>(
+    (worst, row) => (!worst || row.pct - row.planned < worst.pct - worst.planned ? row : worst),
+    undefined,
+  )?.target;
+}
 export function dashboardAlertGroups(
   state: ProgressV2,
   rows: readonly DashboardRow[],
