@@ -1117,9 +1117,17 @@ export function migrateProgressV1(
         lien: featureText(parts[0], "lien"),
         bmc: percent(/bmc|bản mặt cầu/i),
         ht: percent(/lan can|hoàn thiện|hoan thien/i),
+        // A girder missing from the drawing takes its span's type, so the type filter
+        // and the yard never show an empty type.
         girders: Array.from(
           { length: girders.length },
-          (_, index) => girders[index] ?? { t: "", st: 0, dob: "", bed: 0 },
+          (_, index) =>
+            girders[index] ?? {
+              t: girders.find(Boolean)?.t ?? "Super-T 40",
+              st: 0,
+              dob: "",
+              bed: 0,
+            },
         ),
       };
     });

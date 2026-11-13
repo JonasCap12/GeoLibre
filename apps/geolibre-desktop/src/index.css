@@ -6255,7 +6255,8 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
 }
 @media (max-width: 899px) {
   :root[data-progress-dashboard] {
-    --progress-header-h: 6rem;
+    /* Title, then package select + buttons, then the reporting week. */
+    --progress-header-h: 8.25rem;
   }
   :root[data-progress-dashboard] .progress-screen-header {
     flex-wrap: wrap;
@@ -6267,9 +6268,6 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   }
   :root[data-progress-dashboard] .progress-screen-header > div:not(:first-child) {
     display: none;
-  }
-  :root[data-progress-dashboard] .progress-screen-header select {
-    width: 7rem;
   }
   :root[data-progress-dashboard] main.isolate {
     inset-inline: 0;
@@ -6337,24 +6335,19 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   height: 2rem;
   font-size: 0.75rem;
 }
+/* Same specificity as the `div:not(:first-child)` hide rule above, so these come after it. */
 @media (max-width: 899px) {
+  /* The package select takes what the buttons leave, so "Whole project" is not cut. */
   :root[data-progress-dashboard] .progress-screen-header > div.relative {
     display: block;
-    width: 6.5rem;
+    flex: 1 1 0;
+    min-width: 0;
   }
   :root[data-progress-dashboard] .progress-screen-header > div.relative select {
     width: 100%;
   }
-}
-
-@media (max-width: 899px) {
-  :root[data-progress-dashboard] {
-    --progress-header-h: 8.25rem;
-  }
   :root[data-progress-dashboard] .progress-screen-header > div.progress-dashboard-reporting-week {
     order: 1;
     flex-basis: 100%;
-    width: 100%;
-    min-width: 0;
   }
 }
