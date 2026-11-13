@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, i18n, render, screen, useAppStore, within } from "./helpers/dom";
+﻿import { act, fireEvent, i18n, render, screen, waitFor, useAppStore, within } from "./helpers/dom";
 import assert from "node:assert/strict";
 import { afterEach, it } from "node:test";
 import { createElement } from "react";
@@ -135,7 +135,7 @@ function current() {
 }
 afterEach(() => closeProgressScreen());
 
-it("opens dashboard, cross-filters charts and map, zooms alerts, and restores the editing view", () => {
+it("opens dashboard, cross-filters charts and map, zooms alerts, and restores the editing view", async () => {
   const { fits, layer, unmount } = mount();
   clearHistory();
   fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
@@ -143,6 +143,7 @@ it("opens dashboard, cross-filters charts and map, zooms alerts, and restores th
   assert.ok(current().progressDashboard);
   assert.equal(useAppStore.getState().isDirty, false);
   const filters = screen.getByText("Filters").closest("aside")!;
+  fireEvent.click(within(filters).getByText("Structure type"));
   fireEvent.click(within(filters).getByRole("checkbox", { name: "Road" }));
   assert.ok(JSON.stringify(current().progressDashboard!.filter).includes("[1]"));
   assert.ok(!JSON.stringify(current().progressDashboard!.filter).includes("[0]"));
@@ -157,6 +158,7 @@ it("opens dashboard, cross-filters charts and map, zooms alerts, and restores th
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   const itemsChart = screen.getByText("Work items · largest delays first").closest("section")!;
   fireEvent.click(within(itemsChart).getByRole("button", { name: /Piles/ }));
+  fireEvent.click(within(filters).getByText("Work items"));
   assert.equal(
     within(filters).getByRole("checkbox", { name: "Piles" }).getAttribute("type"),
     "checkbox",
@@ -165,7 +167,7 @@ it("opens dashboard, cross-filters charts and map, zooms alerts, and restores th
   const delays = screen.getByText("Largest delays and alerts").closest("section")!;
   const before = fits.length;
   fireEvent.click(within(delays).getAllByRole("button")[0]);
-  assert.ok(fits.length > before);
+  await waitFor(() => assert.ok(fits.length > before));
   fireEvent.click(screen.getByRole("button", { name: "Edit progress" }));
   assert.equal(document.documentElement.hasAttribute("data-progress-dashboard"), false);
   assert.equal(current().progressDashboard, undefined);
@@ -266,8 +268,9 @@ it("clears bridge and station selections that belong to the previous package", (
   const packages = screen.getByRole("combobox", { name: "Package" });
   fireEvent.change(packages, { target: { value: "p" } });
   const filters = screen.getByText("Filters").closest("aside")!;
+  fireEvent.click(within(filters).getByText("Structure / section"));
   fireEvent.click(within(filters).getByRole("checkbox", { name: "Bridge A" }));
-  fireEvent.change(within(filters).getByRole("slider", { name: "To" }), {
+  fireEvent.change(screen.getByRole("slider", { name: "To" }), {
     target: { value: "200" },
   });
   fireEvent.change(packages, { target: { value: "p2" } });
@@ -277,4 +280,28 @@ it("clears bridge and station selections that belong to the previous package", (
     false,
   );
   assert.equal(screen.queryByText("No components match these filters."), null);
+});
+
+it("exports the current week through the dashboard download button", async () => {
+  mount();
+  const urls: string[] = [];
+  const originalCreate = URL.createObjectURL,
+    originalRevoke = URL.revokeObjectURL;
+  const originalClick = HTMLAnchorElement.prototype.click;
+  URL.createObjectURL = () => "blob:weekly-report";
+  URL.revokeObjectURL = () => {};
+  HTMLAnchorElement.prototype.click = function () {
+    urls.push(this.download);
+  };
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export week (.xlsx)" }));
+    await waitFor(() => assert.equal(urls.length, 1), { timeout: 10000 });
+    assert.equal(urls[0], "progress-all-2020-01-01.xlsx");
+    assert.equal(screen.queryByRole("alert"), null);
+  } finally {
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+    HTMLAnchorElement.prototype.click = originalClick;
+  }
 });
