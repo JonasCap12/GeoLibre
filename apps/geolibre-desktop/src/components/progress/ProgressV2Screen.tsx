@@ -129,9 +129,10 @@ export function ProgressV2Screen({
       );
       const next = index >= 0 ? progressFeatureTarget(current[index]) : null;
       if (!next) return;
-      setTarget(next);
+      setTarget(next.kind === "approach" ? null : next);
       if ("bridgeId" in next) setBridgeId(next.bridgeId);
-      setTab("update");
+      // Approaches use the bridge's span finishing values, without a separate editor.
+      setTab(next.kind === "approach" ? "overview" : "update");
     });
     return () => {
       unsubscribe();
@@ -141,9 +142,9 @@ export function ProgressV2Screen({
   }, [layer.id]);
 
   const openTarget = (next: ProgressFeatureTarget) => {
-    setTarget(next);
+    setTarget(next.kind === "approach" ? null : next);
     if ("bridgeId" in next) setBridgeId(next.bridgeId);
-    setTab("update");
+    setTab(next.kind === "approach" ? "overview" : "update");
     const indexes: number[] = [];
     features.forEach((feature, index) => {
       const found = progressFeatureTarget(feature);
@@ -195,7 +196,7 @@ export function ProgressV2Screen({
         {dashboard ? (
           <Select
             aria-label={t("progress.v2.dashboard.week")}
-            className="h-8 w-32 border-white/20 bg-header text-xs text-header-foreground"
+            className="progress-dashboard-reporting-week h-8 w-32 border-white/20 bg-header text-xs text-header-foreground"
             value={throughDate}
             onChange={(event) => setThroughDate(event.target.value)}
           >

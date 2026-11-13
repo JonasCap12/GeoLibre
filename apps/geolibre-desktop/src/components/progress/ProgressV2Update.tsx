@@ -23,7 +23,7 @@ export function ProgressV2Update({
   onChange: (state: ProgressV2) => void;
 }) {
   const { t } = useTranslation();
-  if (!target)
+  if (!target || target.kind === "approach")
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         {t("progress.v2.pickComponent")}

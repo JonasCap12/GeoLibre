@@ -296,7 +296,12 @@ export function ItemsBlock({
           <p className="text-xs text-muted-foreground">{t("progress.itemsEmpty")}</p>
         ) : null}
         {items.slice(0, shown).map((entry) => (
-          <ItemRow key={entry.item.key} entry={entry} onSelect={() => selectItem(entry)} />
+          <ItemRow
+            key={entry.item.key}
+            entry={entry}
+            fmt={fmt}
+            onSelect={() => selectItem(entry)}
+          />
         ))}
         {hidden > 0 ? (
           // The items that did not fit stay one click away, in a menu.
@@ -326,9 +331,16 @@ export function ItemsBlock({
   );
 }
 
-function ItemRow({ entry, onSelect }: { entry: ItemProgress; onSelect: () => void }) {
+function ItemRow({
+  entry,
+  onSelect,
+  fmt,
+}: {
+  entry: ItemProgress;
+  onSelect: () => void;
+  fmt: (value: number) => string;
+}) {
   const { t } = useTranslation();
-  const fmt = usePercentFormat();
   const { item, pct } = entry;
   const behind = pct + 0.05 < item.plannedPct;
   return (

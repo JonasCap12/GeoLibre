@@ -21,9 +21,7 @@ import {
   PROGRESS_V2_COLORS,
   progressFeatureTarget,
   progressFeatureItems,
-  propertyIndex,
-  propertyText,
-  fold,
+  progressFeatureLink,
   stateColors,
   type ProgressFeatureTarget,
 } from "./progress-colors";
@@ -220,7 +218,9 @@ export function reconcileDashboardFilters(
         end = Math.min(station[1], extent[1]);
       if (
         end > start ||
-        (end === start && rows.some((row) => row.kind !== "road" && row.from === start))
+        (end === start &&
+          filterDashboardRows(rows, { ...filters, bridgeIds, girderTypes, station: [start, end] })
+            .length > 0)
       ) {
         if (start !== station[0] || end !== station[1]) station = [start, end];
       } else station = null;
@@ -541,19 +541,21 @@ export function dashboardMapView(
     }
   }
   features.forEach((feature, index) => {
+    const link = progressFeatureLink(feature);
     const target = progressFeatureTarget(feature);
-    const approach =
-      !target && ["ht", "approach"].includes(fold(String(feature.properties?.progress_item ?? "")));
+    const approach = link?.kind === "approach";
     if (!target && !approach) return;
     const keys = progressFeatureItems(feature);
-    const candidates = target
-      ? (byTarget.get(targetKey(target)) ?? [])
-      : (byApproach.get(propertyText(feature, "bridge_id")) ?? []);
+    const candidates = approach
+      ? (byApproach.get(link.bridgeId) ?? [])
+      : target
+        ? (byTarget.get(targetKey(target)) ?? [])
+        : [];
     const matched = candidates.filter(
       (row) =>
         (!keys.length || keys.includes(row.key)) &&
         (row.index === undefined ||
-          propertyIndex(feature, row.key === "coc" ? "pile_index" : "girder_index") === row.index),
+          (row.key === "coc" ? link?.pileIndex : link?.girderIndex) === row.index),
     );
     if (!matched.length) return;
     indexes.push(index);
