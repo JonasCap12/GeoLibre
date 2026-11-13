@@ -11255,7 +11255,6 @@
           "onBed": "Trên bệ",
           "ready": "Sẵn sàng lao",
           "erected": "Đã lao",
-          "remaining": "Chưa làm",
           "notStarted": "Chưa làm"
         },
         "statusChart": "Cấu kiện theo trạng thái",

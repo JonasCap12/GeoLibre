@@ -40,6 +40,7 @@ import {
   serializeProject,
   progressDashboardLayer,
   progressDashboardFeature,
+  resolveRenderedFeature,
   PROGRESS_DASHBOARD_INDEX_PROPERTY,
   compileFeatureExpression,
   useAppStore,
@@ -310,12 +311,15 @@ it("uses existing feature aliases, preserves IDs and matches map colors to statu
   const view = dashboardMapView(features, state, rows, "status");
   assert.deepEqual(view.indexes, [0]);
   assert.deepEqual(view.filter, [
-    "in",
+    "match",
     ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY],
-    ["literal", [0]],
+    [0],
+    true,
+    false,
   ]);
   assert.ok(view.colorExpression.includes(DASHBOARD_STATUS_COLORS.wip));
   assert.deepEqual(dashboardMapView(features, state, [], "status").indexes, []);
+  assert.equal(dashboardMapView(features, state, [], "status").filter, false);
   assert.ok(dashboardMapView(features, state, dashboardRows(state), "deviation").colorExpression);
   assert.ok(dashboardMapView(features, state, dashboardRows(state), "girder").colorExpression);
   assert.deepEqual(progressFeatureItems(features[0]), ["coc"]);
@@ -483,7 +487,82 @@ it("drops stale bridges and clamps or clears station ranges for the new package"
   assert.deepEqual(overlap.station, [1000, 2500]);
   assert.equal(reconcileDashboardFilters(overlap, rows), overlap);
   assert.equal(reconcileDashboardFilters(filters, []).station, null);
-  assert.equal(reconcileDashboardFilters({ ...filters, station: [0, 1000] }, rows).station, null);
+  assert.deepEqual(
+    reconcileDashboardFilters({ ...filters, station: [0, 1000] }, rows).station,
+    [1000, 1000],
+  );
+});
+
+it("drops unavailable girder types when switching packages and keeps shared types", () => {
+  const state = fixture();
+  const filters = { ...EMPTY_DASHBOARD_FILTERS, girderTypes: ["A", "I33"] };
+  const first = reconcileDashboardFilters(filters, dashboardRows(state, "p1"));
+  assert.deepEqual(first.girderTypes, ["A"]);
+  assert.equal(reconcileDashboardFilters(first, dashboardRows(state, "p1")), first);
+  const rows = dashboardRows(state, "p2");
+  const second = reconcileDashboardFilters(first, rows);
+  assert.deepEqual(second.girderTypes, []);
+  assert.ok(filterDashboardRows(rows, second).some((row) => row.kind === "road"));
+  assert.ok(filterDashboardRows(rows, second).some((row) => row.kind === "underpass"));
+});
+
+it("keeps a station range touching the package boundary and selects its bridge", () => {
+  const state = fixture();
+  state.bridges[0].station = 1000;
+  const rows = dashboardRows(state, "p2");
+  const filters = reconcileDashboardFilters(
+    { ...EMPTY_DASHBOARD_FILTERS, station: [0, 1000] },
+    rows,
+  );
+  assert.deepEqual(filters.station, [1000, 1000]);
+  assert.ok(filterDashboardRows(rows, filters).length > 0);
+  assert.ok(filterDashboardRows(rows, filters).every((row) => row.bridgeId === "b"));
+  const last = reconcileDashboardFilters(
+    { ...EMPTY_DASHBOARD_FILTERS, station: [3000, 4000] },
+    rows,
+  );
+  assert.deepEqual(last.station, [3000, 3000]);
+});
+
+it("matches numeric bridge IDs on approach features just like the normal map", () => {
+  const state = fixture();
+  state.bridges[0].id = "7";
+  const features = [feature({ bridge_id: 7, progress_item: "HT" })];
+  const view = dashboardMapView(features, state, dashboardRows(state), "girder");
+  assert.deepEqual(view.indexes, [0]);
+  const rendered = progressDashboardLayer(
+    geojsonLayer({ geojson: { type: "FeatureCollection", features }, progressDashboard: view }),
+  );
+  const filter = compileFeatureExpression(JSON.stringify(view.filter), { expectedType: "boolean" });
+  assert.equal(filter.ok, true);
+  assert.equal(filter.evaluate!(rendered.geojson!.features[0]), true);
+});
+
+it("resolves rendered hits without changing ordinary features or authored IDs", () => {
+  const originals = [feature({ name: "original" }, "1A3F"), feature({}, 42), feature({})];
+  const layer = geojsonLayer({
+    geojson: { type: "FeatureCollection", features: originals },
+    progressDashboard: { filter: false, colorExpression: '"#fff"' },
+  });
+  layer.style.pointRenderer = "cluster";
+  const rendered = progressDashboardLayer(layer);
+  assert.equal(rendered.style.pointRenderer, "single");
+  assert.equal(layer.style.pointRenderer, "cluster");
+  assert.deepEqual(rendered.embedFilter, ["literal", false]);
+  rendered.geojson!.features.forEach((hit, index) => {
+    const resolved = resolveRenderedFeature(layer, hit);
+    assert.equal(resolved.feature, originals[index]);
+    assert.equal(resolved.properties, originals[index].properties);
+    assert.equal(resolved.featureIndex, index);
+  });
+  const ordinary = feature({ name: "rendered" }, 12);
+  for (const owner of [undefined, { ...layer, progressDashboard: undefined }, layer]) {
+    const resolved = resolveRenderedFeature(owner, ordinary);
+    assert.equal(resolved.feature, ordinary);
+    assert.equal(resolved.properties, ordinary.properties);
+    assert.equal(resolved.featureIndex, null);
+  }
+  assert.deepEqual(resolveRenderedFeature(undefined, { properties: null }).properties, {});
 });
 
 it("closing a dashboard does not push history or discard an existing redo entry", () => {

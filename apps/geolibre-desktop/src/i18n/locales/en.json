@@ -11490,7 +11490,6 @@
           "onBed": "On bed",
           "ready": "Ready",
           "erected": "Erected",
-          "remaining": "Not started",
           "notStarted": "Not started"
         },
         "statusChart": "Components by status",

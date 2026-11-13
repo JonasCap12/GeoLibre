@@ -240,6 +240,23 @@ function geomBbox(geometry: unknown): [number, number, number, number] {
 }
 
 describe("dedupeViewportFeatures", () => {
+  it("drops internal properties from single and merged view-import features", () => {
+    const properties = {
+      name: "kept",
+      __geolibre_progress_index: 3,
+      __geolibre_other: true,
+      __gm_shape: "circle_marker",
+    };
+    const single = { ...point(106, 10, properties), id: 42 };
+    const duplicate = { ...point(106, 10, properties), id: 42 };
+    for (const input of [[single], [single, duplicate]]) {
+      const imported = dedupeViewportFeatures(input, WORLD);
+      assert.deepEqual(imported[0].properties, { name: "kept" });
+      const exported = buildFullExport(tagViewFeaturesForImport(imported).collection).collection;
+      assert.deepEqual(exported.features[0].properties, { name: "kept" });
+    }
+    assert.equal(properties.__geolibre_progress_index, 3);
+  });
   it("drops out-of-view features and reassembles tile-clipped pieces of one id", () => {
     // Two clipped pieces of the same feature that together span [0,0]-[2,2];
     // neither piece alone reaches x=2, so keeping one would cut the feature off.
