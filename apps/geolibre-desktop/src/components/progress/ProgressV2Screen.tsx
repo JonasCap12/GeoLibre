@@ -90,7 +90,7 @@ export function ProgressV2Screen({
     layerId: string;
   } | null>(null);
   useEffect(() => {
-    if (!camera) return;
+    if (!camera || dashboard) return;
     if (
       lastFit.current?.packageId === activePackageId &&
       lastFit.current?.camera === camera &&
@@ -106,7 +106,7 @@ export function ProgressV2Screen({
       !bridgesInPackage(config, activePackageId).some((bridge) => bridge.id === bridgeId)
     )
       setBridgeId(first.id);
-  }, [activePackageId, bridgeId, camera, config, features, fitIndexes, layer.id]);
+  }, [activePackageId, bridgeId, camera, config, features, fitIndexes, layer.id, dashboard]);
 
   // Every save rebuilds the drawing's features, so the selection reads them
   // through a ref: re-arming on each edit would clear the user's selection and
@@ -248,8 +248,12 @@ export function ProgressV2Screen({
           packageId={activePackageId}
           throughDate={throughDate}
           onPackage={setPackageId}
-          onOpen={openTarget}
+          onOpen={(target) => {
+            setDashboard(false);
+            openTarget(target);
+          }}
           onFit={fitIndexes}
+          camera={camera}
         />
       ) : (
         <>

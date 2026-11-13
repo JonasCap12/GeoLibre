@@ -6190,72 +6190,503 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
     inset-block-end: var(--progress-strip-h);
   }
 }
-/* The progress dashboard owns three columns and a chart band around the live map. */
-:root[data-progress-dashboard] {
-  --dashboard-filters-w: clamp(11rem, 15vw, 15rem);
-  --dashboard-metrics-w: clamp(12rem, 17vw, 17rem);
-  --dashboard-charts-h: clamp(15rem, 35dvh, 24rem);
-}
+/* The dashboard frames the native map in its measured grid slot. */
 :root[data-progress-dashboard] main.isolate {
-  inset-inline: var(--dashboard-filters-w) var(--dashboard-metrics-w);
-  inset-block: var(--progress-header-h) var(--dashboard-charts-h);
-}
-.progress-dashboard-panels {
-  position: fixed;
-  z-index: 41;
-  inset: var(--progress-header-h) 0 0;
-  pointer-events: none;
-}
-.progress-dashboard-filters,
-.progress-dashboard-metrics {
-  position: absolute;
-  inset-block: 0 var(--dashboard-charts-h);
-  overflow-y: auto;
-  pointer-events: auto;
-}
-.progress-dashboard-filters {
-  inset-inline-start: 0;
-  width: var(--dashboard-filters-w);
-  border-inline-end-width: 1px;
-}
-.progress-dashboard-metrics {
-  inset-inline-end: 0;
-  width: var(--dashboard-metrics-w);
-  border-inline-start-width: 1px;
-}
-.progress-dashboard-map-toolbar {
-  position: absolute;
-  inset-block-start: 0.5rem;
-  inset-inline: calc(var(--dashboard-filters-w) + 0.5rem) calc(var(--dashboard-metrics-w) + 0.5rem);
-  pointer-events: auto;
-}
-.progress-dashboard-charts {
-  position: absolute;
-  inset-block-end: 0;
-  inset-inline: 0;
-  height: var(--dashboard-charts-h);
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0.5rem;
-  pointer-events: auto;
-  border-block-start-width: 1px;
+  left: var(--dashboard-map-left, 0px);
+  top: var(--dashboard-map-top, 220px);
+  width: var(--dashboard-map-w, 45vw);
+  height: var(--dashboard-map-h, 35vh);
+  right: auto;
+  bottom: auto;
+  clip-path: inset(max(0px, calc(var(--progress-header-h) - var(--dashboard-map-top, 220px))) 0 0);
 }
 :root[data-progress-dashboard] .progress-screen-header {
   z-index: 42;
 }
-@media (min-width: 900px) and (max-width: 1399px) {
-  .progress-dashboard-charts {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    overflow-y: auto;
+.progress-dashboard-panels.dashboard-v2 {
+  position: fixed;
+  z-index: 41;
+  inset: var(--progress-header-h) 0 0;
+  display: grid;
+  grid-template-rows: auto 68px minmax(260px, 1.35fr) 160px minmax(205px, 1fr);
+  gap: 8px;
+  padding: 8px;
+  background: transparent;
+  pointer-events: none;
+  overflow: hidden;
+  font-size: 11px;
+}
+.dashboard-card {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--background));
+  pointer-events: auto;
+}
+.dashboard-card h2 {
+  font-size: 12px;
+  font-weight: 700;
+}
+.dashboard-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-block-end: 1px solid hsl(var(--border));
+}
+.dashboard-card-heading > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+}
+.dashboard-filters {
+  padding: 6px 8px;
+  z-index: 5;
+}
+.dashboard-filter-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dashboard-filter-controls > button,
+.dashboard-select summary,
+.dashboard-map-tools button,
+.dashboard-map-tools select,
+.dashboard-package-label select {
+  border: 1px solid hsl(var(--border));
+  border-radius: 4px;
+  padding: 5px 7px;
+  background: hsl(var(--background));
+  font-size: 11px;
+}
+.dashboard-filter-controls > button:hover,
+.dashboard-card button:hover {
+  filter: brightness(0.95);
+}
+.dashboard-filter-controls > button:disabled {
+  opacity: 0.5;
+}
+.dashboard-select {
+  position: relative;
+}
+.dashboard-select summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+.dashboard-select summary b {
+  margin-inline-start: 7px;
+  color: hsl(var(--primary));
+}
+.dashboard-select[open] summary {
+  border-color: hsl(var(--primary));
+}
+.dashboard-select-options {
+  position: absolute;
+  inset-block-start: calc(100% + 5px);
+  inset-inline-start: 0;
+  z-index: 60;
+  width: 260px;
+  max-width: calc(100vw - 28px);
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--background));
+  box-shadow: 0 5px 18px #0002;
+}
+.dashboard-select-options label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px;
+}
+.dashboard-select-options input {
+  accent-color: hsl(var(--primary));
+}
+.dashboard-package-label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.dashboard-package-label select {
+  max-width: 130px;
+}
+.dashboard-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.dashboard-filter-chips:not(:empty) {
+  padding-block-start: 5px;
+}
+.dashboard-filter-chips button {
+  border-radius: 12px;
+  padding: 2px 8px;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+}
+.dashboard-kpis {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+.dashboard-kpi {
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.dashboard-kpi > span {
+  font-size: 10px;
+  color: hsl(var(--muted-foreground));
+}
+.dashboard-kpi strong {
+  font-size: clamp(15px, 1.6vw, 25px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.dashboard-behind {
+  color: #c43131;
+}
+.dashboard-ahead {
+  color: #19724a;
+}
+.dark .dashboard-behind {
+  color: #ff9b91;
+}
+.dark .dashboard-ahead {
+  color: #7cdda4;
+}
+.dashboard-main-row {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 8px;
+}
+.dashboard-map-slot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+}
+.dashboard-map-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  position: absolute;
+  inset-block-start: 7px;
+  inset-inline: 7px;
+  padding: 5px;
+  background: hsl(var(--background));
+  border-radius: 4px;
+  pointer-events: auto;
+}
+.dashboard-map-tools label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.dashboard-map-tools select {
+  max-width: 120px;
+}
+.dashboard-map-viewing {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+.dashboard-matrix {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dashboard-matrix-scroll {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.dashboard-group-heading {
+  position: sticky;
+  inset-inline-start: 0;
+  width: 100%;
+  padding: 4px 8px;
+  background: hsl(var(--muted));
+  text-align: start;
+  font-weight: 700;
+}
+.dashboard-matrix table {
+  border-collapse: separate;
+  border-spacing: 2px;
+  width: 100%;
+  table-layout: fixed;
+  font-size: 10px;
+}
+.dashboard-matrix thead th {
+  font-size: 9px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.dashboard-matrix th:first-child {
+  width: 29%;
+  text-align: start;
+}
+.dashboard-matrix th:last-child {
+  width: 12%;
+}
+.dashboard-matrix tbody th {
+  font-weight: 500;
+  padding-inline: 5px;
+}
+.dashboard-matrix tbody th button {
+  width: 100%;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.dashboard-matrix td {
+  text-align: center;
+}
+.dashboard-matrix td button {
+  width: 100%;
+  padding: 5px 1px;
+  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-matrix td button[aria-pressed="true"],
+.dashboard-matrix tr[aria-selected="true"] th {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: -2px;
+}
+.dashboard-matrix td small {
+  display: block;
+  font-size: 9px;
+}
+.dashboard-chainage {
+  padding-block-end: 4px;
+}
+.dashboard-chainage svg {
+  display: block;
+  width: 100%;
+  height: 96px;
+  cursor: crosshair;
+}
+.dashboard-chainage-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px;
+  padding-inline: 10px;
+}
+.dashboard-chainage-labels {
+  display: grid;
+  grid-template-rows: repeat(8, 12px);
+  font-size: 10px;
+  line-height: 12px;
+}
+.dashboard-chainage-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-station-sliders {
+  display: flex;
+  gap: 16px;
+  padding-inline: 10px;
+}
+.dashboard-station-sliders label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.dashboard-station-sliders input {
+  width: 100%;
+  min-width: 10px;
+  accent-color: hsl(var(--primary));
+  height: 12px;
+}
+.dashboard-insights {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1.25fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+  gap: 8px;
+}
+.dashboard-insight {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  overflow: hidden;
+}
+.dashboard-insight > h2 {
+  flex-shrink: 0;
+  margin-block-end: 6px;
+}
+.dashboard-scroll,
+.dashboard-alert-groups {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.dashboard-chart-key {
+  display: flex;
+  gap: 12px;
+  font-size: 9px;
+}
+.dashboard-chart-key span:first-child {
+  color: #1f7a47;
+}
+.dashboard-chart-key span:nth-child(2) {
+  color: #7b8ea4;
+}
+.dashboard-s-curve {
+  width: 100%;
+  flex: 1;
+  min-height: 100px;
+}
+.dashboard-history-note {
+  font-size: 9px;
+  color: hsl(var(--muted-foreground));
+}
+.dashboard-alert-groups details {
+  border-block-end: 1px solid hsl(var(--border));
+  padding-block: 4px;
+}
+.dashboard-alert-groups summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+.dashboard-alert-groups summary span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.dashboard-alert-groups summary > span {
+  flex: 1;
+  min-width: 0;
+}
+.dashboard-alert-entry {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.dashboard-open-component {
+  flex-shrink: 0;
+  align-self: center;
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  font-weight: 500;
+  font-size: 10px;
+}
+.dashboard-alert-entry > .dashboard-open-component {
+  width: auto;
+  background: transparent;
+}
+.dashboard-alert-groups summary b {
+  background: #dc454522;
+  padding-inline: 5px;
+  border-radius: 8px;
+}
+.dashboard-worst {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 6px;
+  color: #c43131;
+  padding-block: 4px;
+  text-align: start;
+}
+.dashboard-alert-entries button {
+  display: block;
+  width: 100%;
+  padding: 5px;
+  background: hsl(var(--muted));
+  text-align: start;
+  margin-block: 3px;
+}
+.dashboard-alert-entries span {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-yard {
+  width: 100%;
+  text-align: start;
+  margin-block-end: 7px;
+}
+.dashboard-yard > span {
+  display: block;
+  font-size: 9px;
+}
+.dashboard-yard-stack {
+  display: flex !important;
+  height: 13px;
+  margin-block: 4px;
+  border: 1px solid hsl(var(--border));
+}
+.dashboard-yard-stack span {
+  height: 100%;
+}
+.dashboard-status-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  font-size: 9px;
+}
+.dashboard-status-key i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 4px;
+}
+.dashboard-hover {
+  position: fixed;
+  z-index: 70;
+  max-width: 280px;
+  padding: 10px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  box-shadow: 0 3px 12px #0003;
+  pointer-events: none;
+}
+.dashboard-hover strong,
+.dashboard-hover span,
+.dashboard-hover b {
+  display: block;
+}
+.dashboard-print-map,
+.dashboard-print-note {
+  display: none;
+}
+.dashboard-card,
+.dashboard-map-slot {
+  box-shadow: 0 0 0 8px hsl(var(--muted));
+}
+:root[data-progress-v2] .progress-screen-header select {
+  background-color: hsl(var(--header));
+  color: hsl(var(--header-foreground));
+  border-color: hsl(var(--header-foreground) / 0.2);
+  height: 2rem;
+  font-size: 0.75rem;
+}
+@media (min-width: 900px) {
+  :root[data-progress-dashboard] .progress-screen-header > div.relative {
+    width: auto;
+    flex: 0 0 auto;
   }
-  .progress-dashboard-charts > section {
-    min-height: 13rem;
-    overflow-y: visible;
+  :root[data-progress-dashboard] .progress-screen-header select {
+    width: auto;
   }
 }
 @media (max-width: 899px) {
   :root[data-progress-dashboard] {
-    /* Title, then package select + buttons, then the reporting week. */
     --progress-header-h: 8.25rem;
   }
   :root[data-progress-dashboard] .progress-screen-header {
@@ -6269,75 +6700,6 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   :root[data-progress-dashboard] .progress-screen-header > div:not(:first-child) {
     display: none;
   }
-  :root[data-progress-dashboard] main.isolate {
-    inset-inline: 0;
-    inset-block: var(--dashboard-map-top, 35rem) auto;
-    height: var(--dashboard-map-h, 18rem);
-    clip-path: inset(max(0px, calc(var(--progress-header-h) - var(--dashboard-map-top))) 0 0);
-  }
-  .progress-dashboard-panels {
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior: contain;
-  }
-  .progress-dashboard-filters,
-  .progress-dashboard-metrics,
-  .progress-dashboard-charts,
-  .progress-dashboard-map-toolbar {
-    position: static;
-    width: 100%;
-    height: auto;
-    flex-shrink: 0;
-    overflow: visible;
-    min-width: 0;
-  }
-  .progress-dashboard-metrics {
-    order: 0;
-    border-inline: 0;
-  }
-  .progress-dashboard-metrics > div:first-child {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .progress-dashboard-metrics > section {
-    display: inline-block;
-    width: 100%;
-  }
-  .progress-dashboard-map-toolbar {
-    order: 1;
-    min-height: 23rem;
-    align-content: start;
-    background: transparent;
-    border-inline: 0;
-    pointer-events: none;
-  }
-  .progress-dashboard-map-toolbar > * {
-    pointer-events: auto;
-    background: var(--color-background);
-  }
-  .progress-dashboard-charts {
-    order: 2;
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .progress-dashboard-charts > section {
-    max-height: none;
-  }
-  .progress-dashboard-filters {
-    order: 3;
-    border-inline: 0;
-  }
-}
-:root[data-progress-v2] .progress-screen-header select {
-  background-color: hsl(var(--header));
-  color: hsl(var(--header-foreground));
-  border-color: hsl(var(--header-foreground) / 0.2);
-  height: 2rem;
-  font-size: 0.75rem;
-}
-/* Same specificity as the `div:not(:first-child)` hide rule above, so these come after it. */
-@media (max-width: 899px) {
-  /* The package select takes what the buttons leave, so "Whole project" is not cut. */
   :root[data-progress-dashboard] .progress-screen-header > div.relative {
     display: block;
     flex: 1 1 0;
@@ -6349,5 +6711,261 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   :root[data-progress-dashboard] .progress-screen-header > div.progress-dashboard-reporting-week {
     order: 1;
     flex-basis: 100%;
+  }
+  .progress-dashboard-panels.dashboard-v2 {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .dashboard-kpis {
+    order: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex-shrink: 0;
+  }
+  .dashboard-main-row {
+    display: contents;
+  }
+  .dashboard-map-slot {
+    order: 1;
+    height: 330px;
+    flex-shrink: 0;
+  }
+  .dashboard-matrix {
+    order: 2;
+    min-height: 340px;
+    max-height: 460px;
+    flex-shrink: 0;
+  }
+  .dashboard-chainage {
+    order: 3;
+    min-height: 145px;
+    flex-shrink: 0;
+  }
+  .dashboard-insights {
+    order: 4;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .dashboard-insight {
+    min-height: 230px;
+    max-height: 380px;
+  }
+  .dashboard-history {
+    min-height: 270px;
+  }
+  .dashboard-filters {
+    order: 5;
+    flex-shrink: 0;
+  }
+  .dashboard-kpi strong {
+    font-size: 20px;
+  }
+  .dashboard-matrix table {
+    min-width: 560px;
+  }
+  .dashboard-package-label select {
+    max-width: 180px;
+  }
+}
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 7mm;
+  }
+  body {
+    width: 283mm;
+    height: 195mm;
+    overflow: hidden !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .progress-dashboard-panels.dashboard-v2,
+  .progress-dashboard-panels.dashboard-v2 * {
+    visibility: visible;
+  }
+  :root[data-progress-dashboard] main.isolate,
+  .progress-screen-header {
+    display: none !important;
+  }
+  .progress-dashboard-panels.dashboard-v2 {
+    position: absolute;
+    inset: 0;
+    width: 283mm;
+    height: 195mm;
+    padding: 0;
+    gap: 2mm;
+    grid-template-rows: 0 15mm 95mm 23mm minmax(0, 1fr);
+    display: grid;
+    color: #172d22;
+    font-size: 7px;
+    background: white;
+  }
+  .dashboard-filters,
+  .dashboard-map-tools,
+  .dashboard-hover,
+  .dashboard-station-sliders {
+    display: none;
+  }
+  .dashboard-kpis {
+    grid-row: 2;
+    gap: 2mm;
+  }
+  .dashboard-main-row {
+    grid-row: 3;
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 2mm;
+  }
+  .dashboard-chainage {
+    grid-row: 4;
+  }
+  .dashboard-insights {
+    grid-row: 5;
+    display: grid;
+    grid-template-columns: 1.6fr 1.3fr 1fr 1fr;
+    gap: 2mm;
+  }
+  .dashboard-card {
+    background: white;
+    border-color: #ccc;
+  }
+  .dashboard-kpi strong {
+    font-size: 14px;
+  }
+  .dashboard-kpi > span {
+    font-size: 7px;
+  }
+  .dashboard-kpi {
+    padding: 2mm;
+  }
+  .dashboard-card h2 {
+    font-size: 8px;
+  }
+  .dashboard-card-heading {
+    padding: 1mm;
+  }
+  .dashboard-matrix table {
+    min-width: 0;
+    font-size: 5.5px;
+    border-spacing: 1px;
+  }
+  .dashboard-matrix thead th {
+    font-size: 5px;
+  }
+  .dashboard-matrix td button {
+    padding: 1px;
+  }
+  .dashboard-matrix td small {
+    font-size: 5px;
+  }
+  .dashboard-matrix-scroll {
+    overflow: hidden;
+  }
+  .dashboard-group-heading {
+    font-size: 6px;
+    padding: 1px;
+  }
+  .dashboard-matrix tbody th {
+    padding-inline: 1px;
+  }
+  .dashboard-print-map {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .dashboard-insight {
+    padding: 1.5mm;
+  }
+  .dashboard-scroll,
+  .dashboard-alert-groups {
+    overflow: hidden;
+  }
+  .dashboard-chart-key,
+  .dashboard-history-note,
+  .dashboard-status-key {
+    font-size: 5px;
+  }
+  .dashboard-s-curve {
+    min-height: 50px;
+  }
+  .dashboard-chainage svg {
+    height: 12mm;
+  }
+  .dashboard-chainage-labels {
+    grid-template-rows: repeat(8, 1.5mm);
+    font-size: 5px;
+    line-height: 1.5mm;
+  }
+  .dashboard-chainage-ticks {
+    font-size: 5px;
+    line-height: 2mm;
+  }
+  .dashboard-card,
+  .dashboard-card * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .dashboard-print-note {
+    display: block;
+    position: absolute;
+    inset-block-end: 0;
+    font-size: 5px;
+  }
+  .dashboard-card,
+  .dashboard-map-slot {
+    box-shadow: none;
+  }
+  .dashboard-matrix table {
+    border-collapse: collapse;
+    border-spacing: 0;
+  }
+  .dashboard-matrix th,
+  .dashboard-matrix td,
+  .dashboard-matrix button {
+    font-size: 6px;
+    line-height: 1.1;
+  }
+  .dashboard-matrix td button {
+    padding: 1px 0;
+  }
+  .dashboard-matrix td small {
+    display: inline;
+    margin-inline-start: 2px;
+    font-size: 5px;
+  }
+  .dashboard-scroll > button {
+    font-size: 6px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .dashboard-scroll > button svg {
+    height: 4px !important;
+    margin-block: 0 !important;
+  }
+  .dashboard-alert-groups details {
+    padding-block: 1px;
+    font-size: 6px;
+  }
+  .dashboard-worst {
+    padding-block: 1px;
+  }
+  .dashboard-alert-groups summary > span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+  }
+  .dashboard-alert-groups .dashboard-worst {
+    display: inline-flex;
+    width: auto;
+    padding: 0;
+    white-space: nowrap;
+  }
+  .dashboard-alert-entries {
+    display: none;
   }
 }
