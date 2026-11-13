@@ -9,6 +9,7 @@ import type {
   Position,
 } from "geojson";
 import union from "@turf/union";
+import { PROGRESS_DASHBOARD_INDEX_PROPERTY } from "@geolibre/core";
 
 /**
  * Pure helpers for loading the vector features currently rendered in the map
@@ -623,7 +624,11 @@ export function tagViewFeaturesForImport(
 
 /** Whether a property key is an editor-internal tag that must not be exported. */
 function isInternalProperty(key: string): boolean {
-  return key.startsWith("__gm_") || key.startsWith("__geolibre_");
+  return (
+    key.startsWith("__gm_") ||
+    key === VIEW_IMPORT_ID_PROPERTY ||
+    key === PROGRESS_DASHBOARD_INDEX_PROPERTY
+  );
 }
 
 /** Strip editor-internal properties, returning a plain attribute map. */

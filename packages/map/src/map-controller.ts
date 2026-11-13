@@ -1866,10 +1866,11 @@ export class MapController implements MapEngine {
         layers: styleIds,
       });
       for (const feature of features) {
+        const resolved = resolveRenderedFeature(layer, feature);
         results.push({
           layerId: layer.id,
-          featureId: featureIdForLayer(layer, feature),
-          properties: resolveRenderedFeature(layer, feature).properties,
+          featureId: featureIdForLayer(layer, feature, resolved),
+          properties: resolved.properties,
           geometry: feature.geometry ?? null,
         });
       }
@@ -2773,9 +2774,9 @@ function constrainMapView(
 function featureIdForLayer(
   layer: GeoLibreLayer,
   feature: maplibregl.MapGeoJSONFeature,
+  hit = resolveRenderedFeature(layer, feature),
 ): string | null {
-  const hit = resolveRenderedFeature(layer, feature);
-  if (hit.featureIndex !== null) return String(hit.feature.id ?? hit.featureIndex);
+  if (hit.featureId !== null) return hit.featureId;
   if (feature.id != null) return String(feature.id);
   if (!layer.geojson) return null;
   const properties = feature.properties ?? {};

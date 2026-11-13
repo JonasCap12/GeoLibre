@@ -25,7 +25,7 @@ import {
   IssuesBlock,
   ItemsBlock,
   MarkBlock,
-  fmt,
+  usePercentFormat,
   type ProgressScreenCamera,
 } from "./ProgressScreenBlocks";
 import { ProgressSettingsDialog } from "./ProgressSettingsDialog";
@@ -94,6 +94,7 @@ function ProgressScreen({
   camera: ProgressScreenCamera | null;
 }) {
   const { t } = useTranslation();
+  const fmt = usePercentFormat();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const features = useMemo(() => layer.geojson?.features ?? [], [layer.geojson]);
   const summary = useMemo(() => computeProgress(features, config), [features, config]);

@@ -218,7 +218,12 @@ export function reconcileDashboardFilters(
     else {
       const start = Math.max(station[0], extent[0]),
         end = Math.min(station[1], extent[1]);
-      if (start !== station[0] || end !== station[1]) station = [start, end];
+      if (
+        end > start ||
+        (end === start && rows.some((row) => row.kind !== "road" && row.from === start))
+      ) {
+        if (start !== station[0] || end !== station[1]) station = [start, end];
+      } else station = null;
     }
   }
   return bridgeIds.length === filters.bridgeIds.length &&
@@ -521,11 +526,19 @@ export function dashboardMapView(
   const indexes: number[] = [];
   const expression: unknown[] = ["match", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY]];
   const byTarget = new Map<string, DashboardRow[]>();
+  const byApproach = new Map<string, DashboardRow[]>();
   const targetKey = (target: ProgressFeatureTarget) =>
     `${target.kind}:${"bridgeId" in target ? target.bridgeId : ""}:${target.id}`;
   for (const row of rows) {
     const key = targetKey(row.target);
-    byTarget.set(key, [...(byTarget.get(key) ?? []), row]);
+    const targetRows = byTarget.get(key);
+    if (targetRows) targetRows.push(row);
+    else byTarget.set(key, [row]);
+    if (row.key === "ht" && row.bridgeId) {
+      const approachRows = byApproach.get(row.bridgeId);
+      if (approachRows) approachRows.push(row);
+      else byApproach.set(row.bridgeId, [row]);
+    }
   }
   features.forEach((feature, index) => {
     const target = progressFeatureTarget(feature);
@@ -535,9 +548,7 @@ export function dashboardMapView(
     const keys = progressFeatureItems(feature);
     const candidates = target
       ? (byTarget.get(targetKey(target)) ?? [])
-      : rows.filter(
-          (row) => row.bridgeId === propertyText(feature, "bridge_id") && row.key === "ht",
-        );
+      : (byApproach.get(propertyText(feature, "bridge_id")) ?? []);
     const matched = candidates.filter(
       (row) =>
         (!keys.length || keys.includes(row.key)) &&
@@ -563,7 +574,7 @@ export function dashboardMapView(
     indexes,
     filter: indexes.length
       ? ["match", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY], indexes, true, false]
-      : (false as const),
+      : ["literal", false],
     colorExpression: indexes.length
       ? JSON.stringify(expression)
       : JSON.stringify(PROGRESS_V2_COLORS.empty),

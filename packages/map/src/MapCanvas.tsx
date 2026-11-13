@@ -116,9 +116,12 @@ function createIdentifyMessagePopupElement(layerName: string, message: string): 
   return createIdentifyPopupElement(layerName, { status: message });
 }
 
-function findFeatureId(layer: GeoLibreLayer, feature: maplibregl.MapGeoJSONFeature): string | null {
-  const hit = resolveRenderedFeature(layer, feature);
-  if (hit.featureIndex !== null) return String(hit.feature.id ?? hit.featureIndex);
+function findFeatureId(
+  layer: GeoLibreLayer,
+  feature: maplibregl.MapGeoJSONFeature,
+  hit = resolveRenderedFeature(layer, feature),
+): string | null {
+  if (hit.featureId !== null) return hit.featureId;
   if (feature.id != null) return String(feature.id);
   if (!layer.geojson) return null;
 
@@ -627,7 +630,7 @@ export const MapCanvas = memo(function MapCanvas({
             layer: owner,
             properties: resolved.properties,
             feature: resolved.feature,
-            featureId: findFeatureId(owner, feature),
+            featureId: findFeatureId(owner, feature, resolved),
           };
           if (!acceptHit(hit.layer.id, hit.featureId, feature)) continue;
           hits.push(hit);
@@ -1082,8 +1085,8 @@ export const MapCanvas = memo(function MapCanvas({
         return;
       }
 
-      const featureId = findFeatureId(layer, feature);
       const resolved = resolveRenderedFeature(layer, feature);
+      const featureId = findFeatureId(layer, feature, resolved);
       const content = createIdentifyPopupElement(
         layer.name,
         resolved.properties,

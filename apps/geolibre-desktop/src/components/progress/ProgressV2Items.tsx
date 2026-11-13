@@ -18,7 +18,7 @@ import {
   type ProgressV2ItemKey,
   type RoadItemKey,
 } from "../../lib/progress-v2";
-import { fmt } from "./ProgressScreenBlocks";
+import { usePercentFormat } from "./ProgressScreenBlocks";
 
 export function ProgressV2Items({
   state,
@@ -32,6 +32,7 @@ export function ProgressV2Items({
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const fmt = usePercentFormat();
   const [key, setKey] = useState<ProgressV2ItemKey>("coc");
   const summary = computeProgressV2(state, packageId);
   const result = summary.items.find((item) => item.key === key)!;
@@ -96,6 +97,7 @@ function BridgeRows({
   onOpen: (target: ProgressFeatureTarget) => void;
 }) {
   const { t } = useTranslation();
+  const fmt = usePercentFormat();
   const supportItem =
     itemKey === "coc" || itemKey === "be" || itemKey === "than" || itemKey === "xm";
   return (

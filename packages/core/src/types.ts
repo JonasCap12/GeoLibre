@@ -1352,7 +1352,7 @@ export interface GeoLibreLayer {
   /** Transient MapLibre expression applied by the iframe embed API. */
   embedFilter?: unknown[];
   /** Transient construction dashboard view, excluded from projects and undo history. */
-  progressDashboard?: { filter: unknown[] | false; colorExpression: string };
+  progressDashboard?: { filter: unknown[]; colorExpression: string };
   /**
    * Project-persisted boolean MapLibre expression that narrows the features
    * rendered for this layer. Unlike a selection, this leaves the source data

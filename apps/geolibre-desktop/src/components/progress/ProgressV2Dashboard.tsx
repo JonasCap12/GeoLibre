@@ -612,7 +612,7 @@ export function ProgressV2Dashboard({
                         : "text-amber-700 dark:text-amber-400"
                     }
                   >
-                    {alertText(t, alert)}
+                    {alertText(t, alert, num)}
                   </span>
                 </button>
               );

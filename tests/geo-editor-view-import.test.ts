@@ -244,16 +244,29 @@ describe("dedupeViewportFeatures", () => {
     const properties = {
       name: "kept",
       __geolibre_progress_index: 3,
-      __geolibre_other: true,
+      __geolibre_kml_icon_url: "https://example.com/icon.png",
+      __geolibre_kml_icon_href: "icons/pin.png",
+      [VIEW_IMPORT_EDITOR_PROPERTY]: "original editor",
+      [VIEW_IMPORT_MODIFIED_PROPERTY]: "2026-11-13T00:00:00Z",
+      [VIEW_IMPORT_ID_PROPERTY]: "internal-id",
       __gm_shape: "circle_marker",
+    };
+    const expected = {
+      name: properties.name,
+      __geolibre_kml_icon_url: properties.__geolibre_kml_icon_url,
+      __geolibre_kml_icon_href: properties.__geolibre_kml_icon_href,
+      [VIEW_IMPORT_EDITOR_PROPERTY]: properties[VIEW_IMPORT_EDITOR_PROPERTY],
+      [VIEW_IMPORT_MODIFIED_PROPERTY]: properties[VIEW_IMPORT_MODIFIED_PROPERTY],
     };
     const single = { ...point(106, 10, properties), id: 42 };
     const duplicate = { ...point(106, 10, properties), id: 42 };
     for (const input of [[single], [single, duplicate]]) {
       const imported = dedupeViewportFeatures(input, WORLD);
-      assert.deepEqual(imported[0].properties, { name: "kept" });
+      assert.deepEqual(imported[0].properties, expected);
       const exported = buildFullExport(tagViewFeaturesForImport(imported).collection).collection;
-      assert.deepEqual(exported.features[0].properties, { name: "kept" });
+      assert.deepEqual(exported.features[0].properties, expected);
+      const directExport = buildFullExport(tagViewFeaturesForImport(input).collection).collection;
+      assert.deepEqual(directExport.features[0].properties, expected);
     }
     assert.equal(properties.__geolibre_progress_index, 3);
   });
