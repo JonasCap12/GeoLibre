@@ -37,6 +37,8 @@ export function apiScope(
     GEOLIBRE_ADMIN_USERNAMES: "admin",
     MFA_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     GEOLIBRE_EMAIL_FROM: "no-reply@example.com",
+    // Fixtures without a siteverify stub explicitly model local development.
+    GEOLIBRE_TURNSTILE_DISABLED: "1",
     EMAIL: {
       async send(message: OutboundEmail) {
         messages.push(message);

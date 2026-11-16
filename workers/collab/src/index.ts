@@ -46,7 +46,7 @@ function cleanupRateLimitMap(now: number): void {
 }
 
 function isAllowedOrigin(originHeader: string | null, envAllowed?: string): boolean {
-  if (!originHeader) return true;
+  if (!originHeader) return envAllowed === undefined;
   const allowedList = envAllowed
     ? envAllowed
         .split(",")

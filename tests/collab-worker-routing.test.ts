@@ -85,9 +85,50 @@ describe("collaboration worker routing and identity gates", () => {
   });
   it("rejects an identity-required room without an issuer and an unauthorized origin", async () => {
     const h = relayEnv({ ALLOWED_ORIGINS: "https://allowed.example" });
-    assert.equal((await worker.fetch(create({ requireIdentity: true }), h.env)).status, 400);
+    const gated = create({ requireIdentity: true });
+    gated.headers.set("Origin", "https://allowed.example");
+    assert.equal((await worker.fetch(gated, h.env)).status, 400);
     const request = create({});
     request.headers.set("Origin", "https://evil.example");
+    assert.equal((await worker.fetch(request, h.env)).status, 403);
+    assert.equal(h.requests.length, 0);
+  });
+
+  it("requires Origin or Referer only when a deployment configures allowed origins", async () => {
+    const upstream = relayEnv();
+    assert.equal((await worker.fetch(create({}), upstream.env)).status, 200);
+    for (const configured of ["https://allowed.example", ""]) {
+      const h = relayEnv({ ALLOWED_ORIGINS: configured });
+      assert.equal((await worker.fetch(create({}), h.env)).status, 403);
+      assert.equal(h.requests.length, 0);
+    }
+    for (const header of ["Origin", "Referer"]) {
+      const h = relayEnv({ ALLOWED_ORIGINS: "https://allowed.example" });
+      const request = create({});
+      request.headers.set(
+        header,
+        header === "Referer" ? "https://allowed.example/map" : "https://allowed.example",
+      );
+      assert.equal((await worker.fetch(request, h.env)).status, 200);
+      assert.equal(h.requests.length, 1);
+    }
+  });
+
+  it("honors explicitly allowed WebView origins and rejects an Origin conflicting with Referer", async () => {
+    for (const origin of [
+      "tauri://localhost",
+      "http://tauri.localhost",
+      "https://tauri.localhost",
+    ]) {
+      const h = relayEnv({ ALLOWED_ORIGINS: origin });
+      const request = create({});
+      request.headers.set("Origin", origin);
+      assert.equal((await worker.fetch(request, h.env)).status, 200);
+    }
+    const h = relayEnv({ ALLOWED_ORIGINS: "https://allowed.example" });
+    const request = create({});
+    request.headers.set("Origin", "https://evil.example");
+    request.headers.set("Referer", "https://allowed.example/map");
     assert.equal((await worker.fetch(request, h.env)).status, 403);
     assert.equal(h.requests.length, 0);
   });
