@@ -1,12 +1,10 @@
 {
-  "apps/geolibre-desktop/src/components/auth/AccountSecurityDialog.tsx": 667,
-  "apps/geolibre-desktop/src/components/auth/SelfHostGate.tsx": 903,
   "apps/geolibre-desktop/src/components/comments/CommentsPanel.tsx": 508,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/ArcGISSource.tsx": 632,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/DeckVizSource.tsx": 866,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/DelimitedTextSource.tsx": 845,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/IcebergSource.tsx": 538,
-  "apps/geolibre-desktop/src/components/layout/add-data/sources/PostgresSource.tsx": 659,
+  "apps/geolibre-desktop/src/components/layout/add-data/sources/PostgresSource.tsx": 653,
   "apps/geolibre-desktop/src/components/layout/add-data/sources/WmsSource.tsx": 565,
   "apps/geolibre-desktop/src/components/layout/AddNetcdfDialog.tsx": 896,
   "apps/geolibre-desktop/src/components/layout/BasemapExtractPanel.tsx": 1397,
@@ -53,7 +51,6 @@
   "apps/geolibre-desktop/src/hooks/toolbar/usePluginLabelSync.ts": 1080,
   "apps/geolibre-desktop/src/hooks/useCollaboration.ts": 774,
   "apps/geolibre-desktop/src/lib/assistant/tools.ts": 1122,
-  "apps/geolibre-desktop/src/lib/duckdb-vector-loader.ts": 1384,
   "apps/geolibre-desktop/src/lib/print-layout-export.ts": 526,
   "apps/geolibre-desktop/src/lib/scripting/scriptingApi.ts": 643,
   "apps/geolibre-desktop/src/lib/sql-workspace.ts": 702

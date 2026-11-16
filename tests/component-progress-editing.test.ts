@@ -108,7 +108,7 @@ it("saves settings as a normalized metadata/color patch in exactly one undo step
   fireEvent.change(dialog.getByLabelText(text("progress.field.subtitle")), {
     target: { value: "Team A" },
   });
-  fireEvent.click(dialog.getByRole("button", { name: text("common.save"), exact: true }));
+  fireEvent.click(dialog.getByRole("button", { name: text("common.save") }));
   assert.equal(state().meta.title, "Updated report");
   assert.equal(state().meta.subtitle, "Team A");
   assert.equal(screen.queryByRole("dialog"), null);
@@ -126,18 +126,16 @@ it("cancels a settings draft without changing the store or adding undo history",
   fireEvent.change(dialog.getByLabelText(text("progress.field.title")), {
     target: { value: "Discard" },
   });
-  fireEvent.click(dialog.getByRole("button", { name: text("common.cancel"), exact: true }));
+  fireEvent.click(dialog.getByRole("button", { name: text("common.cancel") }));
   assert.deepEqual(state(), before);
   assert.equal(useAppStore.temporal.getState().pastStates.length, 0);
 });
 
 it("updates yard stages, counts, bed/date fields and the whole span", () => {
   mount();
-  fireEvent.click(screen.getByRole("button", { name: text("progress.v2.tabs.yard"), exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: text("progress.v2.tabs.yard") }));
   fireEvent.click(screen.getByTitle(`N1-D1: ${text("progress.v2.stage.0")}`));
-  fireEvent.click(
-    screen.getByRole("button", { name: `2. ${text("progress.v2.stage.2")}`, exact: true }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: `2. ${text("progress.v2.stage.2")}` }));
   assert.equal(state().bridges[0].spans[0].girders[0].st, 2);
   const cast = screen.getByText(text("progress.v2.yard.cast"), { selector: "span" });
   assert.equal(cast.parentElement?.querySelector("b")?.textContent, "2/2");
@@ -147,10 +145,8 @@ it("updates yard stages, counts, bed/date fields and the whole span", () => {
   fireEvent.change(screen.getByLabelText(text("progress.v2.bed")), { target: { value: "2" } });
   assert.equal(state().bridges[0].spans[0].girders[0].dob, "2026-11-10");
   assert.equal(state().bridges[0].spans[0].girders[0].bed, 2);
-  fireEvent.click(
-    screen.getByRole("button", { name: `4. ${text("progress.v2.stage.4")}`, exact: true }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: text("progress.v2.applySpan"), exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: `4. ${text("progress.v2.stage.4")}` }));
+  fireEvent.click(screen.getByRole("button", { name: text("progress.v2.applySpan") }));
   assert.deepEqual(
     state().bridges[0].spans[0].girders.map((g) => g.st),
     [4, 4],
@@ -159,11 +155,9 @@ it("updates yard stages, counts, bed/date fields and the whole span", () => {
 
 it("writes component updates and records the week's actual and planned figures", () => {
   mount();
-  fireEvent.click(screen.getByRole("button", { name: text("progress.v2.tabs.yard"), exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: text("progress.v2.tabs.yard") }));
   const girder = screen.getByTitle(`N1-D1: ${text("progress.v2.stage.0")}`);
-  fireEvent.click(
-    within(girder.parentElement!.parentElement!).getByRole("button", { name: "N1", exact: true }),
-  );
+  fireEvent.click(within(girder.parentElement!.parentElement!).getByRole("button", { name: "N1" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: text("progress.v2.items.bmc") }), {
     target: { value: "75" },
   });
@@ -192,8 +186,8 @@ it("updates supports, road percentages and underpass percentages through the rea
   const result = render(
     createElement(Editor, { target: { kind: "support", bridgeId: "b", id: "M1" } }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "C1", exact: true }));
-  fireEvent.click(screen.getByRole("button", { name: "C1", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "C1" }));
+  fireEvent.click(screen.getByRole("button", { name: "C1" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: text("progress.v2.items.be") }), {
     target: { value: "55" },
   });
