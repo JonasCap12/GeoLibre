@@ -8,10 +8,7 @@
   "apps/geolibre-desktop/src/components/layout/add-data/sources/WmsSource.tsx": 565,
   "apps/geolibre-desktop/src/components/layout/AddNetcdfDialog.tsx": 896,
   "apps/geolibre-desktop/src/components/layout/BasemapExtractPanel.tsx": 1397,
-  "apps/geolibre-desktop/src/components/layout/CollaborateDialog.tsx": 600,
-  "apps/geolibre-desktop/src/components/layout/CollaborationStatusBadge.tsx": 594,
   "apps/geolibre-desktop/src/components/layout/DesktopShell.tsx": 1297,
-  "apps/geolibre-desktop/src/components/layout/FieldCollectionDialog.tsx": 1569,
   "apps/geolibre-desktop/src/components/layout/GeoreferencerDialog.tsx": 669,
   "apps/geolibre-desktop/src/components/layout/GpsTrackingDialog.tsx": 1488,
   "apps/geolibre-desktop/src/components/layout/LoadFeaturesIntoEditorDialog.tsx": 665,
@@ -25,9 +22,6 @@
   "apps/geolibre-desktop/src/components/layout/RecordVideoDialog.tsx": 621,
   "apps/geolibre-desktop/src/components/layout/SetViewDialog.tsx": 680,
   "apps/geolibre-desktop/src/components/layout/ShareProjectDialog.tsx": 1295,
-  "apps/geolibre-desktop/src/components/layout/toolbar/ProcessingMenu.tsx": 823,
-  "apps/geolibre-desktop/src/components/layout/toolbar/ProjectFileDialogs.tsx": 586,
-  "apps/geolibre-desktop/src/components/layout/TopToolbar.tsx": 772,
   "apps/geolibre-desktop/src/components/legend/MapLegendPanel.tsx": 1005,
   "apps/geolibre-desktop/src/components/panels/BrowserPanel.tsx": 938,
   "apps/geolibre-desktop/src/components/panels/DashboardPanel.tsx": 792,
@@ -42,8 +36,5 @@
   "apps/geolibre-desktop/src/components/processing/RasterToolsDialog.tsx": 1074,
   "apps/geolibre-desktop/src/components/storymap/StoryMapHandoutDialog.tsx": 640,
   "apps/geolibre-desktop/src/components/storymap/StoryMapPanel.tsx": 1146,
-  "apps/geolibre-desktop/src/hooks/desktop-shell/useFileDrop.ts": 544,
-  "apps/geolibre-desktop/src/hooks/toolbar/usePluginLabelSync.ts": 1037,
-  "apps/geolibre-desktop/src/hooks/useCollaboration.ts": 774,
-  "apps/geolibre-desktop/src/lib/print-layout-export.ts": 526
+  "apps/geolibre-desktop/src/hooks/desktop-shell/useFileDrop.ts": 544
 }
