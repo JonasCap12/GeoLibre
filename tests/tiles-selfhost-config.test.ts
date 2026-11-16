@@ -9,9 +9,8 @@ import { describe, it } from "node:test";
  *
  * Duplication drifts, and here the drift is expensive: this Worker fronts eight
  * browser-facing services. A stale `compatibility_date` changes runtime
- * semantics under the same code, and a missing `cpu_ms` silently drops the /wms
- * reprojection route back to the default budget, where it times out per tile
- * with no error the user can act on.
+ * semantics under the same code, and a `cpu_ms` that differs from upstream's
+ * runs the same routes under a budget upstream never tested.
  */
 
 const TOML_PATH = new URL("../workers/tiles/wrangler.toml", import.meta.url);
@@ -72,7 +71,7 @@ describe("tiles self-host config", () => {
     assert.equal(selfhost.compatibility_date, tomlString(toml, "compatibility_date"));
   });
 
-  it("keeps the raised CPU budget the /wms route needs", () => {
+  it("keeps the upstream CPU budget", () => {
     const limits = selfhost.limits as { cpu_ms?: number } | undefined;
     assert.equal(limits?.cpu_ms, tomlNumber(toml, "cpu_ms"));
   });
@@ -84,9 +83,9 @@ describe("tiles self-host config", () => {
     assert.ok(toml.includes("tiles.geolibre.app"));
   });
 
-  it("warns that the CPU budget needs a paid plan", () => {
-    // Deploying this on the free tier looks successful and then fails per tile
-    // on /wms only. Say so where the operator is reading.
+  it("notes that the CPU budget only applies on a paid plan", () => {
+    // `cpu_ms` is silently ignored on the free tier. Say so where the operator
+    // is reading, so nobody tunes a knob that does nothing.
     assert.match(raw, /free tier is capped at 10 ms/);
   });
 

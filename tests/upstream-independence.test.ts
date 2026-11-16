@@ -252,4 +252,15 @@ describe("upstream independence", () => {
       );
     }
   });
+
+  it("loads the USGS planetary basemaps from the browser, not through any tiles Worker", () => {
+    // USGS answers requests from Cloudflare Workers with a bot-check 403, so a
+    // proxy through this fork's tiles Worker would fail the same way upstream's
+    // did. The browser fetches the WMS directly (usgs-wms-protocol.ts).
+    const source = stripComments(
+      readFileSync(join(REPO_ROOT, "packages/core/src/ellipsoids.ts"), "utf8"),
+    );
+    assert.ok(source.includes("usgsWmsTiles("), "ellipsoids.ts no longer uses usgs-wms://");
+    assert.ok(!source.includes('tilesUrl("/wms")'), "ellipsoids.ts proxies USGS through a Worker");
+  });
 });

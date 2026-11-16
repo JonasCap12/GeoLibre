@@ -17,7 +17,7 @@ not a disabled feature.
 
 | Variable | Replaces | What breaks if upstream disappears |
 | --- | --- | --- |
-| `VITE_GEOLIBRE_TILES_URL` | `tiles.geolibre.app` | Planetary basemaps, WMS reprojection, offline basemap extract, OpenAerialMap, OSM/Overpass download, Source.coop, CKAN catalogs, GitHub-raw vector loading |
+| `VITE_GEOLIBRE_TILES_URL` | `tiles.geolibre.app` | Offline basemap extract, OpenAerialMap, OSM/Overpass download, Source.coop, CKAN catalogs, GitHub-raw vector loading |
 | `VITE_GEOLIBRE_SHARE_URL` | `share.geolibre.app` | Project sharing and the Project Gallery |
 | `VITE_GEOLIBRE_VIEWER_URL` | `web.geolibre.app` | Links produced by HTML export and desktop "Copy link" |
 | `VITE_GEOLIBRE_PLUGIN_REGISTRY_URL` | `plugins.geolibre.app` | The plugin registry listing |
@@ -61,12 +61,12 @@ variable `VITE_GEOLIBRE_TILES_URL` and re-run the web deploy.
 
 Two things to know before you do:
 
-- **The `/wms` route needs a paid Workers plan.** It decodes a PNG, warps it to
-  Web Mercator and re-encodes it in pure JS, which is why `wrangler.toml` raises
-  `cpu_ms` to 200. The free tier caps CPU at 10 ms whatever the config says, so
-  on a free plan expect the Mercury, Venus, Io, Europa, Ganymede and Callisto
-  basemaps to time out. Every other route forwards bytes and stays well inside
-  10 ms.
+- **The free Workers plan is enough.** Every route forwards bytes or small
+  JSON. The planetary basemaps (Mercury, Venus, Io, Europa, Ganymede, Callisto)
+  no longer go through this Worker at all: USGS blocks requests from Cloudflare
+  Workers, so upstream (#3463) moved their reprojection into the browser
+  (`packages/map/src/usgs-wms-protocol.ts`). They depend on
+  `planetarymaps.usgs.gov` only, not on any GeoLibre server.
 - **A custom domain needs an allowlist change.** `isAllowedProxyOrigin` in
   `workers/tiles/src/index.ts` admits only `*.geolibre.app`, `*.workers.dev` and
   localhost. Serving the app from your own domain 403s the OpenAerialMap,

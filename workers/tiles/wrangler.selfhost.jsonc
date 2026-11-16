@@ -29,12 +29,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-03-01",
 
-  // WARNING: this raised CPU budget applies only on a PAID Workers plan. The
-  // free tier is capped at 10 ms regardless of what is written here, which is
-  // far too low for the /wms route -- it decodes a PNG, warps it to Web
-  // Mercator and re-encodes it, all in pure JS. On the free tier expect /wms
-  // (Mercury, Venus, Io, Europa, Ganymede, Callisto basemaps) to time out.
-  // Every other route forwards bytes and stays well inside 10 ms.
+  // Mirrors wrangler.toml. This CPU budget applies only on a PAID Workers plan;
+  // the free tier is capped at 10 ms regardless of what is written here. Every
+  // route forwards bytes or small JSON, so 10 ms is enough. (The CPU-bound /wms
+  // reprojection route is gone: upstream #3463 moved the USGS planetary
+  // basemaps into the browser, packages/map/src/usgs-wms-protocol.ts.)
   "limits": {
     "cpu_ms": 200
   },
