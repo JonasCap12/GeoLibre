@@ -50,9 +50,10 @@
   // admits any *.workers.dev, and that is exactly what would let a stranger's
   // page open sessions on this account. Add each additional origin that should
   // be able to start a session, comma-separated, including a custom domain
-  // when one is bound.
+  // when one is bound. The last two are the desktop app's webview (Windows,
+  // then macOS/Linux); it is gated by the identity token below like the web.
   "vars": {
-    "ALLOWED_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev",
+    "ALLOWED_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev,http://tauri.localhost,tauri://localhost",
     // Members only: creating or joining a session needs an identity token
     // from the projects API (POST /api/collab/identity), signed with
     // COLLAB_IDENTITY_SECRET. Set that secret on BOTH Workers, same value:

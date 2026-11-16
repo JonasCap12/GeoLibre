@@ -45,6 +45,15 @@ function cleanupRateLimitMap(now: number): void {
   lastRateLimitSweep = now;
 }
 
+/**
+ * The comparable origin of a URL. `URL.origin` is the opaque "null" for a
+ * non-special scheme such as the desktop webview's `tauri://localhost`, so two
+ * different custom-scheme origins would compare equal; use scheme + host there.
+ */
+function originKey(url: URL): string {
+  return url.origin === "null" ? `${url.protocol}//${url.host}` : url.origin;
+}
+
 function isAllowedOrigin(originHeader: string | null, envAllowed?: string): boolean {
   if (!originHeader) return envAllowed === undefined;
   const allowedList = envAllowed
@@ -83,7 +92,7 @@ function isAllowedOrigin(originHeader: string | null, envAllowed?: string): bool
       if (allowed === "*") return true;
       try {
         const allowedUrl = new URL(allowed);
-        return originUrl.origin === allowedUrl.origin;
+        return originKey(originUrl) === originKey(allowedUrl);
       } catch {
         return originHeader === allowed || host === allowed;
       }

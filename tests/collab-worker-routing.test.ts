@@ -125,6 +125,14 @@ describe("collaboration worker routing and identity gates", () => {
       request.headers.set("Origin", origin);
       assert.equal((await worker.fetch(request, h.env)).status, 200);
     }
+    // URL.origin is the opaque "null" for every custom scheme, so comparing it
+    // alone would let any other app's scheme through once tauri:// is listed.
+    for (const origin of ["other-app://localhost", "tauri://evil.example"]) {
+      const h = relayEnv({ ALLOWED_ORIGINS: "tauri://localhost" });
+      const request = create({});
+      request.headers.set("Origin", origin);
+      assert.equal((await worker.fetch(request, h.env)).status, 403, origin);
+    }
     const h = relayEnv({ ALLOWED_ORIGINS: "https://allowed.example" });
     const request = create({});
     request.headers.set("Origin", "https://evil.example");

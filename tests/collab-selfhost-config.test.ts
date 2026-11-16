@@ -153,12 +153,30 @@ describe("session creation is reachable from this deployment", () => {
     // upstreams. This one creates Durable Objects on this account, so the same
     // shortcut would let a stranger's page run up the bill.
     const vars = (selfhost.vars ?? {}) as Record<string, string>;
-    const origins = String(vars.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim());
+    const origins = String(vars.ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((o) => o.trim());
+    const desktop = new Set(["http://tauri.localhost", "tauri://localhost"]);
     for (const origin of origins) {
       assert.ok(origin.length > 0, "empty entry in the allowlist");
       assert.ok(!origin.includes("*"), `wildcard origin is not allowed: ${origin}`);
       assert.doesNotThrow(() => new URL(origin), `not a URL: ${origin}`);
+      assert.ok(
+        origin.startsWith("https://") || desktop.has(origin),
+        `only https app origins and the desktop webview may create sessions: ${origin}`,
+      );
     }
+  });
+
+  it("lets the desktop app create sessions", () => {
+    // The desktop webview sends its own Origin (Windows, then macOS/Linux), so
+    // without these a desktop "Start session" is refused with 403.
+    const vars = (selfhost.vars ?? {}) as Record<string, string>;
+    const origins = String(vars.ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((o) => o.trim());
+    assert.ok(origins.includes("http://tauri.localhost"));
+    assert.ok(origins.includes("tauri://localhost"));
   });
 
   it("allows the self-hosted WebSocket relay in the deployed web CSP", () => {
