@@ -541,6 +541,10 @@
       "wcs": {
         "description": "Tải tập con GeoTIFF dạng số từ dịch vụ WCS 1.0.0.",
         "label": "Lớp WCS"
+      },
+      "sharedData": {
+        "label": "Thêm dữ liệu từ thư viện dùng chung…",
+        "description": "Thêm bộ dữ liệu do thành viên trong nhóm tải lên, hoặc tải lên một bộ dữ liệu để cả nhóm sử dụng mà không phải chuyển đổi tệp lần nữa."
       }
     },
     "shared": {
@@ -935,7 +939,14 @@
       "errorNoLayers": "Không tìm thấy lớp nào trong tệp CAD này.",
       "errorChooseFile": "Trước tiên hãy chọn tệp CAD (DXF/DWG).",
       "errorNoLayer": "Chọn một lớp CAD để tải.",
-      "errorUnsupportedGeometry": "Lớp CAD này chứa hình học hỗn hợp hoặc bộ sưu tập không thể hiển thị được. Hãy thử một lớp khác."
+      "errorUnsupportedGeometry": "Lớp CAD này chứa hình học hỗn hợp hoặc bộ sưu tập không thể hiển thị được. Hãy thử một lớp khác.",
+      "allLayersOption": "Tất cả các lớp ({{count}} đối tượng)",
+      "fallbackNotice": "Công cụ CAD tích hợp không đọc được bản vẽ này nên bản vẽ đã được đọc trực tiếp. Hãy chọn một lớp CAD nếu tải toàn bộ bản vẽ quá chậm.",
+      "errorDwgVersion": "Bản vẽ này được lưu bằng {{release}}. Công cụ CAD tích hợp chỉ đọc được tệp DWG của AutoCAD 2000. Hãy lưu lại dưới dạng DXF (bất kỳ phiên bản nào) hoặc DWG của AutoCAD 2000, rồi mở lại.",
+      "errorBinaryDxf": "Đây là tệp DXF nhị phân nên không thể đọc được. Hãy lưu lại dưới dạng DXF ASCII (trong AutoCAD: Save As, rồi chọn định dạng \"AutoCAD DXF\" thông thường thay vì \"Binary DXF\") và mở lại.",
+      "removeOutliers": "Loại bỏ đối tượng nằm xa",
+      "removeOutliersHelp": "Loại bỏ một số ít đối tượng nằm xa phần còn lại của bản vẽ, khiến bản đồ phải thu nhỏ ra ngoài phạm vi công trường. Không bao giờ loại bỏ quá 5% số đối tượng của bản vẽ.",
+      "outliersRemoved": "Đã loại bỏ {{count}} đối tượng nằm xa trong tổng số {{total}} đối tượng của bản vẽ (các lớp: {{layers}}). Các đối tượng này nằm xa phần còn lại và làm bản đồ phải thu nhỏ quá mức."
     },
     "gdb": {
       "errorNotGdb": "Chọn một thư mục có đuôi .gdb (Cơ sở dữ liệu địa lý tệp Esri).",
@@ -1498,6 +1509,41 @@
         "bounds": "Nhập một ô hợp lệ: tây/đông trong khoảng -180 đến 180, nam/bắc trong khoảng -90 đến 90, với tây < đông và nam < bắc.",
         "url": "Nhập URL dịch vụ WCS."
       }
+    },
+    "sharedData": {
+      "defaultName": "Lớp dùng chung",
+      "dataset": "Bộ dữ liệu dùng chung",
+      "datasetOption": "{{name}} — {{size}}, của {{owner}}",
+      "datasetDetail": "Tệp: {{filename}} · {{visibility}} · đã thêm vào bản đồ {{downloads}} lần",
+      "unknownOwner": "không rõ",
+      "loading": "Đang tải thư viện…",
+      "emptyLibrary": "Chưa có dữ liệu được chia sẻ",
+      "refresh": "Làm mới",
+      "upload": "Tải tệp lên…",
+      "uploading": "Đang tải lên…",
+      "uploaded": "Đã tải lên {{name}}. {{visibility}}",
+      "delete": "Xóa",
+      "help": "Các tệp ở đây được lưu trên máy chủ của bạn. Mọi người đã đăng nhập đều xem được tệp của nhóm; mọi người trên Internet đều xem được tệp công khai. Chỉ người tải tệp lên mới có thể xóa tệp đó.",
+      "helpAnonymous": "Thêm mã thông báo API chia sẻ trong Cài đặt để tải tệp lên, xem tệp của nhóm hoặc xem các tệp riêng tư do bạn tải lên.",
+      "tokenRequired": "Thêm mã thông báo API chia sẻ trong Cài đặt trước khi tải lên.",
+      "listError": "Không thể đọc thư viện dữ liệu dùng chung.",
+      "uploadError": "Không thể tải tệp này lên.",
+      "deleteError": "Không thể xóa bộ dữ liệu này.",
+      "errorChoose": "Chọn một bộ dữ liệu để thêm.",
+      "fileFilter": "Mọi tệp dữ liệu",
+      "search": "Tìm kiếm",
+      "searchPlaceholder": "Tên, mô tả, tên tệp hoặc thẻ",
+      "clearTag": "Xóa bộ lọc thẻ này",
+      "filterByTag": "Chỉ hiển thị bộ dữ liệu có thẻ \"{{tag}}\"",
+      "uploadTags": "Thẻ cho lần tải lên tiếp theo",
+      "uploadTagsPlaceholder": "ví dụ: bao-loc, cau-duong, khao-sat",
+      "uploadTagsHelp": "Phân cách bằng dấu phẩy. Tự động chuyển thành chữ thường để dễ tìm kiếm ngay cả khi thư viện có hàng chục dự án.",
+      "uploadVisibility": "Ai có thể sử dụng tệp này",
+      "visibility": {
+        "team": "Nhóm — mọi người đã đăng nhập vào máy chủ này",
+        "public": "Công khai — mọi người trên Internet",
+        "private": "Riêng tư — chỉ bạn"
+      }
     }
   },
   "offline": {
@@ -2043,7 +2089,9 @@
     "sharedLayerLoading": "Đang tải bản vẽ dùng chung từ thư viện. Đây không phải lớp trống.",
     "sharedLayerNeedsSignIn": "Hãy đăng nhập để tải bản vẽ này. Lớp không trống, chỉ là thư viện chưa hiện nó khi bạn chưa đăng nhập.",
     "sharedLayerMissing": "Bản vẽ này đã bị xoá khỏi thư viện dùng chung. Lớp không trống, nhưng tệp của nó không còn.",
-    "sharedLayerFailed": "Không tải được bản vẽ dùng chung. Đây không phải lớp trống: hãy thử lại, hoặc kiểm tra tệp còn trong thư viện không."
+    "sharedLayerFailed": "Không tải được bản vẽ dùng chung. Đây không phải lớp trống: hãy thử lại, hoặc kiểm tra tệp còn trong thư viện không.",
+    "layerShareFailed": "Những người khác trong phiên này không xem được \"{{name}}\". Lớp vẫn chỉ có trên máy tính này: {{detail}}",
+    "layerShareNeedsSignIn": "Những người khác trong phiên này không xem được \"{{name}}\". Hãy đăng nhập trong Cài đặt để tải lớp lên cho mọi người. Lớp vẫn chỉ có trên máy tính này."
   },
   "share": {
     "title": "Chia sẻ dự án",
@@ -3652,7 +3700,27 @@
       "stripButton": "Xóa thông tin đăng nhập",
       "keepButton": "Giữ trong hồ sơ",
       "accountUsernameOrEmail": "Tên đăng nhập hoặc email",
-      "accountCreateInBrowser": "Để tạo tài khoản, hãy mở liên kết mời trong email bằng trình duyệt web, rồi đăng nhập tại đây."
+      "accountCreateInBrowser": "Để tạo tài khoản, hãy mở liên kết mời trong email bằng trình duyệt web, rồi đăng nhập tại đây.",
+      "accountOpen": "Tạo tài khoản hoặc đăng nhập…",
+      "accountSwitch": "Đăng nhập bằng tài khoản khác…",
+      "accountHelp": "Đăng nhập và lưu Cài đặt để bật không gian làm việc đám mây riêng tư. GeoLibre sẽ tự động lưu thay đổi và khôi phục các lớp khi tải lại trang bình thường. Mã thông báo này cũng cho phép chia sẻ dự án và tải lên thư viện dùng chung.",
+      "accountUsername": "Tên đăng nhập",
+      "accountUsernamePlaceholder": "3–39 ký tự gồm chữ thường, chữ số hoặc dấu gạch nối",
+      "accountPassword": "Mật khẩu",
+      "accountSignIn": "Đăng nhập",
+      "accountCreate": "Tạo tài khoản",
+      "accountSignedIn": "Đã đăng nhập bằng {{username}}. Mã thông báo đã được điền ở trên — hãy lưu Cài đặt để bật lưu trữ đám mây.",
+      "accountMfaPrompt": "Mật khẩu hợp lệ. Nhập mã từ ứng dụng xác thực của bạn.",
+      "accountMfaCodeOptional": "Mã xác thực hai bước (nếu đã bật)",
+      "accountInvite": "Lời mời",
+      "accountInvitePlaceholder": "Dán mã lời mời từ email",
+      "accountSignOut": "Đăng xuất",
+      "accountSignedOut": "Đã đăng xuất. Hãy lưu Cài đặt để trình duyệt này xóa mã thông báo.",
+      "accountPasswordHelp": "Đổi mật khẩu sẽ đăng xuất tất cả các phiên khác. Trình duyệt này giữ mã thông báo mới.",
+      "accountCurrentPassword": "Mật khẩu hiện tại",
+      "accountNewPassword": "Mật khẩu mới",
+      "accountChangePassword": "Đổi mật khẩu",
+      "accountPasswordChanged": "Đã đổi mật khẩu. Hãy lưu Cài đặt để giữ mã thông báo mới."
     },
     "geocoding": {
       "title": "Mã hóa địa lý",
@@ -4286,7 +4354,8 @@
       "checkValidity": "Kiểm tra tính hợp lệ",
       "fixGeometries": "Sửa hình học",
       "checkTopologyRules": "Kiểm tra các quy tắc cấu trúc liên kết",
-      "fixTopology": "Sửa cấu trúc liên kết"
+      "fixTopology": "Sửa cấu trúc liên kết",
+      "summarizeWithin": "Tổng hợp trong vùng…"
     },
     "networkTool": {
       "isochrone": "Isochrone / khu vực dịch vụ",
@@ -4697,7 +4766,8 @@
       "storymapEllipsis": "Bản đồ câu chuyện...",
       "pointerElevationNoticeTitle": "Độ cao sử dụng dịch vụ độ cao công cộng",
       "pointerElevationNoticeDesc": "Việc đọc độ cao của thanh trạng thái được phân giải từ địa hình 3D của chính bản đồ khi tính năng này được bật, tính năng này sẽ không gửi đi đâu cả. Nếu không có địa hình 3D, nó sẽ quay trở lại API độ cao Open-Meteo công khai và tọa độ dưới con trỏ sẽ rời khỏi thiết bị của bạn cho những yêu cầu đó.",
-      "batchTools": "Công cụ hàng loạt"
+      "batchTools": "Công cụ hàng loạt",
+      "sharedData": "Thư viện dữ liệu dùng chung…"
     },
     "plugin": {
       "maplibre-gl-dimensions": "Kích thước",
@@ -7620,6 +7690,26 @@
               "description": "Báo cáo các sửa chữa sẽ được áp dụng mà không tạo lớp đã sửa."
             }
           }
+        },
+        "summarize-within": {
+          "name": "Tổng hợp trong vùng",
+          "description": "Đếm các đối tượng của lớp khác giao với từng đa giác, tổng hợp một trường số và đo tỷ lệ diện tích chúng bao phủ trong mỗi đa giác",
+          "params": {
+            "layer": {
+              "label": "Lớp đa giác"
+            },
+            "overlay": {
+              "label": "Lớp cần tổng hợp"
+            },
+            "field": {
+              "label": "Trường số",
+              "description": "Tùy chọn. Thêm tổng, trung bình, giá trị nhỏ nhất và lớn nhất của trường này cho từng đa giác."
+            },
+            "min_overlap_pct": {
+              "label": "Bỏ qua phần chồng lấn nhỏ hơn (%)",
+              "description": "Khi lớp cần tổng hợp chứa đa giác, bỏ qua các đa giác bao phủ ít hơn tỷ lệ này của một đa giác, chẳng hạn các mảnh nhỏ dọc theo cạnh chung."
+            }
+          }
         }
       },
       "network": {
@@ -8898,7 +8988,8 @@
     "includeField": "Bao gồm trường khi xuất",
     "moveLeft": "Di chuyển sang trái",
     "moveRight": "Di chuyển sang phải",
-    "deleteField": "Xóa trường"
+    "deleteField": "Xóa trường",
+    "nullValue": "NULL"
   },
   "styleManager": {
     "title": "Trình quản lý phong cách",
@@ -9345,7 +9436,7 @@
       "opacity": "Chiều rộng hào quang văn bản",
       "advanced": "Biểu thức chiều cao nâng cao",
       "heightExpression": "biểu hiện chiều cao",
-      "baseExpression": "Biểu thức cao độ đáy (tùy chọn)",
+      "baseExpression": "Biểu thức đáy",
       "heightProperty": "Thuộc tính chiều cao",
       "heightScale": "Thang đo chiều cao",
       "base": "Chiều cao cơ sở",
@@ -9355,7 +9446,6 @@
       "baseHint": "Mỗi đối tượng bắt đầu tại chiều cao cơ sở + thuộc tính đáy × tỷ lệ đáy, nên các tầng được xếp chồng từ một trường tầng. Đặt chiều cao tầng để mỗi đối tượng có độ dày đó trên đáy của nó; nếu không, chiều cao là độ cao của mái và phải lớn hơn đáy.",
       "floorHeight": "Chiều cao tầng",
       "floorHeightHint": "Khi lớn hơn 0, mỗi đối tượng cao bấy nhiêu mét trên đáy của nó và các thiết lập chiều cao bị bỏ qua. Giá trị 0 dùng chiều cao làm độ cao của mái.",
-      "baseExpression": "Biểu thức đáy",
       "apply": "Áp dụng đùn 3D",
       "footer": "Tam giác"
     },
