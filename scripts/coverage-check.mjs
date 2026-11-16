@@ -34,15 +34,15 @@ const FUNCTIONS = 63;
 // file list to find large modules that no test loads.
 const LCOV_PATH = "coverage/frontend.lcov";
 
-/** The `node --test` invocation this gate wraps. */
+/**
+ * The `node --test` invocation this gate wraps. Node expands the test glob
+ * itself (no shell), keeping the command short enough for Windows as the suite
+ * grows and behaving the same under PowerShell, cmd.exe, zsh, and bash.
+ */
 function testRunnerArgs() {
-  // Expanded here rather than left to a shell glob, so the gate behaves the
-  // same under zsh, bash, and cmd.exe.
-  const testFiles = readdirSync("tests")
-    .filter((name) => name.endsWith(".test.ts"))
-    .sort()
-    .map((name) => path.posix.join("tests", name));
-  if (testFiles.length === 0) throw new Error("no tests/*.test.ts files found");
+  if (!readdirSync("tests").some((name) => name.endsWith(".test.ts"))) {
+    throw new Error("no tests/*.test.ts files found");
+  }
   return [
     "--import",
     "tsx",
@@ -60,7 +60,7 @@ function testRunnerArgs() {
     "--test-coverage-exclude=tests/**",
     "--test-coverage-exclude=e2e/**",
     "--test-coverage-exclude=**/*.config.*",
-    ...testFiles,
+    "tests/*.test.ts",
   ];
 }
 
