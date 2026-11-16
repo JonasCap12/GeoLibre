@@ -94,7 +94,7 @@ test("keeps every toolbar menu on one scrollable row on small screens", async ({
   expect(box?.height).toBeLessThan(56);
   expect(await menus.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   expect(await header.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(false);
-  await expect(page.getByRole("button", { name: /Switch to (Light|Dark) Mode/ })).toBeInViewport();
+  await expect(page.getByRole("button", { name: /switch to (light|dark) mode/i })).toBeInViewport();
 
   for (const menu of [
     "Project",
