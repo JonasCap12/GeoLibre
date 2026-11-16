@@ -161,6 +161,14 @@ describe("Node collaboration relay", () => {
         });
         assert.equal(response.status, 403, `${origin} should require explicit configuration`);
       }
+
+      const headerless = await fetch(`${http}/sessions`, { method: "POST" });
+      assert.equal(headerless.status, 403, "no Origin or Referer once an allowlist is set");
+      const referred = await fetch(`${http}/sessions`, {
+        method: "POST",
+        headers: { referer: "https://allowed.example/map" },
+      });
+      assert.equal(referred.status, 200);
     } finally {
       if (previous === undefined) delete process.env.ALLOWED_ORIGINS;
       else process.env.ALLOWED_ORIGINS = previous;

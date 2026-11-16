@@ -100,8 +100,8 @@
     "GEOLIBRE_MFA_GRACE_DAYS": "7"
     // Secrets, set with `wrangler secret put … -c workers/projects-api/wrangler.jsonc`
     // and never written here:
-    //   TURNSTILE_SECRET_KEY  bot check on register / reset. Unset skips it
-    //                         with a warning in the logs.
+    //   TURNSTILE_SECRET_KEY  bot check on register / reset. Unset answers
+    //                         503 (local dev: GEOLIBRE_TURNSTILE_DISABLED=1).
     //   MFA_ENCRYPTION_KEY    base64 of 32 random bytes; encrypts TOTP secrets.
   },
 

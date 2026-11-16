@@ -279,10 +279,13 @@ ephemeral and never written to a project file.
 > and defense-in-depth (not authentication or a general server-side access gate)
 > and enforces a per-IP `checkRateLimit` (10 requests / 60 s). `Access-Control-Allow-Origin: *` is
 > still sent on responses so non-browser clients (e.g. Tauri) are not blocked by
-> CORS; non-browser clients may omit these headers and remain supported, unless a
-> verifiable credential requirement is added. Configure `ALLOWED_ORIGINS`
-> (comma-separated list) to restrict which browser origins may create sessions in
-> production.
+> CORS. Configure `ALLOWED_ORIGINS` (comma-separated list) to restrict which
+> browser origins may create sessions in production. A configured list is
+> authoritative: a request with neither `Origin` nor `Referer` is then refused
+> (`403`), on both the Cloudflare relay and the Node relay (`workers/collab-node`).
+> Only with `ALLOWED_ORIGINS` unset may non-browser clients omit the headers. The
+> desktop app's webview sends an Origin (`http://tauri.localhost` on Windows,
+> `tauri://localhost` on macOS/Linux), so list both to let it create sessions.
 
 ## Feature flag
 

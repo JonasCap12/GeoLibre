@@ -57,7 +57,10 @@ function isAllowedOrigin(
   originHeader: string | undefined,
   envAllowed = process.env.ALLOWED_ORIGINS,
 ): boolean {
-  if (!originHeader) return true;
+  // A configured allowlist is authoritative: a request carrying neither Origin
+  // nor Referer is refused, the same as the Cloudflare relay. Unset keeps the
+  // upstream behaviour, where such non-browser clients are let through.
+  if (!originHeader) return envAllowed === undefined;
   const allowedList = envAllowed
     ? envAllowed
         .split(",")

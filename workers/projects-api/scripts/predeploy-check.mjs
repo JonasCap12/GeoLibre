@@ -10,8 +10,8 @@
 //    schema-sessions-mfa.sql are applied by hand. The Worker selects their
 //    columns on every authenticated request, so deploying before they exist
 //    turns every signed-in call into a 500.
-// 2. Secrets. Without TURNSTILE_SECRET_KEY the Worker skips the bot check with
-//    only a log line; without MFA_ENCRYPTION_KEY nobody can turn two-factor on,
+// 2. Secrets. Without TURNSTILE_SECRET_KEY registration and password reset
+//    answer 503; without MFA_ENCRYPTION_KEY nobody can turn two-factor on,
 //    and admin routes require it, so no invite can be sent.
 
 import { spawnSync } from "node:child_process";
