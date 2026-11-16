@@ -26,7 +26,7 @@
     "test:backend": "python -m pytest backend/geolibre_server/tests",
     "test:backend:coverage": "python -m pytest backend/geolibre_server/tests --cov=geolibre_server --cov-report=term-missing --cov-fail-under=55",
     "test:docker": "python -m pytest docker/tests",
-    "test:worker": "npm run typecheck -w geolibre-viewer-worker && npm run typecheck -w geolibre-collab-worker && npm run typecheck -w geolibre-collab-node && npm test -w geolibre-collab-node && npm run typecheck -w geolibre-tiles-worker && npm run typecheck -w geolibre-ai-proxy-worker",
+    "test:worker": "npm run typecheck -w geolibre-viewer-worker && npm run typecheck -w geolibre-collab-worker && npm run typecheck -w geolibre-collab-node && npm test -w geolibre-collab-node && npm run typecheck -w geolibre-tiles-worker && npm run typecheck -w geolibre-ai-proxy-worker && npm run typecheck -w geolibre-projects-api-worker && tsc -p workers/web/tsconfig.json --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:core": "playwright test --project=core --project=core-engines",
     "test:e2e:features": "playwright test --project=features",
@@ -86,12 +86,12 @@
       "eslint": "$eslint"
     },
     "fast-uri": "^3.1.7",
-    "proxy-addr": "^2.0.8",
     "filelist": "^2.0.2",
     "maplibre-gl": "^6.3.0",
     "miniflare": {
       "undici": "^7.29.0"
     },
+    "proxy-addr": "^2.0.8",
     "sweepline-intersections": "^1.5.0",
     "texture-compressor": {
       "image-size": "^2.0.4"
