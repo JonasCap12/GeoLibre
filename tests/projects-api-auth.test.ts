@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   MIN_PASSWORD_LENGTH,
@@ -12,15 +11,14 @@ import {
   sessionsAfterCredentialChange,
   type AuthActionRow,
 } from "../workers/projects-api/src/auth-policy.ts";
+import { apiScope, signedInRow, worker } from "./helpers/projects-api";
 
 /**
  * POST /api/accounts used to mint an account for anyone who knew the hostname.
  * The six staff passwords were also permanent, and a forgotten one could not be
  * recovered because an account had no email. These rules are what close that.
  *
- * The Worker entry imports the Workers runtime, so Node cannot load it. The
- * decisions live in auth-policy.ts and the entry calls them. A source check at
- * the bottom is the wiring the runner cannot execute.
+ * Exercise the policy and the fetch handler so dispatch cannot bypass it.
  */
 
 const NOW = "2026-09-29T02:00:00.000Z";
@@ -103,16 +101,23 @@ describe("password policy", () => {
     assert.equal(passwordPolicyError("dung2k3!"), null);
   });
 
-  it("requires the current password to be checked by the caller", () => {
-    // The policy module does not know the stored hash. The entry refuses the
-    // change unless passwordMatches says the current one is right; this pins
-    // that the route still says so.
-    const source = readFileSync(
-      new URL("../workers/projects-api/src/index.ts", import.meta.url),
-      "utf8",
+  it("rejects a password change with the wrong current password", async () => {
+    const h = apiScope({
+      path: "/api/auth/password",
+      body: {
+        currentPassword: "wrong",
+        password: "Replacement$Passphrase72!",
+      },
+    });
+    h.db.on("first", /FROM accounts a JOIN tokens/, signedInRow());
+    h.scope.request.headers.set("Authorization", "Bearer session-token");
+    const response = await worker.fetch(h.scope.request, h.scope.env, h.scope.ctx);
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: "current password is incorrect" });
+    assert.equal(
+      h.db.calls.some((c) => c.sql.startsWith("UPDATE accounts SET password_hash")),
+      false,
     );
-    assert.match(source, /current password is incorrect/);
-    assert.match(source, /passwordMatches\(current, account\.password_hash\)/);
   });
 });
 
@@ -127,16 +132,31 @@ describe("invites are admin-only", () => {
 });
 
 describe("the worker entry uses these decisions", () => {
-  it("does not register an account without asking the invite rule, and it deletes sessions", () => {
-    // index.ts cannot be imported under Node. This is the check that the
-    // route still calls the rule and still revokes tokens for the account,
-    // not only the one digest presented on sign-out.
-    const source = readFileSync(
-      new URL("../workers/projects-api/src/index.ts", import.meta.url),
-      "utf8",
+  it("refuses registration without an invite and revokes all account sessions on logout", async () => {
+    const register = apiScope({
+      path: "/api/accounts",
+      body: {
+        username: "new-user",
+        password: "Replacement$Passphrase72!",
+      },
+    });
+    const refused = await worker.fetch(
+      register.scope.request,
+      register.scope.env,
+      register.scope.ctx,
     );
-    assert.match(source, /registrationRefusal/);
-    assert.match(source, /DELETE FROM tokens WHERE account_id = \?/);
-    assert.match(source, /isAdminUsername/);
+    assert.equal(refused.status, 403);
+    assert.deepEqual(await refused.json(), { error: "invite is invalid or expired" });
+    assert.equal(register.db.calls.length, 0);
+    const h = apiScope({ path: "/api/auth/sessions", method: "DELETE" });
+    h.db.on("first", /FROM accounts a JOIN tokens/, signedInRow());
+    h.scope.request.headers.set("Authorization", "Bearer session-token");
+    const response = await worker.fetch(h.scope.request, h.scope.env, h.scope.ctx);
+    assert.equal(response.status, 204);
+    assert.deepEqual(
+      h.db.calls.find((c) => c.sql === "DELETE FROM tokens WHERE account_id = ?")?.bindings,
+      ["owner"],
+    );
+    await h.drain();
   });
 });
