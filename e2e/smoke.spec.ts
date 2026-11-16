@@ -100,7 +100,7 @@ test("keeps every toolbar menu on one scrollable row on small screens", async ({
     "Project",
     "Edit",
     "View",
-    "Add Data",
+    "Add data",
     "Processing",
     "Controls",
     "Plugins",

@@ -29,6 +29,7 @@ const RESERVED_PARAMS: ReadonlySet<string> = new Set([
   "panels",
   "hidePanels",
   "maponly",
+  "draw",
   "theme",
   "welcome",
   // i18n + collaboration.

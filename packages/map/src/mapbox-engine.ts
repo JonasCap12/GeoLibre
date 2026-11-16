@@ -19,7 +19,8 @@ import {
   redactUrlCredentials,
   styleValue,
 } from "@geolibre/core";
-import { circlePaint, fillPaint, linePaint, rasterPaint } from "./style-mapper";
+import { circlePaint, fillPaint, linePaint, rasterPaint, withPaintResets } from "./style-mapper";
+import { OwnedPaintResets } from "./owned-paint-resets";
 import {
   DEFAULT_BUILT_IN_CONTROL_POSITIONS,
   DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
@@ -40,7 +41,6 @@ import {
   compileMapboxLayer,
   DEFAULT_MAPBOX_TEXT_FONT,
   type MapboxLayerPlan,
-  mapboxPaint,
 } from "./gl-style-compiler";
 import {
   isInternalMapboxLayer,
@@ -198,6 +198,8 @@ export class MapboxEngine implements MapEngine {
   private plans = new Map<string, MapboxLayerPlan>();
   private previous = new Map<string, GeoLibreLayer>();
   private errors = new Map<string, string>();
+  /** The nullable paint GeoLibre wrote on plugin native layers (see OwnedPaintResets). */
+  private readonly ownedPaintResets = new OwnedPaintResets();
   private basemap: mapboxgl.LayerSpecification[] = [];
   // Label font borrowed from the basemap: a style only serves its own glyphs.
   private textFont: string[] = DEFAULT_MAPBOX_TEXT_FONT;
@@ -577,15 +579,19 @@ export class MapboxEngine implements MapEngine {
     location: StoryChapterLocation,
     animation: StoryChapterAnimation = "flyTo",
     rotate = false,
+    onArrive?: () => void,
   ): void {
     const map = this.map;
-    if (!map) return;
+    if (!map) {
+      onArrive?.();
+      return;
+    }
     const token = ++this.storyCameraToken;
     if (this.pendingStoryRotate) {
       map.off("moveend", this.pendingStoryRotate);
       this.pendingStoryRotate = null;
     }
-    if (!rotate) {
+    if (!rotate && !onArrive) {
       map[animation](
         { ...storyCameraOptions(location), duration: 800 },
         { storyCameraToken: token },
@@ -597,10 +603,13 @@ export class MapboxEngine implements MapEngine {
       map.off("moveend", onMoveEnd);
       if (this.pendingStoryRotate === onMoveEnd) this.pendingStoryRotate = null;
       if (this.storyCameraToken !== token || !this.map) return;
-      this.map.rotateTo(this.map.getBearing() + 180, {
-        duration: 30000,
-        easing: (time) => time,
-      });
+      onArrive?.();
+      if (rotate && this.storyCameraToken === token && this.map) {
+        this.map.rotateTo(this.map.getBearing() + 180, {
+          duration: 30000,
+          easing: (time) => time,
+        });
+      }
     };
     // Listen before moving: jumpTo fires its moveend synchronously.
     this.pendingStoryRotate = onMoveEnd;
@@ -992,12 +1001,28 @@ export class MapboxEngine implements MapEngine {
                 ? circlePaint(style, layer.opacity)
                 : null;
       if (!paint) continue;
-      for (const [property, value] of Object.entries(mapboxPaint(paint))) {
-        if (value === undefined || value === null) continue;
+      // Mapbox's map.getLayer serializes a fresh copy on every call, so the
+      // style's own layer object stands in for the layer's identity. Without
+      // it nothing is owned and nothing is reset (see OwnedPaintResets).
+      const lookup = (layerId: string): object | undefined =>
+        (
+          map as unknown as { style?: { getOwnLayer?: (id: string) => object | undefined } }
+        ).style?.getOwnLayer?.(layerId) ?? undefined;
+      // A `null` from withPaintResets is the reset of a property the style no
+      // longer sets (a dash cleared back to solid); setPaintProperty takes it.
+      for (const [property, value] of Object.entries(withPaintResets(native.type, paint))) {
+        if (value === undefined || property.endsWith("-layer-opacity")) continue;
+        // As on MapLibre (`setExternalNativeLayerPaint`): a reset only clears a
+        // value GeoLibre wrote, never the plugin's own (its dashes).
+        if (value === null && !this.ownedPaintResets.mayReset(lookup, id, property)) continue;
         const key = property as keyof mapboxgl.AnyPaint;
         try {
-          if (JSON.stringify(map.getPaintProperty(id, key)) !== JSON.stringify(value))
+          // An unset property reads back as undefined; compare it as null so a
+          // reset that already happened is not repeated on every sync.
+          if (JSON.stringify(map.getPaintProperty(id, key) ?? null) !== JSON.stringify(value)) {
             map.setPaintProperty(id, key, value as mapboxgl.AnyPaint[keyof mapboxgl.AnyPaint]);
+            if (value !== null) this.ownedPaintResets.recordWrite(lookup, id, property);
+          }
         } catch {
           // A control's native layers can be heterogeneous; skip a paint
           // property that does not apply to this one.
@@ -1431,12 +1456,7 @@ export class MapboxEngine implements MapEngine {
     }
   }
   restoreLayerStyles(): void {
-    this.storyCameraToken++;
-    if (this.pendingStoryRotate) {
-      this.map?.off("moveend", this.pendingStoryRotate);
-      this.pendingStoryRotate = null;
-    }
-    this.map?.stop();
+    this.stopStoryCamera();
     // Clear the fade transitions first, otherwise the restored opacities
     // animate back in over the last chapter's duration (MapLibre's
     // `restoreLayerStyles` does the same).
@@ -1735,6 +1755,9 @@ export class MapboxEngine implements MapEngine {
     };
   }
   stopCamera(): void {
+    this.stopStoryCamera();
+  }
+  stopStoryCamera(): void {
     this.storyCameraToken++;
     if (this.pendingStoryRotate) {
       this.map?.off("moveend", this.pendingStoryRotate);

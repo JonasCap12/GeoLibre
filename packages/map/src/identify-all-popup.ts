@@ -26,6 +26,10 @@ export interface MapCanvasIdentifyAllLabels {
   noData: string;
   /** Fallback when a pixel read fails without a message. */
   pixelReadFailed: string;
+  /** The row label of a single-band pixel value (an ImageServer identify). */
+  pixelValue: string;
+  /** The row label of a pixel's band that has no name, by 1-based index. */
+  pixelBand: (index: number) => string;
   /** Fallback when a WMS GetFeatureInfo request fails without a message. */
   wmsFailed: string;
   /** A WMS layer whose capabilities mark it `queryable="0"`. */
@@ -47,11 +51,13 @@ export const DEFAULT_IDENTIFY_ALL_LABELS: MapCanvasIdentifyAllLabels = {
   expandAll: "Expand all",
   collapseAll: "Collapse all",
   loadingTitle: "Identify visible layers",
-  loading: "Loading...",
+  loading: "Loading…",
   errorLabel: "Error",
   error: "Could not identify this layer.",
   noData: "No data at this location.",
   pixelReadFailed: "The pixel value could not be read.",
+  pixelValue: "Value",
+  pixelBand: (index) => `Band ${index}`,
   wmsFailed: "The WMS GetFeatureInfo request failed.",
   wmsNotQueryable: "This WMS layer does not provide feature information.",
   editGeometry: "Edit geometry",

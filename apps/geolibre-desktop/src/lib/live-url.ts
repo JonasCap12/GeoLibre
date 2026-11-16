@@ -1,0 +1,143 @@
+import { normalizeMapCrs, type MapViewState } from "@geolibre/core";
+import { coordinateTargetFromSearch } from "./coordinate-url";
+import { isTauri } from "./is-tauri";
+
+// Host routing, startup, authentication and layout parameters are never owned
+// by plugins, even if a plugin accidentally declares one of these names.
+const HOST_PARAMETERS = new Set([
+  "lat",
+  "lon",
+  "zoom",
+  "crs",
+  "url",
+  "project",
+  "plugin",
+  "plugins",
+  "tool",
+  "add",
+  "serviceUrl",
+  "serviceStyle",
+  "serviceLayer",
+  "style",
+  "dataType",
+  "data",
+  "stac",
+  "role",
+  "shareRole",
+  "embed",
+  "viewer",
+  "theme",
+  "lang",
+  "language",
+  "collab",
+  "code",
+  "state",
+  "error",
+  "error_description",
+  "session_state",
+  "conn",
+  "schema",
+  "table",
+  "geom",
+  "srid",
+  "layout",
+  "panels",
+  "toolbar",
+  "draw",
+  "locale",
+  "uiProfile",
+  "projectUrl",
+  "project_url",
+  "settingsUrl",
+  "settingUrl",
+  "screenshot",
+  "iframe",
+  "hidePanels",
+  "maponly",
+  "welcome",
+  "loading",
+]);
+
+/** Merge against the address at write time so camera and plugin writes compose. */
+export function replaceUrlParameters(params: URLSearchParams, names: readonly string[]): void {
+  if (typeof window === "undefined" || isTauri() || names.length === 0) return;
+  const url = new URL(window.location.href);
+  for (const name of names) {
+    url.searchParams.delete(name);
+    for (const value of params.getAll(name)) url.searchParams.append(name, value);
+  }
+  if (url.href !== window.location.href) {
+    window.history.replaceState(window.history.state, "", url.href);
+  }
+}
+
+/** The manager supplies the ownership list; unscoped calls cannot write. */
+export function setPluginUrlParameters(
+  params: URLSearchParams,
+  names: readonly string[] = [],
+): void {
+  replaceUrlParameters(
+    params,
+    names.filter((name) => !HOST_PARAMETERS.has(name)),
+  );
+}
+
+/**
+ * Find the compact `?z/lat/lon` launch token, which `URLSearchParams` reads as
+ * a bare key with an empty value.
+ *
+ * Args:
+ *   params: The address's current query parameters.
+ *
+ * Returns:
+ *   The bare keys that parse as a valid compact coordinate token. Other
+ *   slash-shaped keys, such as `a/b/c` from an embedding page, are kept.
+ */
+export function compactCoordinateKeys(params: URLSearchParams): string[] {
+  const keys: string[] = [];
+  for (const [key, value] of params) {
+    // A decoded `&` or `=` would let the reparse read embedded lat/lon instead.
+    if (
+      value === "" &&
+      key.split("/").length === 3 &&
+      !/[&=#?]/.test(key) &&
+      coordinateTargetFromSearch(`?${key}`)
+    ) {
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
+export function setMapViewUrl(view: MapViewState): void {
+  const [lon, lat] = view.center;
+  if (![lon, lat, view.zoom].every(Number.isFinite)) return;
+  if (typeof window === "undefined") return;
+  const rounded = (value: number, digits: number) => String(Number(value.toFixed(digits)));
+  // The live lat/lon/zoom replace a compact launch token, so a copied link
+  // carries one view instead of a stale `14%2F39.5%2F-119.8=` key beside it.
+  const compact = compactCoordinateKeys(new URL(window.location.href).searchParams);
+  replaceUrlParameters(
+    new URLSearchParams({
+      lat: rounded(lat, 6),
+      lon: rounded(((((lon + 180) % 360) + 360) % 360) - 180, 6),
+      zoom: rounded(view.zoom, 2),
+    }),
+    ["lat", "lon", "zoom", ...compact],
+  );
+}
+
+/**
+ * Keep the address's `crs` on the CRS the map is drawn in, so a copied link
+ * opens the same map. A link's own spelling of that CRS (`EPSG:3413` for the
+ * `earth-arctic` preset) is left as written.
+ *
+ * Args:
+ *   mapCrs: The map's normalized CRS, or `null` on the default map.
+ */
+export function setMapCrsUrl(mapCrs: string | null): void {
+  if (typeof window === "undefined") return;
+  const current = new URL(window.location.href).searchParams.get("crs");
+  if (mapCrs !== null && normalizeMapCrs(current) === mapCrs) return;
+  replaceUrlParameters(new URLSearchParams(mapCrs === null ? {} : { crs: mapCrs }), ["crs"]);
+}

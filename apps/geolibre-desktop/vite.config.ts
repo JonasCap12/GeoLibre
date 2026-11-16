@@ -12,6 +12,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import { bundledPlugins } from "./vite-plugins/bundled-plugins";
 import { copyCesiumAssets } from "./vite-plugins/copy-cesium-assets";
 import { copyVectorOps } from "./vite-plugins/copy-vector-ops";
+import { isolateMaplibreRegistryPlugin } from "./vite-plugins/isolate-maplibre-registry";
 import { sharedH5wasmChunkPlugin, workerH5wasmFromMainPlugin } from "./vite-plugins/shared-h5wasm";
 import {
   proxyAircraftRequestGuarded,
@@ -205,6 +206,22 @@ const PGLITE_CDN = process.env.GEOLIBRE_PGLITE_CDN !== "0";
 const IS_EMBED = process.env.GEOLIBRE_EMBED === "1";
 const PWA_DISABLED = IS_TAURI_BUILD || IS_EMBED;
 
+// Opt-in cross-origin isolation (COOP same-origin + COEP require-corp)
+// for multi-threaded WebAssembly with SharedArrayBuffer. Preserves standard embed
+// and third-party iframe compatibility when left unset or "0".
+// Read here, before the build-env allowlist below drops unknown VITE_ vars: the
+// flag configures the servers only and is not exposed to the bundle.
+const CROSS_ORIGIN_ISOLATION =
+  process.env.VITE_CROSS_ORIGIN_ISOLATION === "1" || process.env.CROSS_ORIGIN_ISOLATION === "1";
+const CROSS_ORIGIN_ISOLATION_SERVER = CROSS_ORIGIN_ISOLATION
+  ? {
+      headers: {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+      },
+    }
+  : {};
+
 // ---------------------------------------------------------------------------
 // Build-time env exposed to the bundle.
 //
@@ -279,10 +296,13 @@ const BUILD_ENV_KEYS = [
   "VITE_GEOLIBRE_COLLAB_URL",
   "VITE_GEOLIBRE_DEFAULT_BASEMAP",
   "VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS",
+  "VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS",
   "VITE_GEOLIBRE_EMBED_ORIGINS",
   "VITE_GEOLIBRE_GEOLENS_SERVERS",
   "VITE_GEOLIBRE_GA_MEASUREMENT_ID",
+  "VITE_GEOLIBRE_OVERPASS_URL",
   "VITE_GEOLIBRE_PLUGIN_REGISTRY_URL",
+  "VITE_GEOLIBRE_PROJECT_STORAGE",
   "VITE_GEOLIBRE_SHARE_URL",
   "VITE_GEOLIBRE_SELFHOST_AUTH",
   "VITE_GEOLIBRE_TILES_URL",
@@ -626,7 +646,6 @@ function manualChunks(id: string): string | undefined {
   // generic `maplibre-gl` rule below, which would fold it into the eager
   // `maplibre` chunk and force DuckDB into boot. Give it its own lazy chunk.
   if (id.includes("maplibre-gl-duckdb")) return "maplibre-duckdb";
-  if (id.includes("/mapbox-gl/")) return "mapbox";
   // One chunk per `maplibre-gl-*` feature plugin (components, splat, 3d-tiles,
   // lidar, …). A single shared chunk put ~12 MB of plugins, plus the
   // dependencies they pull in (three, deck.gl, luma.gl), into the chunk that
@@ -1069,6 +1088,53 @@ function stripDuckDbWorkerSourcemapPlugin(): Plugin {
   };
 }
 
+/**
+ * Keep the redistributed build within its dependencies' licenses.
+ *
+ * Fails the build if proprietary Mapbox GL JS or its stylesheet is imported,
+ * including transitively; `loadMapboxGl` fetches it from Mapbox's CDN instead. Also
+ * emits the license and source link the LGPL requires for the gdal3.js loader,
+ * the one LGPL file in the bundle.
+ *
+ * @returns The Vite plugin.
+ */
+function thirdPartyLicensePlugin(): Plugin {
+  return {
+    name: "geolibre-third-party-licenses",
+    apply: "build",
+    enforce: "pre",
+    load(id) {
+      if (id.replaceAll("\\", "/").includes("/node_modules/mapbox-gl/")) {
+        this.error(
+          `${id} reached the build. Mapbox GL JS is proprietary and must not be bundled; use loadMapboxGl.`,
+        );
+      }
+      return null;
+    },
+    generateBundle() {
+      const { dir, manifest } = findPackageManifest(
+        pgliteCdnRequire.resolve("gdal3.js"),
+        "gdal3.js",
+      );
+      this.emitFile({
+        type: "asset",
+        fileName: "licenses/gdal3.js/LICENSE",
+        source: readFileSync(path.join(dir, "LICENSE"), "utf8"),
+      });
+      this.emitFile({
+        type: "asset",
+        fileName: "licenses/gdal3.js/NOTICE.txt",
+        source: [
+          `GeoLibre's Georeferencer export uses gdal3.js ${manifest.version}, unmodified.`,
+          "gdal3.js is licensed under the GNU Lesser General Public License, version 2.1 or later; see LICENSE in this directory.",
+          `Source code: https://github.com/bugra9/gdal3.js/tree/v${manifest.version}`,
+          "",
+        ].join("\n"),
+      });
+    },
+  };
+}
+
 function selectiveJsMinifyPlugin(): Plugin {
   return {
     name: "geolibre-selective-js-minify",
@@ -1362,9 +1428,11 @@ function pwaPlugin(): Plugin[] {
     // subsequent requests. We deliberately suppress workbox's default
     // force-reload-on-activate via `onNeedReload` in main.tsx — that reload
     // fired spuriously on the relative-base `/demo/` subpath and discarded map
-    // state. Page refreshes are left to installStaleChunkReload
-    // (src/lib/stale-chunk-reload.ts), which reloads on-demand only when a now
-    // orphaned lazy chunk actually 404s; precached chunks never 404.
+    // state. Instead the user is offered a reload (src/lib/app-update.ts) once
+    // the deployed index.html is confirmed to load a different build, and
+    // installStaleChunkReload (src/lib/stale-chunk-reload.ts) still reloads
+    // on-demand if a now orphaned lazy chunk 404s first; precached chunks never
+    // 404.
     registerType: "autoUpdate",
     // We register the SW by hand in main.tsx so registration lives next to the
     // stale-chunk reload it coordinates with; no auto-injected snippet.
@@ -1512,6 +1580,8 @@ export default defineConfig({
     ...(CEREUS_CDN ? [cereusCdnLoaderPlugin()] : []),
     duckdbWasmBundlesPlugin(),
     stripDuckDbWorkerSourcemapPlugin(),
+    thirdPartyLicensePlugin(),
+    isolateMaplibreRegistryPlugin(),
     projectUrlQueryPlugin(),
     bundledPlugins(path.resolve(__dirname, "public/plugins")),
     copyVectorOps(
@@ -1560,6 +1630,7 @@ export default defineConfig({
     // answered with "Blocked request". `.ts.net` names are only resolvable
     // inside the tailnet, so allowing them does not widen public exposure.
     allowedHosts: [".ts.net"],
+    ...CROSS_ORIGIN_ISOLATION_SERVER,
     watch: {
       // Never watch the Rust side. `tauri dev` runs this dev server as its
       // `beforeDevCommand` and then starts cargo in the same tree, so the
@@ -1574,6 +1645,9 @@ export default defineConfig({
       // defaults (node_modules, .git), not a replacement for them.
       ignored: ["**/src-tauri/**"],
     },
+  },
+  preview: {
+    ...CROSS_ORIGIN_ISOLATION_SERVER,
   },
   worker: {
     format: "es",
@@ -1591,6 +1665,7 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_"],
   optimizeDeps: {
+    rolldownOptions: { plugins: [isolateMaplibreRegistryPlugin()] },
     // Pre-bundle the AI Assistant's heavy deps at dev-server startup. They are
     // only reached through the lazily-imported assistant panel (and, for the
     // provider models, through dynamic import() inside it), so Vite would

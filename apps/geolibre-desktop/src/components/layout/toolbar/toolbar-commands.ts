@@ -53,6 +53,7 @@ import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
 import type { ViewportHistory } from "../../../hooks/useViewportHistory";
 import { IS_MAS_BUILD } from "../../../lib/build-flags";
 import type { Command } from "../../../lib/commands";
+import { resolveProjectStorage } from "../../../lib/project-storage";
 import { CVD_MODE_LABEL_KEYS, useCvdPreviewStore } from "../../../lib/cvd-preview-store";
 import { CVD_MODES } from "../../../lib/cvd-simulation";
 import { useLineOfSightTool } from "../../../lib/line-of-sight-store";
@@ -122,6 +123,7 @@ export interface ToolbarCommandContext {
   addLayer: AddLayerHandlers;
   openAddDataKind: (kind: AddDataKind) => void;
   osmPbf: { setDialogOpen: (open: boolean) => void };
+  tilePackage: { busy: boolean; setDialogOpen: (open: boolean) => void };
   handleOpenPlanetaryComputer: () => void;
   panels: ToolbarPanels;
   consent: { handleToggleDirections: () => void };
@@ -134,6 +136,8 @@ export interface ToolbarCommandContext {
   /** Open New Project with its Examples (starter projects) section expanded. */
   openStarterExamples: () => void;
   setShareDialogOpen: SetOpen;
+  /** Open the Gallery, optionally on the signed-in user's own projects. */
+  openGalleryScope: (scope?: "mine") => void;
   setPrintLayoutOpen: SetOpen;
   setGeoreferencerOpen: SetOpen;
   setFieldCollectionOpen: SetOpen;
@@ -195,6 +199,7 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
     addLayer,
     openAddDataKind,
     osmPbf,
+    tilePackage,
     handleOpenPlanetaryComputer,
     panels,
     consent,
@@ -206,6 +211,7 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
     setNewProjectDialogOpen,
     openStarterExamples,
     setShareDialogOpen,
+    openGalleryScope,
     setPrintLayoutOpen,
     setGeoreferencerOpen,
     setFieldCollectionOpen,
@@ -267,7 +273,13 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       keywords: "load",
       icon: FolderOpen,
       shortcut: { key: "o", mod: true, shift: false },
-      run: () => void projectFiles.handleOpenFromFile(),
+      run: () => {
+        if (resolveProjectStorage() === "server") {
+          openGalleryScope("mine");
+        } else {
+          void projectFiles.handleOpenFromFile();
+        }
+      },
     },
     {
       id: "project.open-url",
@@ -349,6 +361,17 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       title: t("toolbar.command.addOsmPbfLayer"),
       group: t("toolbar.commandGroup.addData"),
       run: () => osmPbf.setDialogOpen(true),
+    },
+    {
+      id: "add.vtpk",
+      title: t("toolbar.command.addVtpkLayer"),
+      group: t("toolbar.commandGroup.addData"),
+      run: () => {
+        // Same guard as the Add Data menu entry: a second open would supersede
+        // the first, which would then never add its layer.
+        if (tilePackage.busy) return;
+        tilePackage.setDialogOpen(true);
+      },
     },
     // Sources the Mac App Store build hides in the Add Data menu must not be
     // reachable through the palette either.
@@ -579,6 +602,8 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       id: "proc.planetary-computer",
       title: t("toolbar.command.planetaryComputer"),
       group: t("toolbar.commandGroup.processing"),
+      // The panel's control draws its layers through the MapLibre style API.
+      disabledReason: capabilities.nativeMapInstance ? undefined : t("renderer.pluginUnsupported"),
       run: handleOpenPlanetaryComputer,
     },
     // Earth Engine sign-in needs the Rust loopback OAuth listener, which the

@@ -31,7 +31,9 @@ import { AssistantSession } from "../../lib/assistant/agent";
 import { renderAssistantMarkdown } from "../../lib/assistant/markdown";
 import { isOllamaNetworkFailure, withOllamaOriginHint } from "../../lib/assistant/ollama";
 import { configForProfile, selectActiveAssistantProfile } from "../../lib/assistant/profiles";
+import { openReplyLink } from "../../lib/assistant/reply-links";
 import { isSendKey } from "../../lib/assistant/send-key";
+import { openExternalLink } from "../../lib/open-external";
 import { openSettingsSection } from "../layout/SettingsDialog";
 import { bedrockAuthFromConfig, hasModelPicker } from "../../lib/assistant/model-discovery";
 import { ProviderModelPicker } from "../ProviderModelPicker";
@@ -48,6 +50,11 @@ import {
   type AssistantProviderId,
 } from "../../lib/assistant/provider";
 import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
+import {
+  activatePluginForAssistant,
+  createAppAPI,
+  listAssistantActivatablePlugins,
+} from "../../hooks/usePlugins";
 import { shouldIgnoreVoiceButtonClick, useVoiceCommands } from "../../hooks/useVoiceCommands";
 import type { VoiceMode, VoiceStatus } from "../../lib/assistant/voice-session";
 // Paired with MapCanvas so it suspends pointer interaction while dragging.
@@ -79,6 +86,7 @@ const SETUP_PROVIDERS: ReadonlyArray<{
   { id: "openai", envs: ["OPENAI_API_KEY"] },
   { id: "openrouter", envs: ["OPENROUTER_API_KEY"] },
   { id: "vercel", envs: ["AI_GATEWAY_API_KEY"] },
+  { id: "trustedrouter", envs: ["TRUSTEDROUTER_API_KEY"] },
   { id: "ollama", envs: ["OLLAMA_BASE_URL"] },
   { id: "bedrock", envs: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"] },
   { id: "custom", envs: ["OPENAI_COMPATIBLE_BASE_URL", "OPENAI_COMPATIBLE_MODEL"] },
@@ -296,6 +304,11 @@ export function AssistantPanel({ mapControllerRef }: AssistantPanelProps) {
     () =>
       new AssistantSession({
         getMapController: () => mapControllerRef.current,
+        getAppApi: () => createAppAPI(mapControllerRef),
+        plugins: {
+          listActivatable: listAssistantActivatablePlugins,
+          activate: (pluginId) => activatePluginForAssistant(pluginId, mapControllerRef),
+        },
         // Gate assistant-authored code behind an explicit confirmation (unless
         // the user has opted into always-allow for this session). Prompt-injected
         // content could otherwise make the model run code that exfiltrates data.
@@ -399,6 +412,24 @@ export function AssistantPanel({ mapControllerRef }: AssistantPanelProps) {
     const el = outputRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [turns]);
+
+  // Links in a reply open outside the app instead of navigating its webview
+  // (system browser on the desktop, new tab on the web); see openReplyLink.
+  useEffect(() => {
+    const el = outputRef.current;
+    if (!el) return;
+    const onClick = (event: MouseEvent) => {
+      // The middle button opens a link through auxclick, not click.
+      if (event.type === "auxclick" && event.button !== 1) return;
+      openReplyLink(event, (url) => void openExternalLink(url));
+    };
+    el.addEventListener("click", onClick);
+    el.addEventListener("auxclick", onClick);
+    return () => {
+      el.removeEventListener("click", onClick);
+      el.removeEventListener("auxclick", onClick);
+    };
+  }, []);
 
   /**
    * Runs one prompt through the agent and streams it into the transcript.

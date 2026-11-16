@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { NasaEarthdataControl } from "maplibre-gl-nasa-earthdata";
+import { isolateMaplibreRegistry } from "../apps/geolibre-desktop/vite-plugins/isolate-maplibre-registry";
 import { MAX_VECTOR_BYTES } from "../packages/plugins/src/plugins/remote-file-formats";
 import {
   citedSections,
@@ -139,6 +141,37 @@ describe("maplibre-gl", () => {
   });
 });
 
+describe("maplibre-gl and mapbox-gl class registries", () => {
+  const file = (pkg: string, name: string) =>
+    readFileSync(path.resolve("node_modules", pkg, "dist", name), "utf8");
+
+  it("still collide on the property isolateMaplibreRegistry renames", () => {
+    const maplibre = file("maplibre-gl", "maplibre-gl.mjs");
+    const isolated = isolateMaplibreRegistry(
+      maplibre,
+      "/node_modules/maplibre-gl/dist/maplibre-gl.mjs",
+    );
+    assert.match(maplibre, /_classRegistryKey/, "see 'mapbox-gl' in docs/maintenance.md");
+    assert.ok(isolated !== null, "the plugin must rewrite MapLibre's main bundle");
+    assert.doesNotMatch(isolated, /_classRegistryKey/);
+    assert.match(file("mapbox-gl", "mapbox-gl.js"), /_classRegistryKey/);
+  });
+
+  it("only rewrites MapLibre's main-thread bundle", () => {
+    assert.equal(
+      isolateMaplibreRegistry("_classRegistryKey", "/node_modules/mapbox-gl/dist/x.js"),
+      null,
+    );
+    assert.equal(
+      isolateMaplibreRegistry(
+        "_classRegistryKey",
+        "/node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs",
+      ),
+      null,
+    );
+  });
+});
+
 describe("mapbox-gl", () => {
   it("keeps a geojson source's data on `_data` as the raw value", () => {
     // Text check: mapbox-gl touches `window` at import time.
@@ -153,6 +186,22 @@ describe("mapbox-gl", () => {
         "packages/map",
       ),
     );
+  });
+
+  it("still serializes map.getLayer and keeps a style's own layer on getOwnLayer", () => {
+    // The Mapbox engine's plugin mirror identifies a native layer by
+    // style.getOwnLayer (OwnedPaintResets), because map.getLayer returns a
+    // fresh serialized copy. If getOwnLayer goes, dashes on plugin layers stop
+    // resetting to solid with no error, so pin both halves here.
+    const text = readPublishedText("mapbox-gl", { workspace: "packages/map", dir: "dist" });
+    const message = contractMessage(
+      "mapbox-gl",
+      "`mapbox-gl`",
+      "map.getLayer no longer serializes, or Style.getOwnLayer is gone (OwnedPaintResets reads it)",
+      "packages/map",
+    );
+    assert.match(text, /getOwnLayer\(\w+(,\w+)?\)\{/, message);
+    assert.match(text, /getLayer\(\w+\)\{[^}]*getOwnLayer\(\w+\)[^}]*serialize\(\)/, message);
   });
 });
 
@@ -269,6 +318,42 @@ describe("Web Services control packages", () => {
       }
     });
   }
+});
+
+describe("maplibre-gl-nasa-earthdata", () => {
+  const section = "Web Services control packages (`packages/plugins/package.json`)";
+  // Both checks read method bodies, which are private or live inside the class.
+  const proto = NasaEarthdataControl.prototype as unknown as Record<string, unknown>;
+
+  it("still wires the panel Add through `this.addLayer(layer.id)`", () => {
+    // The date fallback replaces the instance's addLayer; the Add button only
+    // reaches it if the button calls the instance method.
+    assert.match(
+      sourceOf(proto._createLayerRow),
+      /this\.addLayer\(layer\.id\)/,
+      contractMessage(
+        "maplibre-gl-nasa-earthdata",
+        section,
+        "the panel Add no longer calls this.addLayer(layer.id), so the date fallback in nasa-earthdata-date-fallback.ts is bypassed",
+        "packages/plugins",
+      ),
+    );
+  });
+
+  it("still lets addLayer take a date or key, which the fallback passes through", () => {
+    const body = sourceOf(proto.addLayer);
+    for (const option of ["options?.date", "options?.key"]) {
+      assert.ok(
+        body.includes(option),
+        contractMessage(
+          "maplibre-gl-nasa-earthdata",
+          section,
+          `addLayer no longer reads ${option}, so a restore or date-picker add would be probed and moved`,
+          "packages/plugins",
+        ),
+      );
+    }
+  });
 });
 
 describe("maplibre-gl-components", () => {
@@ -394,6 +479,20 @@ describe("maplibre-gl-lidar", () => {
         ),
       );
     }
+  });
+});
+
+describe("maplibre-gl-raster", () => {
+  // The package loads deck.gl and WebGL code, so this reads the published text.
+  it("still keeps deck.gl rasters out of the depth buffer", () => {
+    assert.ok(
+      readPublishedText("maplibre-gl-raster").includes("depthWriteEnabled: false"),
+      contractMessage(
+        "maplibre-gl-raster",
+        "`maplibre-gl-raster` — rasters stay out of the depth buffer",
+        "the published bundle no longer sets `depthWriteEnabled: false` on raster layers",
+      ),
+    );
   });
 });
 
@@ -556,7 +655,7 @@ describe("maplibre-gl-splat", () => {
 
 describe("@geoman-io/maplibre-geoman-free", () => {
   const section =
-    "`@geoman-io/maplibre-geoman-free` (`packages/plugins/package.json`) — change-mode internals";
+    "`@geoman-io/maplibre-geoman-free` (`packages/plugins/package.json`) — change-mode and shape-marker internals";
 
   // Text check: Geoman needs a live map to construct, and the hook points are
   // inside its action classes. Both workspaces nest their own copy, and the
@@ -620,84 +719,209 @@ describe("@geoman-io/maplibre-geoman-free", () => {
         message("vertex marker positions no longer carry { coordinate, path }"),
       );
     });
+
+    it(`keeps the shape-markers getSegmentMiddlePosition hook points (${workspace} copy)`, () => {
+      const text = readPublishedText("@geoman-io/maplibre-geoman-free", { workspace });
+      const message = (detail: string) =>
+        contractMessage("@geoman-io/maplibre-geoman-free", section, detail, workspace);
+      assert.match(
+        text,
+        /mode = "shape_markers";/,
+        message(
+          "the shape-markers helper mode is renamed (GeoLibre hooks `helper__shape_markers`)",
+        ),
+      );
+      assert.match(
+        text,
+        /this\.gm\.actionInstances\[e\] = n, await n\.startAction\(\);/,
+        message(
+          "helpers are no longer registered before startAction(), so markers may be built before the patch",
+        ),
+      );
+      assert.ok(
+        text.includes("middle: this.getSegmentMiddlePosition("),
+        message(
+          "edge markers no longer get their position from `this.getSegmentMiddlePosition`, so the instance override is bypassed",
+        ),
+      );
+      assert.match(
+        text,
+        /getSegmentMiddlePosition\(e\) \{\s*let t = this\.gm\.mapAdapter\.project\(e\.start\.coordinate\)/,
+        message(
+          "getSegmentMiddlePosition no longer takes a { start, end } segment, or no longer projects to the screen (check whether #3382 is fixed upstream)",
+        ),
+      );
+      assert.ok(
+        text.includes("e.start.path.slice(0, e.start.path.length - 1).concat([-1])"),
+        message("edge marker paths are no longer the start's path ending in -1"),
+      );
+      assert.match(
+        text,
+        /n = \[\.\.\.e\.markerData\.segment\.end\.path\], r = n\.pop\(\)/,
+        message("insertVertex no longer splices at the edge end's path"),
+      );
+    });
   }
 });
 
 describe("maplibre-gl-planetary-computer", () => {
   const section =
-    "`maplibre-gl-planetary-computer` (`packages/plugins/package.json`) — private STAC client";
+    "`maplibre-gl-planetary-computer` (`packages/plugins/package.json`): client, restore, and sync contract";
+  const message = (detail: string) =>
+    contractMessage("maplibre-gl-planetary-computer", section, detail, "packages/plugins");
 
-  it("keeps the private STAC client fields the CORS-safe subclass reuses", async () => {
-    const { PlanetaryComputerControl, STACClient } = await import("maplibre-gl-planetary-computer");
-    const message = (detail: string) =>
-      contractMessage("maplibre-gl-planetary-computer", section, detail, "packages/plugins");
-    const client = new STACClient() as unknown as Record<string, unknown>;
-    assert.ok("abortController" in client, message("STACClient has no `abortController` field"));
-    const proto = STACClient.prototype as unknown as Record<string, unknown>;
-    for (const method of ["fetch", "getBaseUrl", "getCollections", "search", "searchWithContext"]) {
-      assert.equal(
-        typeof proto[method],
-        "function",
-        message(`STACClient has no \`${method}\` method`),
-      );
-    }
-    assert.match(
-      sourceOf(proto.fetch),
-      /^async fetch\(\w+, \w+\)/,
-      message("STACClient.fetch is no longer fetch(path, init)"),
-    );
-
-    const original = STACClient.prototype.getCollections;
-    let loads = 0;
-    STACClient.prototype.getCollections = async function () {
-      loads++;
-      return [];
+  /** The parts of a MapLibre map the control's layer manager touches. */
+  function fakeMap() {
+    const sources = new Map<string, unknown>();
+    let layers: Array<{
+      id: string;
+      layout: Record<string, unknown>;
+      paint: Record<string, unknown>;
+    }> = [];
+    return {
+      sources,
+      order: () => layers.map((layer) => layer.id),
+      getContainer: () => ({ appendChild() {}, classList: { add() {}, remove() {} } }),
+      addSource: (id: string, source: unknown) => void sources.set(id, source),
+      removeSource: (id: string) => void sources.delete(id),
+      getSource: (id: string) => sources.get(id),
+      addLayer: (layer: (typeof layers)[number], beforeId?: string) => {
+        const index = beforeId ? layers.findIndex((candidate) => candidate.id === beforeId) : -1;
+        if (index >= 0) layers.splice(index, 0, layer);
+        else layers.push(layer);
+      },
+      removeLayer: (id: string) => {
+        layers = layers.filter((layer) => layer.id !== id);
+      },
+      getLayer: (id: string) => layers.find((layer) => layer.id === id),
+      getStyle: () => ({ layers }),
+      setLayoutProperty: (id: string, name: string, value: unknown) => {
+        const layer = layers.find((candidate) => candidate.id === id);
+        if (layer) layer.layout[name] = value;
+      },
+      setPaintProperty: (id: string, name: string, value: unknown) => {
+        const layer = layers.find((candidate) => candidate.id === id);
+        if (layer) layer.paint[name] = value;
+      },
     };
-    try {
-      const control = new PlanetaryComputerControl({}) as unknown as Record<string, unknown>;
-      assert.ok(
-        control._stacClient instanceof STACClient,
-        message("the control no longer keeps its client on `_stacClient`"),
-      );
-      assert.equal(
-        loads,
-        0,
-        message("the control now loads collections in its constructor, before the swap"),
-      );
-    } finally {
-      STACClient.prototype.getCollections = original;
-    }
+  }
+
+  const item = {
+    id: "ITEM",
+    type: "Feature",
+    stac_version: "1.0.0",
+    geometry: { type: "Point", coordinates: [0, 0] },
+    bbox: [-1, -1, 1, 1],
+    properties: { datetime: "2024-01-01T00:00:00Z" },
+    links: [],
+    assets: { visual: { href: "https://example.test/visual.tif" } },
+    collection: "sentinel-2-l2a",
+  };
+
+  it("uses the client it is given and loads nothing in its constructor", async () => {
+    const { PlanetaryComputerControl, STACClient } = await import("maplibre-gl-planetary-computer");
+    let loads = 0;
+    const client = new STACClient(undefined, {
+      fetch: (async () => {
+        loads++;
+        return new Response(JSON.stringify({ collections: [] }), { status: 200 });
+      }) as typeof fetch,
+    });
+    const control = new PlanetaryComputerControl({ stacClient: client });
+    assert.equal(
+      control.getStacClient(),
+      client,
+      message("the control no longer uses the `stacClient` option"),
+    );
+    assert.equal(loads, 0, message("the control now loads collections in its constructor"));
   });
 
-  it("issues only GET requests outside search", async () => {
+  it("searches with a GET and issues only GET requests for the other reads", async () => {
     const { STACClient } = await import("maplibre-gl-planetary-computer");
-    const methods: string[] = [];
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
-      methods.push(init?.method ?? "GET");
-      return new Response(JSON.stringify({ collections: [], features: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
-    try {
-      const client = new STACClient();
-      await client.getCollections();
-      await client.getCollection("x");
-      await client.getCollectionItems("x");
-      await client.getItem("x", "y");
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    const requests: string[] = [];
+    const client = new STACClient("https://stac.test", {
+      fetch: (async (url: unknown, init?: RequestInit) => {
+        requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+        return new Response(JSON.stringify({ collections: [], features: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+    await client.getCollections();
+    await client.getCollection("x");
+    await client.getCollectionItems("x");
+    await client.getItem("x", "y");
+    await client.search({ collections: ["x"], limit: 1 });
     assert.deepEqual(
-      methods,
-      ["GET", "GET", "GET", "GET"],
-      contractMessage(
-        "maplibre-gl-planetary-computer",
-        section,
-        "a STACClient read now sends a non-GET request, which the Planetary Computer API rejects cross-origin",
-        "packages/plugins",
+      requests.map((request) => request.split(" ")[0]),
+      ["GET", "GET", "GET", "GET", "GET"],
+      message(
+        "a STACClient read now sends a non-GET request, which the Planetary Computer API has rejected cross-origin",
       ),
+    );
+    assert.equal(
+      requests[4],
+      "GET https://stac.test/search?collections=x&limit=1",
+      message("search is no longer a GET /search with the parameters in the query string"),
+    );
+  });
+
+  it("re-creates a saved layer under its id and stores updates verbatim", async () => {
+    const { PlanetaryComputerControl } = await import("maplibre-gl-planetary-computer");
+    const control = new PlanetaryComputerControl({ autoLoadCollections: false });
+    const map = fakeMap();
+    // Test scaffolding only: `onAdd` builds the panel DOM, and there is no
+    // document under `node --test`, so the control is attached by hand through
+    // `_map`, `_layerManager`, and a no-op `_renderContent`. GeoLibre's own
+    // code touches none of these. If an upstream rename breaks this setup, fix
+    // the setup; the assertions below are the public behavior under contract.
+    const internals = control as unknown as { _map: unknown; _layerManager: unknown };
+    const { LayerManager } = await import("maplibre-gl-planetary-computer");
+    internals._map = map;
+    internals._layerManager = new LayerManager(map as never, control.getTilerClient());
+    (control as unknown as { _renderContent: () => void })._renderContent = () => {};
+
+    const events: string[] = [];
+    control.on("layer:add", () => events.push("add"));
+    control.on("layer:update", () => events.push("update"));
+
+    map.addLayer({ id: "above", layout: {}, paint: {} });
+    const layer = control.addItemLayer(item as never, {
+      id: "saved-id",
+      sourceId: "saved-source",
+      visible: false,
+      opacity: 0.37,
+      beforeId: "above",
+    });
+    assert.equal(layer.id, "saved-id", message("addItemLayer ignores the `id` option"));
+    assert.equal(layer.sourceId, "saved-source", message("addItemLayer ignores `sourceId`"));
+    assert.deepEqual(map.order(), ["saved-id", "above"], message("`beforeId` is not honored"));
+    assert.deepEqual(events, ["add"], message("addItemLayer no longer emits one layer:add"));
+
+    // The store <-> control sync compares these with ===, so they must not be
+    // coerced or rounded on the way through updateLayer.
+    control.updateLayer("saved-id", { visible: true, opacity: 0.123456789 });
+    const updated = control.getState().activeLayers.find((active) => active.id === "saved-id");
+    assert.equal(updated?.opacity, 0.123456789, message("updateLayer rounds or coerces opacity"));
+    assert.equal(updated?.visible, true, message("updateLayer coerces visible"));
+    assert.deepEqual(events, ["add", "update"]);
+
+    // With `mosaicId` the mosaic is added synchronously, which the restore path
+    // relies on to add it while the store sync is suspended.
+    const collection = { id: "sentinel-2-l2a", title: "Sentinel-2" };
+    void control.addMosaicLayer(collection as never, {
+      id: "mosaic-id",
+      mosaicId: "pc1.search",
+      searchParams: { datetime: "2024-06-01T00:00:00Z/2024-08-31T23:59:59Z" },
+    });
+    const mosaic = control.getState().activeLayers.find((active) => active.id === "mosaic-id");
+    assert.ok(mosaic, message("addMosaicLayer with `mosaicId` no longer adds synchronously"));
+    assert.equal(mosaic?.type, "mosaic");
+    assert.match(
+      String((map.sources.get(mosaic.sourceId) as { tiles: string[] }).tiles[0]),
+      /\/mosaic\/pc1\.search\/tiles\/WebMercatorQuad\//,
+      message("mosaic tiles are no longer served under the registered search id"),
     );
   });
 });
@@ -735,6 +959,33 @@ describe("maplibre-gl-raster", () => {
         "pow(clamp(color.rgb, 0.0, 1.0), vec3(1.0 / max(gammaModule.gammaValue, 0.0001)))",
       ),
       message("the gamma curve changed"),
+    );
+  });
+
+  it("binds the pixel inspector's click through the `_onClick` property", () => {
+    // Text check: PixelInspector is module-private. guardRasterInspectorClicks
+    // wraps `_inspector._onClick` once, which only takes if enable() and
+    // disable() both read the property rather than a bound copy.
+    const text = readPublishedText("maplibre-gl-raster", { workspace: "packages/plugins" });
+    const message = (detail: string) =>
+      contractMessage(
+        "maplibre-gl-raster",
+        "`maplibre-gl-raster` — pixel inspector click guard",
+        detail,
+        "packages/plugins",
+      );
+    assert.ok(
+      text.includes("this._inspector = new PixelInspector("),
+      message("RasterControl no longer keeps its inspector in `_inspector`"),
+    );
+    assert.match(text, /\b_onClick = \(/, message("`_onClick` is no longer an instance property"));
+    assert.ok(
+      text.includes('this._map.on("click", this._onClick)'),
+      message("enable() no longer binds `this._onClick`"),
+    );
+    assert.ok(
+      text.includes('this._map.off("click", this._onClick)'),
+      message("disable() no longer unbinds `this._onClick`"),
     );
   });
 });

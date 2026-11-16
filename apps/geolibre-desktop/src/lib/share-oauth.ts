@@ -621,10 +621,10 @@ async function authorizeShareGrant(
   }
 }
 
-export async function signInToShare(baseUrl?: string): Promise<void> {
+export async function signInToShare(baseUrl?: string): Promise<boolean> {
   const result = await authorizeShareGrant(baseUrl, "project");
-  if (!result) return;
-  if (result.generation !== sessionGeneration) return;
+  if (!result) return false;
+  if (result.generation !== sessionGeneration) return false;
   const { issuer, tokens } = result;
   if (!tokens.refresh_token) throw new ShareOAuthError("exchange-failed");
   sessionGeneration += 1;
@@ -635,6 +635,7 @@ export async function signInToShare(baseUrl?: string): Promise<void> {
     expiresAt: Date.now() + tokens.expires_in * 1000,
   };
   setStoreIssuer(issuer, true);
+  return true;
 }
 
 export interface ShareManagementGrant {

@@ -47,10 +47,12 @@ What each section does today:
 - `plugins.registryUrl` sets the plugin registry. `allowed`, `blocked` and
   `sideload` gate external plugin loads and installs; `defaultActive` seeds
   activation in fresh projects.
-- `services`, `sharing`, `geolens` and `branding.appName` override the
+- `services`, `sharing`, `geolens`, `osm` and `branding.appName` override the
   matching `GEOLIBRE_*` deployment settings. `sharing.embedOrigins: []` turns
   the embed API off.
 - `branding.welcome: false` suppresses the first-launch wizard.
+- `basemaps.regional: false` disables the regional basemaps (Amap and Tencent,
+  served from mainland China). See [Regional basemaps](#regional-basemaps).
 - `ai.enabled: true` points the assistant at the same-origin `/ai` proxy;
   `false` removes any operator-configured AI proxy (a provider a user enters in
   Settings is unaffected). `ai.model` picks the proxy's model.
@@ -103,12 +105,14 @@ For capability details and Docker route enforcement, see
       }
     ]
   },
+  "basemaps": { "regional": false },
   "sharing": {
     "shareUrl": "https://projects.example.com",
     "collabUrl": "wss://relay.example.com",
     "embedOrigins": ["https://portal.example.com"]
   },
   "geolens": { "url": "same-origin" },
+  "osm": { "overpassUrl": "https://overpass.example.com/api/interpreter" },
   "ai": { "enabled": true, "model": "gpt-5-mini" },
   "branding": { "appName": "Acme Maps", "welcome": false }
 }
@@ -154,6 +158,8 @@ An array of the capability names from
 | `blocked` | string[] | External plugin ids never loaded. |
 | `sideload` | boolean | Allow installing from a manifest URL, zip, directory or project file (default true). |
 | `defaultActive` | string[] | Plugin ids active in a fresh project. |
+| `openPanel` | string | Panel id to open automatically on startup in a fresh project. |
+| `fileAccess` | object (plugin id → string[]) | Literal absolute file paths each plugin may read; honoured only from a machine-wide policy file. |
 
 ### `services`
 
@@ -161,6 +167,12 @@ An array of the capability names from
 | --- | --- | --- |
 | `builtins` | boolean | `false` hides the built-in starter services. |
 | `catalog` | object[] | Curated entries: `id`, `name`, `kind` (`wms`, `wfs`, `wmts`, `xyz`, `arcgis`, `csw`), optional `category`, and non-empty `fields` (string, number or boolean values). |
+
+### `basemaps`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `regional` | boolean | `false` disables the regional basemaps (Amap and Tencent), whose tiles are served from mainland China. Default true. |
 
 ### `sharing`
 
@@ -175,6 +187,12 @@ An array of the capability names from
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `url` | string | Default GeoLens server (`https://…`; plain `http://` only on loopback in the container), `same-origin`, or `off`. |
+
+### `osm`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `overpassUrl` | string | Overpass API interpreter URL for the OSM downloader and the OSM-backed God's Eye View feeds, such as `https://overpass.example.com/api/interpreter`: `https://` on a DNS name or IPv4 address, no credentials, query, or fragment. Unset uses the public relay `https://tiles.geolibre.app/overpass`. Set it to keep area-of-interest queries on an instance you run or trust. The viewer's browser calls it directly, so it must be reachable from every viewer and send CORS headers (`Access-Control-Allow-Origin` for the GeoLibre origin, on error responses too), or be served on the GeoLibre origin. Plain `http://` is accepted only on loopback (`localhost`, `127.0.0.1`, `[::1]`), which means the viewer's own machine. Only the desktop app can reach such an endpoint: the container is the enforcement point and rejects plain `http://` at boot, and on a web build served by any other host the client parser still accepts it, but the page's CSP (`connect-src` allows `https:` only) blocks the request. Unlike the public relay, a configured endpoint never falls back to `api.openstreetmap.org`, and an invalid value (which also drops the `osm` section) disables OSM downloads instead of using the public relay. |
 
 ### `ai`
 
@@ -231,8 +249,94 @@ does not allow a denied plugin to load. URL updates preserve these deployment
 defaults for later fresh projects. Without a `plugins` section, existing loading
 and activation behavior is unchanged.
 
+`openPanel` names a registered dockable right-panel or floating panel to open
+automatically when the application starts with a fresh project. It opens once
+startup is ready: plugins have loaded, the map is ready, any `?url=` project has
+settled, and any native startup restore has finished (or failed). A restore that
+never completes keeps the panel closed (a console warning notes when it outlasts
+the startup gate). A `?url=` project that loads is a saved project, so the panel
+does not open for it; the wait only matters when that load fails and the app
+falls back to a fresh project.
+
+The panel never opens in a saved project, in the read-only viewer preset, or
+when side panels are hidden (`?maponly`, `?panels=hidden`, `?hidePanels=true`).
+
+If the panel registers asynchronously during plugin activation, it opens once it
+registers. A right-panel target is skipped if another right panel became active
+while it was waiting (opened by the user or by a plugin activating at startup),
+and a console warning names it; a floating target still opens. A warning is also logged if the panel has not registered
+after 10 seconds. A right panel the user opens before startup is ready (for
+example during a slow restore) is not protected: if the deployment panel is
+already registered at that point, it opens in its place. The S3 Browser opened
+by the Settings → Startup option is a startup plugin too: whichever of the two
+panels opens last keeps the right dock.
+
+Like every other field, an invalid `openPanel` (blank or not a string) makes the
+desktop parser drop the whole `plugins` section, including `blocked`, `allowed`
+and `sideload`, with a console warning naming the field. The container validator
+rejects the whole file instead, so validate desktop policy files against
+`schema/deployment.schema.json`.
+
+`fileAccess` configures an administrator-side allowlist of literal absolute file
+paths per plugin id (e.g. `{"my-plugin": ["/etc/geolibre/app.cfg"]}`). To prevent
+unprivileged tampering, `fileAccess` is honoured exclusively from a machine-wide
+`deployment.json` (`%ProgramData%/GeoLibre/` on Windows, `/etc/geolibre/` on Linux,
+`/Library/Application Support/GeoLibre/` on macOS); if defined in a per-user policy,
+it is ignored with a console warning. The allowlist gates the native
+`readAllowedFile(pluginId, path)` API on the desktop, where both the requested path
+and allowlist entries are canonicalised to prevent path traversal and symlink escapes.
+Reads enforce a 50 MB size limit. Plugins call `app.readAllowedFile(path)`; the host
+binds the calling plugin's id. Plugins still share one unsandboxed webview, so this
+scopes well-behaved plugins to their own list rather than isolating a hostile one.
+
 Plugin policy is client-side enforcement only, not a server security boundary:
 a modified client can bypass it. It does not provide signing or sandboxing.
+
+## Regional basemaps
+
+The Change basemap and New project dialogs offer a collapsed **Regional**
+section with basemaps served from inside mainland China (Amap and Tencent), for
+users there whom the default providers serve poorly. A project file can name one
+of them as its basemap, so GeoLibre asks before loading it when a project is
+opened (from a file, a URL, a share link, drag and drop, a startup or
+project-history restore, or a host framing the app, including the Jupyter
+widget): the map shows the default basemap until the user picks **Load** or
+**Use default basemap**. The answer holds for the rest of the session, so
+opening the same basemap again (or a host re-sending its project) does not ask
+twice, and a framing host keeps seeing its own basemap in the state the app
+reports back. Closing the dialog without either button keeps the default
+basemap but is not remembered, so the next project naming that basemap asks
+again. Picking the basemap in the UI later counts as **Load**.
+
+These do not ask: a basemap the user picks in the UI, or that a plugin, script
+or the assistant sets on their behalf (code the user installed or ran); a new
+project, a template, an undo step or a duplicate; a project the iframe embed API
+loads for an `embedOrigins` origin the deployment allowlisted; and a live
+collaboration session, a deliberate exception, since its basemap is shared
+state of a session the user chose to join. Only a regional basemap the user
+picked or accepted is remembered and restored at the next launch.
+
+`basemaps.regional: false` (or `GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=1` on Docker,
+or `VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=1` at build time) removes them
+entirely:
+
+- the Regional section disappears from both dialogs, and the Basemaps control
+  plugin no longer lists its mainland-China providers (Amap, Tencent and
+  Tianditu);
+- a project that names one opens on the default basemap without a prompt, with
+  a short notice saying why;
+- plugins, scripts and the assistant cannot set one either, and a regional
+  basemap remembered from an earlier session is not restored.
+
+The prompt and the switch cover the built-in regional basemaps (the
+`geolibre://regional-basemap/...` values of a project's `basemapStyleUrl`). A
+custom style URL, raster basemaps stacked from the Basemaps control, and any
+XYZ or WMS layer are ordinary project data: a project can still point one at any
+tile server, in mainland China or elsewhere, the same way it can name any other
+data source.
+
+Like the rest of the policy this is client-side: it stops GeoLibre from
+requesting those tiles, not a modified client.
 
 ## Precedence between sources
 
@@ -268,7 +372,14 @@ beyond the safe-integer range, none of which JSON Schema alone can all express.
 
 ## Desktop
 
-Place `deployment.json` in Tauri's `<app_config_dir>` (see
+A machine-wide `deployment.json` takes precedence: when
+`%ProgramData%\GeoLibre\deployment.json` (Windows), `/etc/geolibre/deployment.json`
+(Linux) or `/Library/Application Support/GeoLibre/deployment.json` (macOS) exists,
+it is the whole desktop policy and the per-user file below is not read. Use it when
+users must not be able to edit the policy; it is the only source that can grant
+`plugins.fileAccess`.
+
+Otherwise, place `deployment.json` in Tauri's `<app_config_dir>` (see
 [UI Profiles](ui-profiles.md) for the legacy profile locations). For the
 standard `org.geolibre.desktop` application identifier, the paths are:
 
@@ -334,10 +445,12 @@ require rebuilding the image.
 | `GEOLIBRE_CAPABILITIES` | `capabilities`: comma-separated names, or `none` for no grants |
 | `GEOLIBRE_SERVICES_FILE` | `services.catalog` |
 | `GEOLIBRE_BUILTIN_SERVICES=off` | `services.builtins: false` |
+| `GEOLIBRE_DISABLE_REGIONAL_BASEMAPS` | `basemaps.regional`: `1`/`true` sets `false`, `0`/`false` sets `true` |
 | `GEOLIBRE_SHARE_URL` | `sharing.shareUrl` |
 | `GEOLIBRE_COLLAB_URL` | `sharing.collabUrl` |
 | `GEOLIBRE_EMBED_ORIGINS` | `sharing.embedOrigins` |
 | `GEOLIBRE_GEOLENS_URL` | `geolens.url` |
+| `GEOLIBRE_OVERPASS_URL` | `osm.overpassUrl` |
 | `GEOLIBRE_APP_NAME` | `branding.appName`: whitespace collapsed, cut to 60 characters |
 | `GEOLIBRE_AI_URL` / `GEOLIBRE_AI_MODEL` | `ai.enabled: true` / `ai.model` |
 

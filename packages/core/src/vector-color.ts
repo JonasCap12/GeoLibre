@@ -1,4 +1,11 @@
-import { DEFAULT_LAYER_STYLE, styleValue, type LayerStyle, type VectorRule } from "./types";
+import {
+  DEFAULT_LAYER_STYLE,
+  STROKE_DASH_PRESETS,
+  styleValue,
+  type LayerStyle,
+  type StrokeDashPreset,
+  type VectorRule,
+} from "./types";
 import { getVectorColorRamp } from "./color-ramp";
 import { getActiveSemiMajorAxisMeters } from "./ellipsoids";
 import { removeTrailingJsonCommas } from "./expressions";
@@ -135,6 +142,66 @@ export function simpleStyleNumberValue(
   return ["to-number", ["coalesce", ["get", property], base], base];
 }
 
+/** Whether `node` is `["get", key]` for one of `keys`, returning the key. */
+function simpleStyleGet<K extends string>(node: unknown, keys: readonly K[]): K | null {
+  if (!Array.isArray(node) || node.length !== 2 || node[0] !== "get") return null;
+  return (keys as readonly unknown[]).includes(node[1]) ? (node[1] as K) : null;
+}
+
+/**
+ * Read back the per-feature color lookup {@link withSimpleStyleColor} writes,
+ * `["coalesce", ["get", key], base]` with a simplestyle color key, so a style
+ * importer recognizes exactly what the exporter emits.
+ *
+ * @param node - A paint value or a node inside one.
+ * @returns The simplestyle key and the layer-level base, or `null` when the
+ *   node is not that lookup.
+ */
+function readSimpleStyleColorLookup(
+  node: unknown,
+): { property: (typeof SIMPLE_STYLE_COLOR_KEYS)[number]; base: unknown } | null {
+  if (!Array.isArray(node) || node.length !== 3 || node[0] !== "coalesce") return null;
+  const property = simpleStyleGet(node[1], SIMPLE_STYLE_COLOR_KEYS);
+  return property ? { property, base: node[2] } : null;
+}
+
+/**
+ * Read back the per-feature number lookup {@link simpleStyleNumberValue}
+ * writes, `["to-number", ["coalesce", ["get", key], base], base]` with a
+ * simplestyle number key and a numeric base.
+ *
+ * @param node - A paint value or a node inside one.
+ * @returns The simplestyle key and the layer-level base, or `null` when the
+ *   node is not that lookup.
+ */
+export function readSimpleStyleNumberLookup(
+  node: unknown,
+): { property: (typeof SIMPLE_STYLE_NUMBER_KEYS)[number]; base: number } | null {
+  if (!Array.isArray(node) || node.length !== 3 || node[0] !== "to-number") return null;
+  const inner = node[1];
+  if (!Array.isArray(inner) || inner.length !== 3 || inner[0] !== "coalesce") return null;
+  const property = simpleStyleGet(inner[1], SIMPLE_STYLE_NUMBER_KEYS);
+  const base = node[2];
+  if (!property || typeof base !== "number" || !Number.isFinite(base) || inner[2] !== base) {
+    return null;
+  }
+  return { property, base };
+}
+
+/**
+ * Whether a paint value reads per-feature simplestyle properties the way the
+ * GeoLibre exporter writes them, anywhere inside it (a lookup can sit inside a
+ * zoom step, a per-rule `case` or an opacity multiplication).
+ *
+ * @param value - A paint value.
+ * @returns `true` when a color or number lookup is found.
+ */
+export function readsSimpleStyleProperties(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  if (readSimpleStyleColorLookup(value) || readSimpleStyleNumberLookup(value)) return true;
+  return value.some(readsSimpleStyleProperties);
+}
+
 /**
  * Ground resolution (meters per pixel) at MapLibre zoom 0 on the equator, for
  * the Web Mercator projection: earth circumference (2*pi*6378137) over the
@@ -231,6 +298,94 @@ export function lineWidthValue(style: LayerStyle): number | unknown[] {
     style,
     simpleStyleNumberValue(style, "stroke-width", styleValue(style, "strokeWidth")),
   );
+}
+
+/**
+ * The layer's stroke opacity, clamped to [0, 1]. A missing or non-finite value
+ * (an older project, a hand-edited file) reads as fully opaque.
+ *
+ * @param style - The layer style.
+ * @returns The stroke opacity.
+ */
+export function strokeOpacityValue(style: LayerStyle): number {
+  const value = styleValue(style, "strokeOpacity");
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+}
+
+/**
+ * A stroke opacity paint value: the layer's {@link LayerStyle.strokeOpacity},
+ * which a per-feature simplestyle `stroke-opacity` replaces when
+ * {@link LayerStyle.simpleStyleEnabled} is set.
+ *
+ * @param style - The layer style.
+ * @returns A number, or the simplestyle lookup expression.
+ */
+export function strokeOpacityPaintValue(style: LayerStyle): number | unknown[] {
+  return simpleStyleNumberValue(style, "stroke-opacity", strokeOpacityValue(style));
+}
+
+/**
+ * Whether a value is a usable dash pattern: finite, non-negative lengths with
+ * at least one dash longer than zero. Exported so the style sanitizer and the
+ * importers apply the same rule the renderer does.
+ *
+ * @param value - The candidate pattern.
+ * @returns True when the value can be drawn as a dash pattern.
+ */
+export function isStrokeDashPattern(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((length) => typeof length === "number" && Number.isFinite(length) && length >= 0) &&
+    value.some((length) => length > 0)
+  );
+}
+
+/**
+ * The `line-dasharray` for the layer, or `null` for a solid line. `null` is
+ * what MapLibre's `setPaintProperty` takes to reset a property, so returning it
+ * (rather than leaving the key out) clears a dash when the user goes back to
+ * solid.
+ *
+ * @param style - The layer style.
+ * @returns The dash pattern, or `null` when the line is solid.
+ */
+export function strokeDashValue(style: LayerStyle): number[] | null {
+  const dash = styleValue(style, "strokeDash");
+  return isStrokeDashPattern(dash) ? [...dash] : null;
+}
+
+/**
+ * The {@link STROKE_DASH_PRESETS} name matching a pattern, or `"custom"` when
+ * none does. An empty or unusable pattern is `"solid"`.
+ *
+ * @param dash - A dash pattern.
+ * @returns The preset name, or `"custom"`.
+ */
+export function strokeDashPresetName(
+  dash: readonly number[] | undefined,
+): StrokeDashPreset | "custom" {
+  if (!isStrokeDashPattern(dash)) return "solid";
+  for (const [name, pattern] of Object.entries(STROKE_DASH_PRESETS)) {
+    if (
+      pattern.length === dash.length &&
+      pattern.every((length, index) => length === dash[index])
+    ) {
+      return name as StrokeDashPreset;
+    }
+  }
+  return "custom";
+}
+
+/**
+ * The layer's line blur in pixels; a missing, negative or non-finite value is 0.
+ *
+ * @param style - The layer style.
+ * @returns The blur in pixels.
+ */
+export function strokeBlurValue(style: LayerStyle): number {
+  const value = styleValue(style, "strokeBlur");
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 /**
@@ -959,18 +1114,29 @@ function ruleBasedLineColorExpression(style: LayerStyle): VectorColorValue {
 }
 
 /**
- * Resolves the 3D-extrusion height for a layer style into a MapLibre value: a
- * plain meters number, or a data-driven expression. In advanced mode a valid
- * `extrusionHeightExpression` wins; otherwise the height is the chosen property
- * scaled by `extrusionHeightScale` (`["*", ["to-number", ["get", prop], 0],
- * scale]`), or a flat `0` when no property is set (so the layer renders flat
- * rather than erroring). Shared by the map's fill-extrusion paint and the
- * Add Vector Layer control's extrusion mapping so both extrude identically.
+ * Resolves the 3D-extrusion height (the roof's altitude) for a layer style
+ * into a MapLibre value: a plain meters number, or a data-driven expression.
+ * With a positive `extrusionFloorHeight` the roof sits that far above the
+ * base (`extrusionBaseValue`, clamped to the ground as MapLibre clamps
+ * `fill-extrusion-base`), whatever the height settings say. Otherwise, in
+ * advanced mode a valid `extrusionHeightExpression` wins; else the height is
+ * the chosen property scaled by `extrusionHeightScale` (`["*", ["to-number",
+ * ["get", prop], 0], scale]`), or a flat `0` when no property is set (so the
+ * layer renders flat rather than erroring). Shared by the map's
+ * fill-extrusion paint and the Add Vector Layer control's extrusion mapping
+ * so both extrude identically.
  *
  * @param style - The layer style.
  * @returns The extrusion height as a number or a MapLibre expression array.
  */
 export function extrusionHeightValue(style: LayerStyle): number | unknown[] {
+  const floorHeight = extrusionFloorHeightValue(style);
+  if (floorHeight > 0) {
+    const base = extrusionBaseValue(style);
+    return typeof base === "number"
+      ? Math.max(0, base) + floorHeight
+      : ["+", ["max", 0, base], floorHeight];
+  }
   const advancedExpression = parseJsonExpression(
     styleValue(style, "extrusionAdvancedStyleEnabled")
       ? styleValue(style, "extrusionHeightExpression")
@@ -984,9 +1150,26 @@ export function extrusionHeightValue(style: LayerStyle): number | unknown[] {
 }
 
 /**
- * Resolves where a 3D extrusion starts: in advanced mode a valid
- * `extrusionBaseExpression` (per-feature, so one layer can hold floating
- * parts), otherwise the flat `extrusionBase` in metres.
+ * The layer's floor height in metres: a finite `extrusionFloorHeight` above
+ * 0, else 0 (the height is then the roof's altitude). Also 0 for a project
+ * saved before the field existed.
+ *
+ * @param style - The layer style.
+ * @returns The floor height, or 0 when it is off.
+ */
+export function extrusionFloorHeightValue(style: LayerStyle): number {
+  const value = styleValue(style, "extrusionFloorHeight");
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Resolves the 3D-extrusion base for a layer style into a MapLibre value: a
+ * plain meters number, or a data-driven expression. In advanced mode a valid
+ * `extrusionBaseExpression` wins; otherwise, with `extrusionBaseProperty` set,
+ * the base is `extrusionBase` plus the property scaled by `extrusionBaseScale`
+ * (so floors stack from a `level` field), else the flat `extrusionBase`. Like
+ * {@link extrusionHeightValue} it is an altitude: MapLibre draws a feature
+ * only where its height is above its base.
  *
  * @param style - The layer style.
  * @returns The extrusion base as a number or a MapLibre expression array.
@@ -997,7 +1180,14 @@ export function extrusionBaseValue(style: LayerStyle): number | unknown[] {
       ? styleValue(style, "extrusionBaseExpression")
       : "",
   );
-  return advancedExpression ?? styleValue(style, "extrusionBase");
+  if (advancedExpression) return advancedExpression;
+  const rawOffset = styleValue(style, "extrusionBase");
+  const offset = Number.isFinite(rawOffset) ? rawOffset : 0;
+  const property = styleValue(style, "extrusionBaseProperty").trim();
+  if (!property) return offset;
+  const scale = styleValue(style, "extrusionBaseScale");
+  const scaled = ["*", ["to-number", ["get", property], 0], Number.isFinite(scale) ? scale : 1];
+  return offset === 0 ? scaled : ["+", scaled, offset];
 }
 
 /**

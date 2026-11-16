@@ -98,6 +98,88 @@ describe("Overpass edge proxy", () => {
     await response.text();
   });
 
+  it("tries only the fixed instances and reports a busy relay when all fail", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = async (input) => {
+      calls.push(String(input));
+      return new Response("Bad Gateway", { status: 502 });
+    };
+    const body =
+      "data=" + encodeURIComponent(buildOsmDownloadQuery([0, 0, 1, 1], { preset: "buildings" }));
+
+    const response = await tilesWorker.fetch(request(body), {}, {} as ExecutionContext);
+
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /Overpass is busy/);
+    assert.equal(response.headers.get("x-overpass-upstream"), null);
+    assert.deepEqual(calls, [
+      "https://z.overpass-api.de/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter",
+    ]);
+  });
+
+  it("reports a busy relay when every instance has a network error", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = async (input) => {
+      calls.push(String(input));
+      throw new TypeError("network unavailable");
+    };
+    const body =
+      "data=" + encodeURIComponent(buildOsmDownloadQuery([0, 0, 1, 1], { preset: "roads" }));
+
+    const response = await tilesWorker.fetch(request(body), {}, {} as ExecutionContext);
+
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /Overpass is busy/);
+    assert.equal(response.headers.get("x-overpass-upstream"), null);
+    assert.equal(calls.length, 2);
+  });
+
+  it("names the answering instance in an exposed header", async () => {
+    let attempt = 0;
+    globalThis.fetch = async () => {
+      attempt += 1;
+      if (attempt === 1) return new Response("Too Many Requests", { status: 429 });
+      return new Response('{"elements":[]}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const body =
+      "data=" + encodeURIComponent(buildOsmDownloadQuery([0, 0, 1, 1], { preset: "roads" }));
+
+    const response = await tilesWorker.fetch(request(body), {}, {} as ExecutionContext);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-overpass-upstream"), "overpass.private.coffee");
+    assert.match(
+      response.headers.get("access-control-expose-headers") ?? "",
+      /x-overpass-upstream/,
+    );
+    await response.text();
+  });
+
+  it("continues to a fallback after an upstream network error", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = async (input) => {
+      calls.push(String(input));
+      if (calls.length === 1) throw new TypeError("network unavailable");
+      return new Response('{"elements":[]}', { status: 200 });
+    };
+    const body =
+      "data=" + encodeURIComponent(buildOsmDownloadQuery([0, 0, 1, 1], { preset: "roads" }));
+
+    const response = await tilesWorker.fetch(request(body), {}, {} as ExecutionContext);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [
+      "https://z.overpass-api.de/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter",
+    ]);
+    assert.equal(response.headers.get("x-overpass-upstream"), "overpass.private.coffee");
+    await response.text();
+  });
+
   it("accepts a bounded antimeridian split and rejects injected selector text", async () => {
     globalThis.fetch = async () =>
       new Response('{"elements":[]}', {

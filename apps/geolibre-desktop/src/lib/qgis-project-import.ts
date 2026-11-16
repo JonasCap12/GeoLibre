@@ -1,5 +1,7 @@
 import {
+  ATTRIBUTE_TABLE_FLAG,
   DEFAULT_BASEMAP,
+  qgisExpressionProblem,
   DEFAULT_LAYER_STYLE,
   VECTOR_COLOR_RAMPS,
   createEmptyProject,
@@ -9,8 +11,20 @@ import {
   type LayerStyle,
   type MapViewState,
 } from "@geolibre/core";
+import { importStyleText, qgisLengthToPixels } from "@geolibre/map/style-import";
 import { strFromU8, unzipSync } from "fflate";
 import type { FeatureCollection } from "geojson";
+import { collectionMetadata } from "./field-collection";
+import {
+  MAX_RELATION_ENTRIES,
+  parseQgisLayerForm,
+  qgisCaptureGeometry,
+  relationValueMap,
+  type QgisFormImportNote,
+  type QgisFormRelation,
+} from "./qgis-form-import";
+
+export type { QgisFormImportNote } from "./qgis-form-import";
 
 export interface QgisProjectImportWarning {
   layerName: string;
@@ -22,15 +36,51 @@ export interface QgisProjectImportWarning {
     | "remote-file"
     | "network-path"
     | "browser-local-file"
-    | "browser-local-raster";
+    | "browser-local-raster"
+    | "no-geometry";
   provider?: string;
+}
+
+/** A relation-backed dropdown still waiting for its referenced table's rows. */
+export interface QgisPendingFormRelation extends QgisFormRelation {
+  /** GeoLibre id of the imported layer whose form shows the dropdown. */
+  layerId: string;
+  layerName: string;
+  /** File holding the referenced table. */
+  sourcePath: string;
+  /** Table (OGR layer) name inside that file; empty for single-layer files. */
+  table: string;
+  /** The referenced layer's QGIS display expression. */
+  displayExpression?: string;
 }
 
 export interface QgisProjectImportResult {
   project: GeoLibreProject;
   rasters: QgisRasterImport[];
   warnings: QgisProjectImportWarning[];
+  /** Form settings that were not carried over (see `qgis-form-import.ts`). */
+  formNotes: QgisFormImportNote[];
+  /** Dropdowns for {@link materializeQgisFormRelations} to fill in. */
+  formRelations: QgisPendingFormRelation[];
+  /** Symbology the style reader could not represent, in its own words. */
+  styleNotes: QgisStyleImportNote[];
 }
+
+/** Something about a layer's symbology that was not carried over. */
+export interface QgisStyleImportNote {
+  layerName: string;
+  /**
+   * One of this importer's own {@link QGIS_STYLE_NOTE_CODES}, which the
+   * report translates, or a sentence from the style reader, shown as it is.
+   */
+  message: string;
+}
+
+/** Notes this importer raises itself; the report dialog has a string for each. */
+export const QGIS_STYLE_NOTE_CODES = ["renderer-unreadable", "expression-label"] as const;
+export type QgisStyleNoteCode = (typeof QGIS_STYLE_NOTE_CODES)[number];
+const RENDERER_UNREADABLE: QgisStyleNoteCode = "renderer-unreadable";
+const EXPRESSION_LABEL: QgisStyleNoteCode = "expression-label";
 
 export interface QgisRasterImport {
   id: string;
@@ -49,6 +99,13 @@ export interface QgisRasterImport {
     reversed: boolean;
   };
 }
+
+/**
+ * Row cap of the host's table reader (`GEOPACKAGE_TABLE_ROW_LIMIT` in
+ * `gpkg-reader.ts`, which this module cannot import without pulling sql.js
+ * into the parser). A read that returns this many rows was cut off.
+ */
+export const GEOPACKAGE_TABLE_ROW_LIMIT = 5000;
 
 const MAX_QGS_BYTES = 25 * 1024 * 1024;
 const REMOTE_FETCH_CONCURRENCY = 4;
@@ -113,6 +170,93 @@ export async function materializeQgisRemoteLayers(
   return result;
 }
 
+/**
+ * Reads every row of one table of a local data file as plain records.
+ *
+ * `options.optional` marks a read whose result is only a fallback (the
+ * snapshot behind a dropdown that normally reads its layer live). A host
+ * should decline it, by rejecting, when the read would be expensive.
+ */
+export type QgisTableReader = (
+  sourcePath: string,
+  table: string,
+  options?: { optional?: boolean },
+) => Promise<Record<string, unknown>[]>;
+
+/**
+ * Fill in the dropdowns that read their entries from another layer (QGIS
+ * Value Relation and Relation Reference widgets), by snapshotting the
+ * referenced table's rows into a value map on the field. The referenced
+ * table is often one that has no geometry and so is not a map layer here,
+ * which is why this reads the file rather than a loaded layer.
+ *
+ * A dropdown whose table cannot be read stays a plain text field and is
+ * reported in `formNotes`.
+ *
+ * @param result - A parsed import; mutated in place and returned.
+ * @param readTable - Host reader; each table is read at most once.
+ * @returns `result`.
+ */
+export async function materializeQgisFormRelations(
+  result: QgisProjectImportResult,
+  readTable: QgisTableReader,
+): Promise<QgisProjectImportResult> {
+  const tables = new Map<string, Promise<Record<string, unknown>[] | null>>();
+  for (const relation of result.formRelations) {
+    // A dropdown that reads its layer live only needs the snapshot as a
+    // fallback, for when that layer cannot be loaded later (its file moved).
+    // The read is marked optional so the host can skip it for a large file.
+    const live = Boolean(
+      result.project.layers
+        .find((candidate) => candidate.id === relation.layerId)
+        ?.attributeForm?.fields.find((entry) => entry.field === relation.field)?.valueRelation,
+    );
+    const key = `${relation.sourcePath}\u0000${relation.table}\u0000${live}`;
+    let rows = tables.get(key);
+    if (!rows) {
+      rows = readTable(relation.sourcePath, relation.table, { optional: live }).catch((error) => {
+        // A declined fallback is expected, not a problem to log.
+        if (live) return null;
+        console.warn(
+          `[GeoLibre] Could not read "${relation.table}" for a QGIS form dropdown.`,
+          error,
+        );
+        return null;
+      });
+      tables.set(key, rows);
+    }
+    const layer = result.project.layers.find((candidate) => candidate.id === relation.layerId);
+    const field = layer?.attributeForm?.fields.find((entry) => entry.field === relation.field);
+    if (!field) continue;
+    const loaded = await rows;
+    const { entries, valueType } = relationValueMap(
+      loaded ?? [],
+      relation,
+      relation.displayExpression,
+    );
+    // A list cut short would make its missing values impossible to enter, so
+    // a table too long for a dropdown (or one the reader itself had to cut
+    // off) stays a text box, and says so.
+    const tooLarge =
+      entries.length > MAX_RELATION_ENTRIES || (loaded?.length ?? 0) >= GEOPACKAGE_TABLE_ROW_LIMIT;
+    if (entries.length === 0 || tooLarge) {
+      // The live list is what the user sees; a missing fallback is no news.
+      if (live) continue;
+      result.formNotes.push({
+        layerName: relation.layerName,
+        field: relation.field,
+        reason: tooLarge ? "relation-too-large" : loaded ? "relation-empty" : "relation",
+      });
+      continue;
+    }
+    field.widget = "valueMap";
+    field.valueMap = entries;
+    field.valueType = valueType;
+  }
+  result.formRelations = [];
+  return result;
+}
+
 // SYNC: VECTOR_FILE_DIALOG_EXTENSIONS in file-io/paths.ts and
 // RESTORABLE_VECTOR_EXTENSIONS in src-tauri/src/lib.rs.
 const SUPPORTED_VECTOR_EXTENSIONS = new Set([
@@ -164,6 +308,19 @@ export function importQgisProject(
   const warnings: QgisProjectImportWarning[] = [];
   const layers: GeoLibreLayer[] = [];
   const rasters: QgisRasterImport[] = [];
+  const formNotes: QgisFormImportNote[] = [];
+  const styleNotes: QgisStyleImportNote[] = [];
+  const formRelations: QgisPendingFormRelation[] = [];
+  const layerIdByQgisId = new Map<string, string>();
+  const relationsById = new Map<string, { referencedLayerId: string; referencedField: string }>();
+  document.querySelectorAll("qgis > relations > relation").forEach((relation) => {
+    const relationId = relation.getAttribute("id");
+    const referencedLayerId = relation.getAttribute("referencedLayer");
+    const referencedField = relation.querySelector("fieldRef")?.getAttribute("referencedField");
+    if (relationId && referencedLayerId && referencedField) {
+      relationsById.set(relationId, { referencedLayerId, referencedField });
+    }
+  });
 
   for (const id of orderedIds) {
     const element = byId.get(id);
@@ -210,8 +367,61 @@ export function importQgisProject(
       continue;
     }
 
+    // A table without geometry (a lookup list, a child table of reviews or
+    // photos) draws nothing, but it is a layer all the same: its rows show in
+    // the attribute table, dropdowns read from it, and records are added to
+    // it. Only a GeoPackage table can be read that way.
+    const isTable = element.getAttribute("geometry")?.toLowerCase() === "no geometry";
+    // And only a local one: a table's rows are read from the file itself.
+    if (isTable && (sourceExtension(source) !== "gpkg" || isHttpSource(source))) {
+      warnings.push({ layerName: name, reason: "no-geometry" });
+      continue;
+    }
+
+    const layerId = uniqueLayerId(id, layers);
+    const symbology = parseLayerSymbology(element);
+    // One line per distinct message: a renderer with forty unreadable rules
+    // says so once.
+    for (const message of new Set(symbology.warnings)) {
+      styleNotes.push({ layerName: name, message });
+    }
+    const sourceLayer = qgisSourceLayerName(dataSource);
+    const form = parseQgisLayerForm(element, relationsById);
+    const captureGeometry = qgisCaptureGeometry(element);
+    for (const note of form.notes) formNotes.push({ layerName: name, ...note });
+    for (const relation of form.relations) {
+      const referenced = byId.get(relation.referencedLayerId);
+      const referencedSource = referenced
+        ? qgisSourcePath(text(referenced.querySelector(":scope > datasource")), sourcePath)
+        : "";
+      if (!referenced || !referencedSource || isHttpSource(referencedSource)) {
+        formNotes.push({ layerName: name, field: relation.field, reason: "relation" });
+        continue;
+      }
+      const displayExpression = text(referenced.querySelector(":scope > previewExpression"));
+      formRelations.push({
+        ...relation,
+        layerId,
+        layerName: name,
+        sourcePath: referencedSource,
+        table: qgisSourceLayerName(text(referenced.querySelector(":scope > datasource"))),
+        ...(displayExpression ? { displayExpression } : {}),
+      });
+    }
+    const baseMetadata: Record<string, unknown> = {
+      ...(!isHttpSource(source) ? { localFileReloadable: true } : {}),
+      importedFrom: "qgis",
+      qgisLayerId: id,
+      qgisProvider: provider,
+      // Which table of a multi-layer file (a GeoPackage) this layer reads;
+      // without it every layer of the file would load the first table.
+      ...(sourceLayer ? { sourceLayer } : {}),
+      ...(isTable ? { [ATTRIBUTE_TABLE_FLAG]: true } : {}),
+    };
+    layerIdByQgisId.set(id, layerId);
+
     layers.push({
-      id: uniqueLayerId(id, layers),
+      id: layerId,
       name,
       type: "geojson",
       source: {
@@ -220,16 +430,41 @@ export function importQgisProject(
       },
       visible: visibilityByLayerId.get(id) ?? true,
       opacity: parseOpacity(element),
-      style: parseLayerStyle(element),
-      metadata: {
-        ...(!isHttpSource(source) ? { localFileReloadable: true } : {}),
-        importedFrom: "qgis",
-        qgisLayerId: id,
-        qgisProvider: provider,
-      },
+      style: symbology.style,
+      // A layer that carries a form is a Field Collection target, so the
+      // project keeps collecting data the way it did in QField.
+      metadata:
+        form.form && captureGeometry
+          ? collectionMetadata(form.schema, captureGeometry, baseMetadata)
+          : baseMetadata,
+      ...(form.form ? { attributeForm: form.form } : {}),
       sourcePath: source,
       ...(groupByLayerId.get(id) ? { groupId: groupByLayerId.get(id) } : {}),
     });
+  }
+
+  // A relation dropdown reads the referenced layer live whenever that layer
+  // is part of the project, so a record added to it is selectable at once.
+  // The snapshot taken by materializeQgisFormRelations stays as the fallback
+  // for a referenced table that was not imported or has not loaded.
+  for (const relation of formRelations) {
+    const referencedId = layerIdByQgisId.get(relation.referencedLayerId);
+    const field = layers
+      .find((layer) => layer.id === relation.layerId)
+      ?.attributeForm?.fields.find((entry) => entry.field === relation.field);
+    if (!referencedId || !field) continue;
+    const labelExpression =
+      relation.useDisplayExpression &&
+      relation.displayExpression &&
+      qgisExpressionProblem(relation.displayExpression) === null
+        ? relation.displayExpression
+        : undefined;
+    field.valueRelation = {
+      layerId: referencedId,
+      keyField: relation.keyField,
+      ...(relation.labelField ? { labelField: relation.labelField } : {}),
+      ...(labelExpression ? { labelExpression } : {}),
+    };
   }
 
   project.layers = layers;
@@ -243,7 +478,16 @@ export function importQgisProject(
     qgisProjectPath: sourcePath,
     qgisVersion: document.documentElement.getAttribute("version") ?? "",
   };
-  return { project, rasters, warnings };
+  return { project, rasters, warnings, formNotes, formRelations, styleNotes };
+}
+
+/** The `layername=` part of an OGR data source (`file.gpkg|layername=roads`). */
+function qgisSourceLayerName(dataSource: string): string {
+  for (const part of dataSource.split("|").slice(1)) {
+    const match = /^\s*layername=(.*)$/i.exec(part);
+    if (match) return match[1].trim();
+  }
+  return "";
 }
 
 function parseRasterState(element: Element): QgisRasterImport["state"] {
@@ -582,10 +826,75 @@ function unsupportedReason(
   return "format";
 }
 
-function parseLayerStyle(element: Element): LayerStyle {
+/** Renderers that only wrap another one (clustering, displacement, inverted fill). */
+const WRAPPER_RENDERERS = new Set([
+  "pointCluster",
+  "pointDisplacement",
+  "invertedPolygonRenderer",
+  "mergedFeatureRenderer",
+]);
+/** Renderer types the QML style reader classifies into GeoLibre's renderer modes. */
+const CLASSIFIED_RENDERERS = new Set(["categorizedSymbol", "graduatedSymbol", "RuleRenderer"]);
+
+/**
+ * Read a layer's symbology. A single symbol keeps the long-standing direct
+ * read; categorized, graduated and rule-based renderers go through the same
+ * QML reader as Import layer styles, since a project stores each layer's
+ * renderer exactly as a `.qml` file does. A wrapper renderer (point cluster,
+ * displacement) is read through to the renderer it wraps: the clustering
+ * itself is not carried over, the symbols are.
+ *
+ * @param element - The layer's `<maplayer>` element.
+ * @returns The style, and what the reader said it could not represent.
+ */
+function parseLayerSymbology(element: Element): { style: LayerStyle; warnings: string[] } {
+  const warnings: string[] = [];
+  let renderer = element.querySelector(":scope > renderer-v2");
+  for (let depth = 0; renderer && depth < 4; depth += 1) {
+    if (!WRAPPER_RENDERERS.has(renderer.getAttribute("type") ?? "")) break;
+    renderer = renderer.querySelector(":scope > renderer-v2");
+  }
+  // The unwrapped renderer is what the direct read sees too, so a clustered
+  // single symbol keeps its color and size.
+  const base = parseLayerStyle(element, renderer, warnings);
+  if (!renderer || !CLASSIFIED_RENDERERS.has(renderer.getAttribute("type") ?? "")) {
+    return { style: base, warnings };
+  }
+  const xml = elementXml(renderer);
+  // Far beyond any real renderer; a crafted project must not make the style
+  // reader chew through megabytes of XML per layer.
+  if (!xml || xml.length > MAX_RENDERER_XML_LENGTH) {
+    warnings.push(RENDERER_UNREADABLE);
+    return { style: base, warnings };
+  }
+  const imported = importStyleText(`<qgis>${xml}</qgis>`);
+  warnings.push(...imported.warnings);
+  // Never a silent default: a renderer that yielded nothing says so.
+  if (!imported.ok && imported.warnings.length === 0) {
+    warnings.push(RENDERER_UNREADABLE);
+  }
+  // Labels come from the direct read above (the fragment carries none).
+  return { style: imported.ok ? imported.apply(base) : base, warnings };
+}
+
+const MAX_RENDERER_XML_LENGTH = 2 * 1024 * 1024;
+
+/** Serialize an element back to XML text. */
+function elementXml(element: Element): string {
+  if (typeof XMLSerializer !== "undefined") return new XMLSerializer().serializeToString(element);
+  return element.outerHTML ?? "";
+}
+
+function parseLayerStyle(
+  element: Element,
+  renderer: Element | null,
+  warnings: string[],
+): LayerStyle {
   const style: LayerStyle = structuredClone(DEFAULT_LAYER_STYLE);
-  const renderer = element.querySelector(":scope > renderer-v2");
-  if (renderer?.getAttribute("type") !== "singleSymbol") return style;
+  // Labels are independent of the renderer type.
+  if (renderer?.getAttribute("type") !== "singleSymbol") {
+    return applySimpleLabels(element, style, warnings);
+  }
   const symbolLayer = renderer.querySelector("symbols symbol layer");
   const options = new Map<string, string>();
   symbolLayer?.querySelectorAll("Option[name]").forEach((option) => {
@@ -603,23 +912,35 @@ function parseLayerStyle(element: Element): LayerStyle {
   }
   const width = optionalNumber(options.get("outline_width") ?? options.get("line_width"));
   const widthUnit = options.get("outline_width_unit") ?? options.get("line_width_unit") ?? "MM";
-  if (width !== null && (widthUnit === "MM" || widthUnit === "Pixel")) {
-    style.strokeWidth = Math.max(0, width * (widthUnit === "MM" ? 3.78 : 1));
-  }
+  const widthPx = width === null ? null : qgisLengthToPixels(width, widthUnit);
+  if (widthPx !== null) style.strokeWidth = Math.max(0, widthPx);
   const size = optionalNumber(options.get("size"));
-  const sizeUnit = options.get("size_unit") ?? "MM";
-  if (
-    symbolLayer?.getAttribute("class") === "SimpleMarker" &&
-    size !== null &&
-    (sizeUnit === "MM" || sizeUnit === "Pixel")
-  ) {
-    style.circleRadius = Math.max(1, (size * (sizeUnit === "MM" ? 3.78 : 1)) / 2);
+  const sizePx = size === null ? null : qgisLengthToPixels(size, options.get("size_unit") ?? "MM");
+  if (symbolLayer?.getAttribute("class") === "SimpleMarker" && sizePx !== null) {
+    style.circleRadius = Math.max(1, sizePx / 2);
   }
+  return applySimpleLabels(element, style, warnings);
+}
+
+/** Read a simple (single-rule) labeling block onto the style. */
+function applySimpleLabels(element: Element, style: LayerStyle, warnings: string[]): LayerStyle {
   const textStyle = element.querySelector("labeling[type='simple'] settings text-style");
   const field = textStyle?.getAttribute("fieldName")?.trim();
+  // `fieldName` holds a QGIS expression when isExpression is set. Used as a
+  // field name it would label every feature with nothing.
+  const isExpression = textStyle?.getAttribute("isExpression") === "1";
+  // An expression that is only a field reference (`name` or `"name"`), which
+  // QGIS also writes in expression mode, is still a plain field label.
+  const reference = isExpression ? /^(?:"((?:[^"]|"")+)"|([A-Za-z_]\w*))$/.exec(field ?? "") : null;
+  if (field && isExpression && !reference) {
+    warnings.push(EXPRESSION_LABEL);
+    return style;
+  }
   if (field) {
     style.labels.enabled = true;
-    style.labels.field = field;
+    style.labels.field = reference
+      ? (reference[1]?.replaceAll('""', '"') ?? reference[2] ?? field)
+      : field;
     const color = qgisColor(textStyle?.getAttribute("textColor") ?? undefined);
     if (color) style.labels.color = color.color;
     const sizeValue = optionalNumber(textStyle?.getAttribute("fontSize") ?? undefined);

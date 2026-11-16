@@ -1,6 +1,6 @@
 [package]
 name = "geolibre-desktop"
-version = "3.4.0"
+version = "3.8.0"
 description = "GeoLibre Desktop — lightweight cloud-native desktop GIS"
 authors = ["GeoLibre Contributors"]
 edition = "2021"
@@ -35,7 +35,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
-tauri-plugin-dialog = "2"
+# A patched 2.8.3 release: on Android its file picker uses ACTION_OPEN_DOCUMENT
+# and keeps persistable grants, so picked projects stay readable after a
+# restart. See vendor/tauri-plugin-dialog/GEOLIBRE_PATCH.md before upgrading.
+tauri-plugin-dialog = { path = "vendor/tauri-plugin-dialog" }
 tauri-plugin-fs = { version = "2", features = ["watch"] }
 # Native geolocation on Android/iOS: ships the location manifest permissions and
 # drives the OS permission dialog for Field Collection / GPS Tracking, which the
@@ -43,6 +46,10 @@ tauri-plugin-fs = { version = "2", features = ["watch"] }
 # (the frontend only invokes it on mobile). This is a patched 2.3.2 release;
 # see vendor/tauri-plugin-geolocation/GEOLIBRE_PATCH.md before upgrading.
 tauri-plugin-geolocation = { path = "vendor/tauri-plugin-geolocation" }
+# Bluetooth GNSS receivers on Android (GeoLibre#3397): the WebView has no Web
+# Serial or Web Bluetooth, so a small in-repo plugin opens the receiver's Serial
+# Port Profile socket natively. Its commands live in Kotlin; desktop is inert.
+tauri-plugin-gnss-bluetooth = { path = "plugins/tauri-plugin-gnss-bluetooth" }
 tauri-plugin-http = "2"
 tauri-plugin-opener = "2"
 # Persists the fs scope the folder picker grants, so Browser-panel pinned
@@ -50,6 +57,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-persisted-scope = { version = "2", features = ["protocol-asset"] }
 duckdb = { version = "1.10504.0", features = ["bundled", "parquet"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+percent-encoding = "2"
 # rustls-tls stays the default backend for every request. rustls-tls-native-roots
 # also trusts the OS/system certificate store (enterprise CAs). native-tls (which
 # drags in openssl-sys) is used only on the opt-in mTLS path for PKCS#12 client
@@ -66,8 +74,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 base64 = "0.23"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "8", default-features = false, features = ["deflate"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.11"
@@ -81,6 +89,22 @@ bincode = "1"
 # OS CSPRNG for the per-launch Jupyter token (already an indirect dep).
 getrandom = "0.4"
 tauri-plugin-deep-link = "2"
+# In-process PostGIS vector tiles (src/postgis_tiles.rs) for the mobile apps,
+# which cannot run Martin. rustls with the ring provider, like reqwest above:
+# openssl-sys cannot cross-compile for the Android NDK, and ring avoids the
+# aws-lc-rs C/CMake build. tokio, rustls and webpki-roots are already
+# indirect deps; the PostgreSQL client and pool crates are new.
+tokio = { version = "1", features = ["sync"] }
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+  "logging",
+] }
+webpki-roots = "1"
 
 # native-tls backs only the desktop mTLS PKCS#12 path (issue #1220). It pulls in
 # openssl-sys, which has no vendored/cross build for the Android NDK, so the
@@ -113,7 +137,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 # Reading the OAuth callback scheme's registered handler (#3042). Already an
 # indirect dep via tauri-plugin-deep-link, so this adds no new crate either.
-windows-registry = "0.6"
+windows-registry = "0.100"
 
 # OS credential store for tokens and API keys saved in Settings (issue #1667).
 # Desktop only: mobile keeps the webview's localStorage path. Pinned to 3.6.3:

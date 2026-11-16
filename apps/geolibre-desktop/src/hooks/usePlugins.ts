@@ -4,6 +4,9 @@ import { reserveBuiltInPluginIds } from "../lib/plugin-registry";
 import { ensurePluginBlocklistLoaded, hasPluginBlocklistEntries } from "../lib/plugin-blocklist";
 import {
   addRasterToMap,
+  openControlPanel,
+  closeControlPanel,
+  isControlPanelVisible,
   readRasterWindow,
   setRasterRenderEngine,
   addZarrRasterLayer,
@@ -51,6 +54,7 @@ import {
   maplibreUsFederalGisPlugin,
   maplibreUsStateGisPlugin,
   maplibreUsLocalGisPlugin,
+  maplibreIndiaGisPlugin,
   maplibreCkanPlugin,
   maplibreSocrataPlugin,
   maplibreStacCatalogsPlugin,
@@ -62,10 +66,14 @@ import {
   maplibreFieldsOfTheWorldPlugin,
   maplibreSentinel2ExplorerPlugin,
   registerSentinel2CompositeProtocol,
+  registerStacRenderProtocol,
   maplibreOceanDataPlatformPlugin,
   maplibreDynamicalPlugin,
+  maplibreJaxaEarthPlugin,
+  registerJaxaEarthProtocol,
   maplibreGeoLensPlugin,
   setGeoLensDefaultServerUrl,
+  setOverpassEndpoint,
   maplibreVantorPlugin,
   maplibrePlanetOpenDataPlugin,
   maplibrePortolanPlugin,
@@ -119,12 +127,20 @@ import {
   unregisterToolbarMenu,
   registerMenuContribution,
   unregisterMenuContribution,
+  registerFileHandler,
+  unregisterFileHandler,
   registerFloatingPanel,
   unregisterFloatingPanel,
   openFloatingPanel,
   closeFloatingPanel,
   getOpenFloatingPanels,
   getGeometryEditTargetLayerId,
+  getLastGeometryEditEnd,
+  subscribeGeometryEdit,
+  isPluginEngineSupported,
+  startLayerGeometryEdit,
+  addLidarLayerFromUrl,
+  addLidarLayerFromBytes,
   setArcGisPortalAuth,
   setLocalizedErrorTranslator,
 } from "@geolibre/plugins";
@@ -173,6 +189,9 @@ import { mergeStringLists } from "../lib/string-lists";
 import { saveBinaryFileWithFallback } from "../lib/tauri-io";
 import { createAppAPI as buildAppAPI, isTauriRuntime, type AppApiHost } from "../lib/app-api";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
+import { isPluginVisible } from "../lib/ui-profile";
+import type { ActivatablePlugin } from "../lib/assistant/plugin-activation";
+import { createSettleGate } from "../lib/settle-gate";
 
 /** Records a plugin failure in the diagnostics panel without crashing the app. */
 function reportPluginError(pluginId: string, action: string, error: unknown): void {
@@ -195,6 +214,15 @@ const manager = new PluginManager();
  */
 export function initGeoLensDefaultUrl(): void {
   setGeoLensDefaultServerUrl(readDeploymentEnvValue("VITE_GEOLENS_DEFAULT_URL"));
+}
+
+/**
+ * Seeds the OSM downloader's Overpass endpoint from the deployment settings
+ * (`osm.overpassUrl`). Called at startup next to {@link initGeoLensDefaultUrl},
+ * once deployment.json has been applied. Unset keeps the built-in default.
+ */
+export function initOverpassEndpoint(): void {
+  setOverpassEndpoint(readDeploymentEnvValue("VITE_GEOLIBRE_OVERPASS_URL"));
 }
 
 const BUILT_IN_PLUGINS: GeoLibrePlugin[] = [
@@ -226,6 +254,7 @@ const BUILT_IN_PLUGINS: GeoLibrePlugin[] = [
   maplibreUsFederalGisPlugin,
   maplibreUsStateGisPlugin,
   maplibreUsLocalGisPlugin,
+  maplibreIndiaGisPlugin,
   maplibreSocrataPlugin,
   maplibreCkanPlugin,
   maplibreStacCatalogsPlugin,
@@ -238,6 +267,7 @@ const BUILT_IN_PLUGINS: GeoLibrePlugin[] = [
   maplibreSentinel2ExplorerPlugin,
   maplibreOceanDataPlatformPlugin,
   maplibreDynamicalPlugin,
+  maplibreJaxaEarthPlugin,
   maplibreGeoLensPlugin,
   maplibreStreetViewPlugin,
   maplibreMapillaryPlugin,
@@ -462,6 +492,11 @@ setSatelliteEmbeddingsFileSaver((blob, { defaultName, extension, mimeType, descr
 // Sentinel-2 Explorer composites are tiles of a MapLibre protocol; register it
 // up front so a saved project's composite layers draw before the plugin opens.
 registerSentinel2CompositeProtocol();
+registerStacRenderProtocol();
+
+// JAXA Earth layers are tiles of a MapLibre protocol too; the JAXA module
+// itself loads on the first tile.
+registerJaxaEarthProtocol();
 
 // The Fields of the World plugin saves tile GeoParquet and GeoJSON files the
 // same way.
@@ -515,6 +550,36 @@ let externalPluginLoadIssues = new Map<string, ExternalPluginLoadIssueDisplay>()
 let externalPluginHeldBack = new Map<string, HeldBackPluginBundle>();
 const externalPluginsListeners = new Set<() => void>();
 const EMPTY_PLUGIN_MANIFEST_URLS: string[] = [];
+
+// Closes once startup plugin activation has finished (the project restore and the
+// `?plugin=` deep link, each after any `?url=` project), so a URL load that wants
+// file handlers can wait for them. One absolute deadline covers the parts and any
+// activation still pending: a stuck startup delays the first load by at most this
+// long, and later loads not at all.
+const PLUGIN_SETTLE_TIMEOUT_MS = 15_000;
+const pluginActivationGate = createSettleGate(
+  PLUGIN_SETTLE_TIMEOUT_MS,
+  ["restore", "deepLink"],
+  () => Promise.allSettled(manager.list().map((plugin) => manager.pendingActivation(plugin.id))),
+);
+
+/** Called once the project plugin restore (and its URL parameters) has finished. */
+export function markPluginActivationSettled(): void {
+  pluginActivationGate.settle("restore");
+}
+
+/** Called once the `?plugin=` deep link has activated its plugins, or when there is none. */
+export function markPluginDeepLinkSettled(): void {
+  pluginActivationGate.settle("deepLink");
+}
+
+/**
+ * Resolves once external plugins have loaded and their startup activation has
+ * settled, or at the deadline, so the handlers they register are visible.
+ */
+export function whenPluginsSettled(): Promise<void> {
+  return pluginActivationGate.wait();
+}
 
 export function getPluginManager(): PluginManager {
   return manager;
@@ -1189,6 +1254,9 @@ export function useTimeSliderAutoClose(mapControllerRef: RefObject<MapEngine | n
  * engine hooks.
  */
 const appApiHost: AppApiHost = {
+  openControlPanel,
+  closeControlPanel,
+  isControlPanelVisible,
   plugins: manager,
   projectPluginStateSnapshot,
   persistProjectPluginState,
@@ -1223,12 +1291,21 @@ const appApiHost: AppApiHost = {
   unregisterToolbarMenu,
   registerMenuContribution,
   unregisterMenuContribution,
+  registerFileHandler,
+  unregisterFileHandler,
   registerFloatingPanel,
   unregisterFloatingPanel,
   openFloatingPanel,
   closeFloatingPanel,
   getOpenFloatingPanels,
   getGeometryEditTargetLayerId,
+  getLastGeometryEditEnd,
+  subscribeGeometryEdit,
+  isPluginEngineSupported,
+  maplibreGeoEditorPlugin,
+  startLayerGeometryEdit,
+  addLidarLayerFromUrl,
+  addLidarLayerFromBytes,
 };
 
 /**
@@ -1283,6 +1360,53 @@ export async function activateDeepLinkedPlugin(
   if (JSON.stringify(nextState) !== JSON.stringify(useAppStore.getState().projectPlugins)) {
     useAppStore.getState().setProjectPlugins(nextState, false);
   }
+  return true;
+}
+
+/**
+ * The installed plugins the AI Assistant may turn on: off, declaring assistant
+ * tools, supported by the current renderer, and not hidden by the UI profile
+ * (the same plugins the Plugins menu offers).
+ *
+ * @returns Each such plugin with its assistant description.
+ */
+export function listAssistantActivatablePlugins(): ActivatablePlugin[] {
+  const renderer = useAppStore.getState().primaryRenderer;
+  const { uiProfile } = useDesktopSettingsStore.getState().desktopSettings;
+  return manager
+    .list()
+    .flatMap((plugin) =>
+      plugin.assistant &&
+      !manager.isActive(plugin.id) &&
+      isPluginEngineSupported(plugin, renderer) &&
+      isPluginVisible(uiProfile, plugin.id)
+        ? [{ id: plugin.id, name: plugin.name, description: plugin.assistant.description.trim() }]
+        : [],
+    );
+}
+
+/**
+ * Turns a plugin on for the AI Assistant, as the Plugins menu does: a throw is
+ * contained in diagnostics, and the project records the plugin as on.
+ *
+ * @param pluginId - The id of a plugin from {@link listAssistantActivatablePlugins}.
+ * @param mapControllerRef - The primary map engine.
+ * @returns Whether the plugin is on afterwards.
+ */
+export async function activatePluginForAssistant(
+  pluginId: string,
+  mapControllerRef: RefObject<MapEngine | null>,
+): Promise<boolean> {
+  if (manager.isActive(pluginId)) return true;
+  const before = JSON.stringify(projectPluginStateSnapshot());
+  try {
+    const activated = await manager.activate(pluginId, createAppAPI(mapControllerRef));
+    if (!activated || !manager.isActive(pluginId)) return false;
+  } catch (error) {
+    reportPluginError(pluginId, "activate", error);
+    return false;
+  }
+  persistProjectPluginState(before);
   return true;
 }
 

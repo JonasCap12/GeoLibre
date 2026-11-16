@@ -168,6 +168,7 @@ from deployment_policy import (
     parse_capabilities_env,
     parse_embed_origins,
     read_services_file,
+    regional_basemaps_disabled,
     service_url,
 )
 
@@ -198,6 +199,16 @@ if services_file:
 # GEOLIBRE_SERVICES_FILE).
 if builtin_services_hidden(os.environ.get("GEOLIBRE_BUILTIN_SERVICES", "")):
     deployment["VITE_GEOLIBRE_BUILTIN_SERVICES"] = "off"
+
+# Optional switch for the regional basemaps (Amap, Tencent), whose tiles are
+# served from mainland China. 1/true hides them in the basemap pickers and makes
+# a project that names one open on the default basemap; 0/false offers them even
+# when the image was built with them disabled. Any other value fails the boot.
+regional_disabled = regional_basemaps_disabled(
+    os.environ.get("GEOLIBRE_DISABLE_REGIONAL_BASEMAPS", "")
+)
+if regional_disabled is not None:
+    deployment["VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS"] = "1" if regional_disabled else "0"
 
 # Optional Clerk sign-in gate. The publishable key is intentionally public and
 # is all the browser needs; Clerk secrets never enter the image or runtime
@@ -337,6 +348,23 @@ share_url = os.environ.get("GEOLIBRE_SHARE_URL", "").strip()
 if share_url:
     deployment["VITE_GEOLIBRE_SHARE_URL"] = normalize_share_url(share_url)
 
+# Default project storage backend ("local" or "server"). Default is "local" (unset).
+# "server" routes Save and Save As to the configured projects server.
+project_storage = os.environ.get("GEOLIBRE_PROJECT_STORAGE", "").strip().lower()
+if project_storage:
+    if project_storage not in ("local", "server"):
+        raise SystemExit("ERROR: GEOLIBRE_PROJECT_STORAGE must be local or server.")
+    if project_storage == "server":
+        if not share_url:
+            raise SystemExit(
+                "ERROR: GEOLIBRE_PROJECT_STORAGE=server requires GEOLIBRE_SHARE_URL to be set."
+            )
+        if share_url.lower() == "off":
+            raise SystemExit(
+                "ERROR: GEOLIBRE_PROJECT_STORAGE=server cannot be used with GEOLIBRE_SHARE_URL=off."
+            )
+    deployment["VITE_GEOLIBRE_PROJECT_STORAGE"] = project_storage
+
 # Display name for the app chrome (toolbar label, browser tab). Unset keeps
 # "GeoLibre". It is rendered as text, never markup, and json.dump below escapes
 # it for the generated script, so no further validation is needed here.
@@ -354,6 +382,18 @@ if collab_url:
 geolens_url = os.environ.get("GEOLIBRE_GEOLENS_URL", "").strip()
 if geolens_url:
     deployment["VITE_GEOLENS_DEFAULT_URL"] = normalize_geolens_url(geolens_url)
+
+# Overpass API endpoint for the OSM downloader. Unset keeps the public GeoLibre
+# relay; set it to keep area-of-interest queries on an instance you trust. Read
+# from the generated deployment.json, which already applied GEOLIBRE_OVERPASS_URL
+# over the mounted file and validated both, so an endpoint set in either place
+# also rides in this synchronous config and survives a blocked or late
+# deployment.json fetch instead of falling back to the public relay.
+with open("/usr/share/nginx/html/deployment.json", encoding="utf-8") as policy_file:
+    overpass_url = json.load(policy_file).get("osm", {}).get("overpassUrl")
+if overpass_url:
+    deployment["VITE_GEOLIBRE_OVERPASS_URL"] = overpass_url
+    print("Overpass API endpoint: " + overpass_url)
 
 # Capabilities also ride in the runtime config, which loads synchronously, so an
 # env-set grant survives a blocked or late deployment.json. "none" grants nothing.
@@ -389,6 +429,11 @@ if [ -n "$(trim "${GEOLIBRE_SHARE_URL:-}")" ]; then
   esac
 fi
 
+if [ -n "$(trim "${GEOLIBRE_PROJECT_STORAGE:-}")" ]; then
+  PROJECT_STORAGE_LOG=$(trim "$GEOLIBRE_PROJECT_STORAGE" | tr '[:upper:]' '[:lower:]')
+  echo "Default project storage: $PROJECT_STORAGE_LOG"
+fi
+
 if [ -n "$(trim "${GEOLIBRE_COLLAB_URL:-}")" ]; then
   echo "Collaboration relay: $(trim "$GEOLIBRE_COLLAB_URL")"
 fi
@@ -417,6 +462,11 @@ fi
 if [ "$(printf '%s' "$(trim "${GEOLIBRE_BUILTIN_SERVICES:-}")" | tr '[:upper:]' '[:lower:]')" = "off" ]; then
   echo "Built-in starter services: hidden (GEOLIBRE_BUILTIN_SERVICES=off)"
 fi
+
+case "$(trim "${GEOLIBRE_DISABLE_REGIONAL_BASEMAPS:-}" | tr '[:upper:]' '[:lower:]')" in
+  1 | true) echo "Regional basemaps (served from mainland China): disabled" ;;
+  0 | false) echo "Regional basemaps (served from mainland China): enabled" ;;
+esac
 
 if [ -n "$(trim "${GEOLIBRE_CLERK_PUBLISHABLE_KEY:-}")" ]; then
   # Lower-cased to match the Python validator above, which compares after

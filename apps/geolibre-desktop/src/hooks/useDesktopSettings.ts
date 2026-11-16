@@ -29,7 +29,7 @@ import {
   type ThemeScheme,
 } from "../lib/theme-schemes";
 import type { UpdateNotificationLevel } from "../lib/updates";
-import { migrateLegacyAiEnv } from "../lib/assistant/profiles";
+import { foldLegacyProfileModelField, migrateLegacyAiEnv } from "../lib/assistant/profiles";
 import {
   normalizeS3Connections,
   normalizeS3DefaultLocation,
@@ -217,6 +217,13 @@ export interface DesktopLayoutSettings {
    * matter what the Settings toggle said (#1935).
    */
   browserPanelVisible: boolean;
+  /**
+   * Keep the bottom panels (attribute table, dashboard, Python console, SQL
+   * workspace, AI Assistant) under the map column instead of spanning the whole
+   * window, so the left and right docks keep their full height while one is
+   * open (#3157).
+   */
+  bottomPanelsUnderMap: boolean;
   /** Same as {@link browserPanelVisible}, for the Comments right panel. */
   commentsPanelVisible: boolean;
   /**
@@ -295,6 +302,7 @@ export function setSettingsKeychainWritable(writable: boolean): void {
 
 export const DEFAULT_DESKTOP_LAYOUT_SETTINGS: DesktopLayoutSettings = {
   browserPanelVisible: true,
+  bottomPanelsUnderMap: true,
   commentsPanelVisible: true,
   compactLayerList: false,
   layerPanelVisible: true,
@@ -514,7 +522,7 @@ function normalizeAssistantProfiles(value: unknown, legacyEnv: unknown): Assista
         }
       }
 
-      profiles.push({ id, name, provider, modelId, fieldValues });
+      profiles.push(foldLegacyProfileModelField({ id, name, provider, modelId, fieldValues }));
     }
   }
 
@@ -611,6 +619,10 @@ function normalizeDesktopLayoutSettings(layout: unknown): DesktopLayoutSettings 
       typeof candidate.browserPanelVisible === "boolean"
         ? candidate.browserPanelVisible
         : DEFAULT_DESKTOP_LAYOUT_SETTINGS.browserPanelVisible,
+    bottomPanelsUnderMap:
+      typeof candidate.bottomPanelsUnderMap === "boolean"
+        ? candidate.bottomPanelsUnderMap
+        : DEFAULT_DESKTOP_LAYOUT_SETTINGS.bottomPanelsUnderMap,
     commentsPanelVisible:
       typeof candidate.commentsPanelVisible === "boolean"
         ? candidate.commentsPanelVisible

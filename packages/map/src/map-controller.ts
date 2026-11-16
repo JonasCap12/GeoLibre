@@ -5,6 +5,8 @@ import {
   DEFAULT_BASEMAP,
   DEFAULT_PROJECT_PREFERENCES,
   horizontalBbox,
+  mapZoomStepOutputs,
+  normalizeMapCrs,
   scaleAltitudeToActiveBody,
   styleValue,
   useAppStore,
@@ -98,6 +100,15 @@ import { getDynamicPaintProperty, setDynamicPaintProperty } from "./dynamic-styl
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import { installMapTransformCompat } from "./map-transform-compat";
 import {
+  isInitialMapCrsFrameRequested,
+  notifyMapCrsChange,
+  requestInitialMapCrsFrame,
+  setActiveMapCrs,
+  type ResolvedMapCrs,
+} from "./active-map-crs";
+import { createMapCrsStyle, registerMapCrs, resolveMapCrs } from "./map-crs";
+import { transformTileRequest } from "./tile-request-headers";
+import {
   MAPLIBRE_CAPABILITIES,
   type BuiltInMapControl,
   DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
@@ -143,8 +154,63 @@ const NON_BASEMAP_STYLE_LAYER_IDS = [
 ];
 const OPACITY_PAINT_PROPERTIES = STORY_OPACITY_PAINT_PROPERTIES;
 
+/** Whether a paint expression reads `["zoom"]` anywhere inside it. */
+function expressionReadsZoom(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  if (value[0] === "zoom" && value.length === 1) return true;
+  return value.some(expressionReadsZoom);
+}
+
 /**
- * The paint value a story fade writes for one property of one style layer.
+ * Rescale the opacity paint value the layer sync wrote for a layer's own
+ * opacity so it shows a story chapter's opacity in its place.
+ *
+ * A chapter's opacity stands in for the layer opacity (the Layers panel
+ * slider), not for the paint property: the sync writes each opacity paint as
+ * the style's own value times the layer opacity (`fillOpacity` x opacity for a
+ * fill), so a chapter at 1 must draw a fill styled at 0.45 at 0.45, not solid.
+ * The base is therefore scaled by `storyOpacity / layerOpacity`.
+ *
+ * @param base The paint value the layer sync last wrote.
+ * @param layerOpacity The store layer's own opacity.
+ * @param storyOpacity The chapter's opacity, already clamped to 0-1.
+ * @returns The value to write, or `undefined` when the base cannot be rescaled
+ *   (unset, a layer opacity of 0 that erased the style's value, or a zoom
+ *   expression other than a top-level zoom `step`, since MapLibre only
+ *   accepts zoom as the input of a top-level step or interpolate).
+ */
+export function storyScaledPaintValue(
+  base: unknown,
+  layerOpacity: number,
+  storyOpacity: number,
+): unknown {
+  if (!Number.isFinite(layerOpacity) || layerOpacity <= 0) return undefined;
+  const ratio = storyOpacity / layerOpacity;
+  const scale = (value: unknown): unknown => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.min(1, Math.max(0, value * ratio));
+    }
+    if (Array.isArray(value) && !expressionReadsZoom(value)) {
+      return ratio === 1 ? value : ["min", 1, ["*", value, ratio]];
+    }
+    return undefined;
+  };
+  if (!Array.isArray(base) || !expressionReadsZoom(base)) return scale(base);
+  // A rule's scale range compiles to a top-level `["step", ["zoom"], ...]`
+  // (see `scaleByOpacity` in style-mapper.ts); scale its outputs in place.
+  if (base[0] !== "step" || !Array.isArray(base[1]) || base[1][0] !== "zoom") return undefined;
+  let scalable = true;
+  const stepped = mapZoomStepOutputs(base, (output) => {
+    const value = scale(output);
+    if (value === undefined) scalable = false;
+    return value;
+  });
+  return scalable ? stepped : undefined;
+}
+
+/**
+ * The paint value a story fade writes for one property of one style layer
+ * when the synced value cannot be rescaled (see {@link storyScaledPaintValue}).
  *
  * Fades write absolute opacities, but the geometry generator's fill/circle
  * opacity is the product of the layer opacity and the style's own
@@ -228,6 +294,15 @@ export class MapController implements MapEngine {
   readonly kind = "maplibre" as const;
   readonly capabilities: MapEngineCapabilities = MAPLIBRE_CAPABILITIES;
   private map: maplibregl.Map | null = null;
+  /** Presentation overrides survive ordinary layer syncs without changing project data. */
+  private readonly storyOpacities = new Map<string, number>();
+  /**
+   * Per style layer and paint property: the value the layer sync wrote (the
+   * base a story fade rescales) and the value the fade wrote over it. A
+   * current value that no longer matches `written` means a sync has rewritten
+   * the base since, so it is captured afresh.
+   */
+  private readonly storyPaintBases = new Map<string, { base: unknown; written: unknown }>();
   /** Whether {@link clampViewToPreferences} has a clamp queued on `moveend`. */
   private pendingViewClamp = false;
   /**
@@ -298,6 +373,28 @@ export class MapController implements MapEngine {
   private basemapOpacity = 1;
   private blankBackgroundColor: string | null = null;
   private mapPreferences: MapPreferences = DEFAULT_PROJECT_PREFERENCES.map;
+  /** The custom CRS the map is drawn in (map-crs.ts); null on the default map. */
+  private activeCrs: ResolvedMapCrs | null = null;
+  /** The normalized `mapCrs` the map is moving to, set before it resolves. */
+  private desiredCrsId: string | undefined;
+  /** Bumped per CRS change so a slow resolution cannot overwrite a newer one. */
+  private crsGeneration = 0;
+  /**
+   * Whether the map still shows the blank style it was created with while its
+   * CRS resolved (init), so a CRS that is cleared or fails before then must
+   * apply the basemap itself.
+   */
+  private crsStyleDeferred = false;
+  /** A `mapCrs` that could not be drawn, not retried until the preference changes. */
+  private failedCrsId: string | undefined;
+  /**
+   * Whether the store set a view since the last CRS change began. Opening a
+   * project applies its preferences and then its saved view in one commit, so
+   * the CRS switch that follows must keep that view rather than frame its area.
+   */
+  private storeViewSinceCrsChange = false;
+  /** A link named a CRS and no view: the store's echo of the default view does not count. */
+  private initialCrsFrame = false;
   private basemapOriginalPaintValues = new Map<string, Map<string, unknown>>();
   private syncedLayers: GeoLibreLayer[] = [];
   private layerIds: string[] = [];
@@ -346,9 +443,16 @@ export class MapController implements MapEngine {
     // Start blank and apply it below, as soon as the listeners are wired — the
     // path a project saved with a Mapbox basemap and a split-view pane both take.
     const deferMapboxStyle = isMapboxStyleUrl(this.basemapStyleUrl);
+    // A map in a custom CRS also starts blank: its style is built once the CRS
+    // resolves (syncMapCrs below), so the Web Mercator basemap never loads.
+    const deferCrsStyle = normalizeMapCrs(mapPreferences.mapCrs) !== undefined;
+    this.crsStyleDeferred = deferCrsStyle;
     this.map = new maplibregl.Map({
       container,
-      style: deferMapboxStyle ? createBlankMapStyle() : resolveMapStyle(this.basemapStyleUrl),
+      style:
+        deferMapboxStyle || deferCrsStyle
+          ? createBlankMapStyle()
+          : resolveMapStyle(this.basemapStyleUrl),
       center: view?.center ?? [-100, 40],
       zoom: view?.zoom ?? 2,
       bearing: view?.bearing ?? 0,
@@ -372,6 +476,9 @@ export class MapController implements MapEngine {
       // that discard the drawing buffer after compositing (most mobile GPUs).
       // Trade-off: adds one extra framebuffer copy per frame on tiled renderers.
       canvasContextAttributes: { preserveDrawingBuffer: true },
+      // The map's only request transform: plugins register headers for their
+      // tile services rather than replacing it (see tile-request-headers.ts).
+      transformRequest: transformTileRequest,
     });
     ensureGeneratedImageHandler(this.map);
     // A leftover text selection would otherwise turn a map drag into a native
@@ -434,6 +541,10 @@ export class MapController implements MapEngine {
     // `styledata` are wired, so the real style is treated exactly like a later
     // basemap switch rather than racing the listeners above.
     if (deferMapboxStyle) this.applyStyleToMap(this.basemapStyleUrl);
+    // Keep the project's saved view: frame the CRS only on a later switch, or
+    // when a link names a CRS and no view.
+    this.initialCrsFrame = isInitialMapCrsFrameRequested();
+    this.syncMapCrs(this.initialCrsFrame);
     return this.map;
   }
 
@@ -539,10 +650,13 @@ export class MapController implements MapEngine {
   /**
    * Fade a project layer in or out for story-map playback.
    *
-   * Story chapters change layer opacity as the reader scrolls. This writes the
-   * MapLibre paint properties directly instead of going through the store, so
-   * playback never marks the project dirty or pushes undo history. Call
-   * {@link restoreLayerStyles} when playback ends to reset opacities.
+   * Story chapters change layer opacity as the reader scrolls. The chapter's
+   * opacity takes the place of the layer opacity (the Layers panel slider), so
+   * a polygon styled with a 0.45 fill draws at 0.45 for a chapter at 1 and at
+   * 0.09 for one at 0.2. This writes the MapLibre paint properties directly
+   * instead of going through the store, so playback never marks the project
+   * dirty or pushes undo history. Call {@link restoreLayerStyles} when
+   * playback ends to reset opacities.
    *
    * @param layerId GeoLibre store layer id to fade.
    * @param opacity Target opacity, clamped to the 0-1 range.
@@ -552,9 +666,10 @@ export class MapController implements MapEngine {
    */
   setStoryLayerOpacity(layerId: string, opacity: number, durationMs?: number): void {
     if (!this.map) return;
+    const clamped = Math.min(1, Math.max(0, opacity));
+    this.storyOpacities.set(layerId, clamped);
     const layer = this.syncedLayers.find((item) => item.id === layerId);
     if (!layer) return;
-    const clamped = Math.min(1, Math.max(0, opacity));
     for (const nativeId of this.getStoryStyleLayerIds(layer)) {
       const styleLayer = this.map.getLayer(nativeId);
       if (!styleLayer) continue;
@@ -569,10 +684,41 @@ export class MapController implements MapEngine {
           this.map,
           nativeId,
           prop,
-          storyPaintOpacity(layer, nativeId, prop, clamped),
+          this.storyPaintValue(layer, nativeId, prop, clamped),
         );
       }
     }
+  }
+
+  /**
+   * The value a story fade writes for one opacity paint property: the synced
+   * value rescaled from the layer's own opacity to the chapter's, so the
+   * style's own translucency survives the fade (see
+   * {@link storyScaledPaintValue}).
+   *
+   * @param layer The synced store layer.
+   * @param nativeId MapLibre style layer id.
+   * @param prop Paint property name.
+   * @param opacity The chapter's opacity, clamped to 0-1.
+   * @returns The paint value to write.
+   */
+  private storyPaintValue(
+    layer: GeoLibreLayer,
+    nativeId: string,
+    prop: string,
+    opacity: number,
+  ): unknown {
+    const key = `${nativeId}\u0000${prop}`;
+    const current = this.map ? getDynamicPaintProperty(this.map, nativeId, prop) : undefined;
+    const entry = this.storyPaintBases.get(key);
+    const base = entry && styleValuesEqual(current, entry.written) ? entry.base : current;
+    // Only opacities scale with the layer opacity; hillshade exaggeration does not.
+    const scaled = prop.endsWith("-opacity")
+      ? storyScaledPaintValue(base, layer.opacity, opacity)
+      : undefined;
+    const value = scaled ?? storyPaintOpacity(layer, nativeId, prop, opacity);
+    this.storyPaintBases.set(key, { base, written: value });
+    return value;
   }
 
   /**
@@ -605,14 +751,9 @@ export class MapController implements MapEngine {
    * changes made during story-map playback by {@link setStoryLayerOpacity}.
    */
   restoreLayerStyles(): void {
-    // Invalidate any pending story rotation and halt an in-flight camera move so
-    // a deferred rotateTo cannot fire after the presenter has exited.
-    this.storyCameraToken++;
-    if (this.pendingRotateHandler) {
-      this.map?.off("moveend", this.pendingRotateHandler);
-      this.pendingRotateHandler = null;
-    }
-    this.map?.stop();
+    this.stopStoryCamera();
+    this.storyOpacities.clear();
+    this.storyPaintBases.clear();
     // Clear any opacity transitions left over from playback first, otherwise the
     // restored values animate back in (potentially over a multi-second fade).
     if (this.map) {
@@ -631,13 +772,12 @@ export class MapController implements MapEngine {
     this.syncLayers(this.syncedLayers);
   }
 
-  /** Token guarding deferred story rotations against later chapter changes. */
+  /** Token guarding deferred arrival and rotation against later chapter changes. */
   private storyCameraToken = 0;
   /**
-   * The rotate-on-settle `moveend` listener currently awaiting its move, kept so
+   * The arrival/rotate-on-settle listener currently awaiting its move, kept so
    * it can be detached deterministically (on the next chapter or on presenter
-   * exit) instead of relying solely on self-removal, which never fires for an
-   * instant move whose `moveend` precedes attachment.
+   * exit) instead of relying solely on self-removal after an eventual moveend.
    */
   private pendingRotateHandler:
     | ((event: maplibregl.MapLibreEvent & { storyCameraToken?: number }) => void)
@@ -654,13 +794,18 @@ export class MapController implements MapEngine {
    * @param location Target camera (center, zoom, pitch, bearing).
    * @param animation MapLibre camera method to use.
    * @param rotate When true, slowly rotate 180° after the move settles.
+   * @param onArrive Runs after the initial transition, before optional rotation.
    */
   applyStoryChapterCamera(
     location: StoryChapterLocation,
     animation: StoryChapterAnimation = "flyTo",
     rotate = false,
+    onArrive?: () => void,
   ): void {
-    if (!this.map) return;
+    if (!this.map) {
+      onArrive?.();
+      return;
+    }
     const map = this.map;
     // Bump the token first so any pending rotation from a prior chapter is
     // invalidated. We do NOT call map.stop() here: flyTo/easeTo already
@@ -683,16 +828,7 @@ export class MapController implements MapEngine {
     // (Camera._afterEase), so the token survives cancellation. The
     // pendingRotateHandler cleanup above and in restoreLayerStyles is the
     // backstop should that ever change, so handlers cannot leak regardless.
-    map[animation](
-      {
-        center: location.center,
-        zoom: location.zoom,
-        pitch: location.pitch,
-        bearing: location.bearing,
-      },
-      { storyCameraToken: token },
-    );
-    if (rotate) {
+    if (rotate || onArrive) {
       const onMoveEnd = (event: maplibregl.MapLibreEvent & { storyCameraToken?: number }) => {
         // Only detach once the token matches. Stay attached through any
         // preceding moveend (e.g. the deferred moveend of a halted prior
@@ -704,14 +840,37 @@ export class MapController implements MapEngine {
           this.pendingRotateHandler = null;
         }
         if (this.storyCameraToken !== token || !this.map) return;
-        this.map.rotateTo(this.map.getBearing() + 180, {
-          duration: 30000,
-          easing: (time) => time,
-        });
+        onArrive?.();
+        // The callback may pause playback or select another chapter.
+        if (rotate && this.storyCameraToken === token && this.map) {
+          this.map.rotateTo(this.map.getBearing() + 180, {
+            duration: 30000,
+            easing: (time) => time,
+          });
+        }
       };
       this.pendingRotateHandler = onMoveEnd;
       map.on("moveend", onMoveEnd);
     }
+    // Register first: jumpTo and reduced-motion transitions settle synchronously.
+    map[animation](
+      {
+        center: location.center,
+        zoom: location.zoom,
+        pitch: location.pitch,
+        bearing: location.bearing,
+      },
+      { storyCameraToken: token },
+    );
+  }
+
+  stopStoryCamera(): void {
+    this.storyCameraToken++;
+    if (this.pendingRotateHandler) {
+      this.map?.off("moveend", this.pendingRotateHandler);
+      this.pendingRotateHandler = null;
+    }
+    this.map?.stop();
   }
 
   /**
@@ -720,6 +879,11 @@ export class MapController implements MapEngine {
    * @param location Target camera (center, zoom, pitch, bearing).
    */
   flyToView(location: StoryChapterLocation): void {
+    this.storyCameraToken++;
+    if (this.pendingRotateHandler) {
+      this.map?.off("moveend", this.pendingRotateHandler);
+      this.pendingRotateHandler = null;
+    }
     this.map?.flyTo(
       {
         center: location.center,
@@ -818,6 +982,8 @@ export class MapController implements MapEngine {
   }
 
   destroy(): void {
+    this.stopStoryCamera();
+    this.storyOpacities.clear();
     for (const dispose of this.searchDisposers) dispose();
     this.extentDrawingDispose?.();
     this.removeNavigationControl();
@@ -844,7 +1010,21 @@ export class MapController implements MapEngine {
     this.map?.remove();
     this.map = null;
     this.styleReady = false;
+    // A later init() starts from the default map and resolves its CRS afresh;
+    // the bump drops a resolution still in flight for this map.
+    const hadCrs = this.activeCrs !== null;
+    this.activeCrs = null;
+    this.desiredCrsId = undefined;
+    this.failedCrsId = undefined;
+    this.crsStyleDeferred = false;
+    this.crsGeneration += 1;
     this.clearLayerDisplayNames();
+    if (hadCrs) notifyMapCrsChange();
+  }
+
+  /** The CRS the map is drawn in, or `null` on the default Web Mercator map or globe. */
+  getMapCrs(): ResolvedMapCrs | null {
+    return this.activeCrs;
   }
 
   setStyle(url: string): void {
@@ -895,6 +1075,14 @@ export class MapController implements MapEngine {
     // request is pure waste. Also covers a request that never settles, which
     // would otherwise keep its closure (and this controller) alive.
     this.abortPendingMapboxStyle();
+
+    // A map in a custom CRS draws its own basemap (or none): Web Mercator
+    // basemaps would land in the wrong place. The URL is kept for the way back.
+    if (this.activeCrs) {
+      this.beginStyleSwap();
+      map.setStyle(createMapCrsStyle(this.activeCrs), { diff: false });
+      return;
+    }
 
     if (!isMapboxStyleUrl(url)) {
       this.beginStyleSwap();
@@ -974,7 +1162,7 @@ export class MapController implements MapEngine {
     if (!this.map) return;
     // jumpTo stop()s drag handlers, so skip while the user is still panning.
     if (this.map.dragPan.isActive() || this.map.dragRotate.isActive()) return;
-    this.map.jumpTo(constrainMapView(view, this.mapPreferences, this.map));
+    this.map.jumpTo(constrainMapView(view, this.mapPreferences, this.map, this.activeCrs !== null));
   }
 
   /**
@@ -1000,6 +1188,7 @@ export class MapController implements MapEngine {
    */
   applyStoreView(view: MapViewState): void {
     if (this.storeEchoes.delete(view)) return;
+    this.storeViewSinceCrsChange = true;
     this.applyView(view);
   }
 
@@ -1013,7 +1202,7 @@ export class MapController implements MapEngine {
   easeToView(view: MapViewState, options?: EaseToViewOptions): void {
     if (!this.map) return;
     this.map.easeTo({
-      ...constrainMapView(view, this.mapPreferences, this.map),
+      ...constrainMapView(view, this.mapPreferences, this.map, this.activeCrs !== null),
       ...(options?.durationMs !== undefined ? { duration: options.durationMs } : {}),
       ...(options?.linear ? { easing: (t: number) => t } : {}),
     });
@@ -1040,10 +1229,8 @@ export class MapController implements MapEngine {
     // Reflect a changed projection preference (e.g. loading a project saved in
     // mercator) onto the live map.
     this.enforceProjection();
-    this.map.setMaxBounds(mapBoundsForPreferences(preferences));
-    this.map.setTransformConstrain(
-      createMapTransformConstraint(preferences, this.map, minZoom, maxZoom),
-    );
+    this.applyViewConstraints(minZoom, maxZoom);
+    this.syncMapCrs(true);
     this.clampViewToPreferences();
     // The ellipsoid or the scale unit can change here (Settings' dropdowns)
     // without the basemap changing, so push the unit and redraw the body-aware
@@ -1053,6 +1240,30 @@ export class MapController implements MapEngine {
     // or both).
     this.scaleControl?.setUnit(preferences.scaleUnit);
     this.scaleControl?.refresh();
+  }
+
+  /**
+   * Install the bounds and transform constraint for the map as it is drawn now.
+   * They are Web Mercator math, so a map in another CRS keeps MapLibre's own
+   * constraint, which knows the CRS's edge. Keyed on the CRS actually applied,
+   * not the preference, so a CRS still resolving (or one that failed) leaves
+   * the default map constrained as usual.
+   *
+   * Args:
+   *   minZoom: The effective minimum zoom.
+   *   maxZoom: The effective maximum zoom.
+   */
+  private applyViewConstraints(minZoom: number, maxZoom: number): void {
+    if (!this.map) return;
+    if (this.activeCrs) {
+      this.map.setMaxBounds(null);
+      this.map.setTransformConstrain(null);
+      return;
+    }
+    this.map.setMaxBounds(mapBoundsForPreferences(this.mapPreferences));
+    this.map.setTransformConstrain(
+      createMapTransformConstraint(this.mapPreferences, this.map, minZoom, maxZoom),
+    );
   }
 
   /**
@@ -1139,6 +1350,9 @@ export class MapController implements MapEngine {
 
     const nextIds = layers.map((l) => l.id);
     const nextIdSet = new Set(nextIds);
+    for (const id of this.storyOpacities.keys()) {
+      if (!nextIdSet.has(id)) this.storyOpacities.delete(id);
+    }
     const previousLayers = new Map(this.syncedLayers.map((layer) => [layer.id, layer]));
     // Built once for the whole pass: every removal below asks the same question of the same list.
     const survivingSourceIds = externalSourceIdsFor(layers);
@@ -1164,6 +1378,11 @@ export class MapController implements MapEngine {
     }
     this.layerIds = nextIds;
     this.syncedLayers = layers;
+    // Saving a presentation annotation (or changing another layer) syncs the
+    // whole stack. Preserve chapter fades on the original layers, including
+    // companion symbology and plugin-owned native layers. Keep syncedLayers
+    // unmodified so exiting can restore the actual project opacity.
+    for (const [id, opacity] of this.storyOpacities) this.setStoryLayerOpacity(id, opacity);
     // Blend modes are read inside the render loop rather than from a paint
     // property, so a mode that changed without any other paint change still
     // needs a frame asking for it. The repaint is gated on THIS controller's
@@ -1586,7 +1805,7 @@ export class MapController implements MapEngine {
     };
   }
   stopCamera(): void {
-    this.map?.stop();
+    this.stopStoryCamera();
   }
   suspendNavigation(): () => void {
     const map = this.map;
@@ -1925,16 +2144,160 @@ export class MapController implements MapEngine {
 
   /** Current map projection, normalized to the two values we persist. */
   readProjection(): MapProjection {
+    // A custom CRS is flat, like Mercator; it is persisted as `mapCrs`.
+    if (this.activeCrs) return "mercator";
     return this.map?.getProjection()?.type === "mercator" ? "mercator" : "globe";
   }
 
   /**
-   * Apply the projection from the active map preferences. Defaults to globe so
-   * projects saved before projection was persisted keep their previous look.
-   * Retries on the next idle if the style is not ready to accept it yet.
+   * Move the map into the CRS `preferences.map.mapCrs` names, or back to the
+   * default map, when that preference changed.
+   *
+   * Resolving an EPSG code loads the EPSG tables and proj4, so it is
+   * asynchronous; a generation counter drops a result the user has already
+   * superseded. Entering or leaving a CRS re-applies the style (see
+   * applyStyleToMap), which rebuilds every layer in the new grid.
+   *
+   * Args:
+   *   frame: Fit the view to the CRS's area when the current center lies
+   *     outside it. Off for the CRS a map is created in, which keeps the
+   *     project's saved view.
    */
+  private syncMapCrs(frame: boolean): void {
+    const map = this.map;
+    if (!map) return;
+    const desired = normalizeMapCrs(this.mapPreferences.mapCrs);
+    if (desired === this.desiredCrsId || (desired !== undefined && desired === this.failedCrsId)) {
+      return;
+    }
+    this.failedCrsId = undefined;
+    this.desiredCrsId = desired;
+    this.storeViewSinceCrsChange = false;
+    const generation = ++this.crsGeneration;
+    if (desired === undefined) {
+      this.showDefaultMap(frame);
+      return;
+    }
+    const current = () => this.map === map && this.crsGeneration === generation;
+    // A CRS that cannot be drawn leaves the default map, with its projection,
+    // rather than the blank style or the previous CRS.
+    const fallBack = () => {
+      requestInitialMapCrsFrame(false);
+      this.initialCrsFrame = false;
+      this.failedCrsId = desired;
+      this.desiredCrsId = undefined;
+      this.showDefaultMap(false);
+      this.enforceProjection();
+    };
+    void resolveMapCrs(desired)
+      .then(async (crs) => {
+        if (!current()) return;
+        if (!crs) {
+          console.warn(`Map CRS "${desired}" could not be resolved; drawing the default map.`);
+          fallBack();
+          return;
+        }
+        await registerMapCrs(crs);
+        if (current()) this.applyMapCrs(crs, frame);
+      })
+      .catch((error: unknown) => {
+        if (!current()) return;
+        console.warn(`Failed to switch the map to CRS "${desired}".`, error);
+        fallBack();
+      });
+  }
+
+  /** Leave a custom CRS, or replace the blank style a CRS map was created with. */
+  private showDefaultMap(frame: boolean): void {
+    if (this.activeCrs) {
+      this.applyMapCrs(null, frame);
+    } else if (this.crsStyleDeferred) {
+      this.crsStyleDeferred = false;
+      this.applyStyleToMap(this.basemapStyleUrl);
+    }
+  }
+
+  /**
+   * Draw the map in `crs` (or the default map for `null`) from a fresh style.
+   *
+   * Zoom levels of different grids are different scales, so a switch frames
+   * the area the new map shows: a preset's own box, or an EPSG CRS's whole tile
+   * grid, on the way in, and on the way out the box of the CRS being left (Web
+   * Mercator stops at ±85°). Skipped when the store set a view meanwhile (a
+   * project opening with its saved view).
+   */
+  private applyMapCrs(crs: ResolvedMapCrs | null, frame: boolean): void {
+    const map = this.map;
+    if (!map) return;
+    const previous = this.activeCrs;
+    this.activeCrs = crs;
+    this.crsStyleDeferred = false;
+    setActiveMapCrs(map, crs);
+    const requestedMinZoom = clampNumber(this.mapPreferences.minZoom, 0, 24);
+    const minZoom = effectiveMinZoomForPreferences(this.mapPreferences, map, requestedMinZoom);
+    this.applyViewConstraints(
+      minZoom,
+      Math.max(minZoom, clampNumber(this.mapPreferences.maxZoom, 0, 24)),
+    );
+    // The globe toggle has nothing to switch to in a custom CRS.
+    if (crs) this.removeGlobeControl();
+    else this.addGlobeControl();
+    this.applyStyleToMap(this.basemapStyleUrl);
+    this.scaleControl?.refresh();
+    if (!frame) return;
+    let frameView: (() => void) | undefined;
+    const box = crs ? crs.bounds : previous?.bounds;
+    if (box) {
+      const maxLat = crs ? 90 : 85;
+      frameView = () =>
+        map.fitBounds(
+          [
+            [box[0], Math.max(box[1], -maxLat)],
+            [box[2], Math.min(box[3], maxLat)],
+          ],
+          { padding: FIT_BOUNDS_PADDING, animate: false },
+        );
+    } else if (crs?.gridCenter) {
+      const center = crs.gridCenter;
+      // Zoom 0 draws the grid's square 512 px wide; fit it to the canvas.
+      frameView = () => {
+        const canvas = map.getCanvas();
+        const side = Math.max(1, Math.min(canvas.clientWidth, canvas.clientHeight));
+        map.jumpTo({ center, zoom: Math.max(0, Math.log2(side / 512)), bearing: 0, pitch: 0 });
+      };
+    }
+    if (!frameView) {
+      this.initialCrsFrame = false;
+      requestInitialMapCrsFrame(false);
+      return;
+    }
+    const run = frameView;
+    // After the style has set the projection: before it, the view would be
+    // fitted in the outgoing one.
+    map.once("style.load", () => {
+      if (this.map !== map || this.activeCrs !== crs) return;
+      const keepView = this.storeViewSinceCrsChange && !this.initialCrsFrame;
+      this.initialCrsFrame = false;
+      if (keepView) return;
+      requestInitialMapCrsFrame(false);
+      run();
+    });
+  }
+
   private enforceProjection(): void {
     if (!this.map) return;
+    if (this.desiredCrsId !== undefined) {
+      // The CRS style carries its projection; this only reverts a stray
+      // setProjection (a plugin, a script). Nothing to do while it resolves.
+      const code = this.activeCrs?.code;
+      if (!code || this.map.getProjection()?.type === code) return;
+      try {
+        this.map.setProjection({ type: code });
+      } catch {
+        this.map.once("idle", () => this.enforceProjection());
+      }
+      return;
+    }
     const desired = this.mapPreferences.projection ?? DEFAULT_PROJECTION.type;
     try {
       if (this.map.getProjection()?.type === desired) return;
@@ -2024,7 +2387,8 @@ export class MapController implements MapEngine {
   }
 
   private addTerrainSource(): boolean {
-    if (!this.map || !this.isStyleReady()) {
+    // Terrain tiles are Web Mercator, and a custom CRS map is flat.
+    if (!this.map || !this.isStyleReady() || this.activeCrs) {
       return false;
     }
     if (this.map.getSource(TERRAIN_SOURCE_ID)) return true;
@@ -2402,7 +2766,7 @@ export class MapController implements MapEngine {
   }
 
   private addGlobeControl(): boolean {
-    if (!this.map || this.globeControl || !this.controlVisibility.globe) {
+    if (!this.map || this.globeControl || !this.controlVisibility.globe || this.activeCrs) {
       return false;
     }
     this.globeControl = new maplibregl.GlobeControl();
@@ -2543,7 +2907,6 @@ export class MapController implements MapEngine {
       if (this.terrainControl) {
         this.terrainControl.setEnabled(true);
       } else if (!this.isTerrainEnabled()) {
-        this.map.setCenterClampedToGround(false);
         this.map.setTerrain({
           source: TERRAIN_SOURCE_ID,
           exaggeration: this.terrainExaggeration,
@@ -2556,7 +2919,6 @@ export class MapController implements MapEngine {
         this.terrainControl.setEnabled(false);
       } else {
         this.map.setTerrain(null);
-        this.map.setCenterClampedToGround(true);
       }
     }
     return !this.isTerrainEnabled();
@@ -2568,10 +2930,6 @@ export class MapController implements MapEngine {
     this.terrainEnablePending = false;
     if (this.map?.getTerrain()?.source === TERRAIN_SOURCE_ID) {
       this.map.setTerrain(null);
-      // Mirror TerrainControl.setEnabled(false): restore MapLibre's default
-      // center-clamping, which the control turned off to stop terrain from
-      // recomputing (and snapping) the zoom while zooming over steep relief.
-      this.map.setCenterClampedToGround(true);
     }
     if (!this.terrainControl) return;
     this.removeControl(this.terrainControl);
@@ -2744,6 +3102,7 @@ function constrainMapView(
   view: MapViewState,
   preferences: MapPreferences,
   map: maplibregl.Map | null,
+  customCrs = false,
 ): maplibregl.JumpToOptions {
   const requestedMinZoom = clampNumber(preferences.minZoom, 0, 24);
   // Use the same effective floor the transform constraint enforces so the
@@ -2754,10 +3113,13 @@ function constrainMapView(
     : requestedMinZoom;
   const maxZoom = Math.max(minZoom, clampNumber(preferences.maxZoom, 0, 24));
 
+  // Web Mercator stops short of the poles; a custom CRS (a polar one) does not.
+  // Keyed on the CRS applied, like applyViewConstraints.
+  const maxLat = customCrs ? 90 : 85;
   return {
     center: [
       preferences.renderWorldCopies ? view.center[0] : clampNumber(view.center[0], -180, 180),
-      clampNumber(view.center[1], -85, 85),
+      clampNumber(view.center[1], -maxLat, maxLat),
     ],
     zoom: clampNumber(view.zoom, minZoom, maxZoom),
     bearing: view.bearing,

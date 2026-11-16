@@ -2,6 +2,7 @@ import {
   currentEditorIdentity,
   editorTrackingFieldNames,
   lineWidthValue,
+  registerMapClickClaim,
   styleValue,
   useAppStore,
   type GeoLibreLayer,
@@ -28,6 +29,7 @@ import {
   captureEditedFeatureIds,
   captureEditedGeometries,
   captureEditedProperties,
+  mercatorSegmentMidpoint,
   removeMultiLineStringVertex,
   planGeoEditorOverlayOrder,
   reconcileEditedFeatures,
@@ -38,6 +40,7 @@ import {
   ARCGIS_FEATURE_SOURCE_KIND,
   arcGISCopiedFeatureProperties,
   arcGISNewFeatureProperties,
+  type ArcGISCreationTemplateSelection,
 } from "./arcgis-defaults";
 import type { ArcGISEditInfo } from "./arcgis-edits";
 import {
@@ -100,6 +103,18 @@ let geoEditorLabels: GeoEditorLabels = { ...DEFAULT_GEO_EDITOR_LABELS };
  */
 export function setGeoEditorLabels(next: Partial<GeoEditorLabels>): void {
   geoEditorLabels = { ...geoEditorLabels, ...next };
+}
+
+let geoEditorFileTools = true;
+
+/**
+ * Show or hide the toolbar's Open/Save GeoJSON file buttons. The host turns
+ * them off in the read-only viewer, where they would import and export data
+ * around the deployment's capability gates. Read at construction, so it
+ * applies the next time the plugin is activated.
+ */
+export function setGeoEditorFileTools(enabled: boolean): void {
+  geoEditorFileTools = enabled;
 }
 
 let geoEditorPosition: GeoLibreMapControlPosition = "top-left";
@@ -247,8 +262,19 @@ let editTargetOriginalGeometries: ReadonlyMap<string, string> | null = null;
  * so a save hands back numeric ids (such as ArcGIS object IDs) unchanged.
  */
 let editTargetOriginalIds: EditedFeatureIds | null = null;
+/**
+ * The ArcGIS feature template the user picked for features drawn in this
+ * session (#3179), or null for defaults only. Pinned for the whole session.
+ */
+let editTargetCreationTemplate: ArcGISCreationTemplateSelection | null = null;
 /** Listeners notified when a geometry edit session starts or ends. */
 const geometryEditListeners = new Set<() => void>();
+/**
+ * The sketches restore still running after a session ended, or null. A session
+ * ends (and releases its layer) before the restore finishes, so a new session
+ * waits for it.
+ */
+let pendingSketchesRestore: Promise<void> | null = null;
 
 /**
  * Baseline of the features most recently loaded from a map view, keyed by their
@@ -367,7 +393,7 @@ function activateGeoEditor(app: GeoLibreAppAPI): false | undefined {
         mapbox.adaptGeomanToMapbox(geomanInstance, mapboxGl, mapboxMap);
       }
       geoEditorControl.setGeoman(geomanInstance);
-      installMultiLineVertexRemoval(geomanInstance);
+      installGeomanActionPatches(geomanInstance);
       bindGeomanEditSync(map);
     }
   }
@@ -386,9 +412,13 @@ function activateGeoEditor(app: GeoLibreAppAPI): false | undefined {
   return undefined;
 }
 
-function getGeoEditorOptions(mapboxGl: MapboxGl | null): GeoEditorOptions {
+export function getGeoEditorOptions(mapboxGl: MapboxGl | null): GeoEditorOptions {
   return {
     ...GEO_EDITOR_OPTIONS,
+    // An empty list is safe upstream: the control merges options over its
+    // defaults with a spread (so `[]` is kept) and only builds the file group
+    // when `fileModes.length > 0` (maplibre-gl-geo-editor, createToolbar).
+    fileModes: geoEditorFileTools ? GEO_EDITOR_OPTIONS.fileModes : [],
     // Only when present: an explicit `createPopup: undefined` would override
     // the control's MapLibre default rather than fall through to it.
     ...(mapboxGl
@@ -490,7 +520,11 @@ interface GeomanChangeAction {
 const MULTILINE_CUT_PATCHED = Symbol("geolibre.multiLineCut");
 
 /**
- * Lets right-click remove a vertex from a MultiLineString. Geoman's change mode
+ * Wraps the Geoman action instances GeoLibre fixes up as Geoman creates them:
+ * the change-mode action's vertex removal and the shape-markers helper's
+ * edge-marker placement.
+ *
+ * Right-click vertex removal on a MultiLineString: Geoman's change mode
  * only implements removal for LineString, Polygon and MultiPolygon, so on a
  * MultiLineString it logs "EditChange.cutVertex: feature not updated" and
  * leaves the vertex (discussion #2750). The change-mode action is created each
@@ -499,14 +533,60 @@ const MULTILINE_CUT_PATCHED = Symbol("geolibre.multiLineCut");
  *
  * @param geoman - The Geoman instance the editor drives.
  */
-function installMultiLineVertexRemoval(geoman: Geoman): void {
+export function installGeomanActionPatches(geoman: Pick<Geoman, "actionInstances">): void {
   const instances = geoman.actionInstances as Record<string, unknown>;
   geoman.actionInstances = new Proxy(instances, {
     set(target, key, value) {
       if (key === "edit__change") patchChangeAction(value);
+      if (key === "helper__shape_markers") patchShapeMarkersHelper(value);
       return Reflect.set(target, key, value);
     },
   }) as Geoman["actionInstances"];
+  // Geoman registers its helpers after construction today; patch one that is
+  // already there in case a release starts doing it inside the constructor.
+  patchShapeMarkersHelper(instances.helper__shape_markers);
+}
+
+/** One end of a Geoman shape segment. */
+interface GeomanSegmentPoint {
+  coordinate: Position;
+  path: (string | number)[];
+}
+
+/** Geoman's shape-markers helper, as far as edge-marker placement goes. */
+interface GeomanShapeMarkersHelper {
+  getSegmentMiddlePosition(segment: {
+    start: GeomanSegmentPoint;
+    end: GeomanSegmentPoint;
+  }): GeomanSegmentPoint;
+}
+
+const EDGE_MIDPOINT_PATCHED = Symbol("geolibre.edgeMidpoint");
+
+/**
+ * Places each edge's "add a vertex" marker at the edge's real midpoint
+ * (#3382). Geoman unprojects the midpoint of the two ends' screen positions,
+ * once, at whatever camera an edit starts with; on a zoomed-out globe that
+ * strews the markers far from their edges, and they stay there. The helper is
+ * registered before it builds any marker, so this runs ahead of the first one.
+ * The path is built the way Geoman builds it: the start's, last index `-1`.
+ *
+ * @param value - The `helper__shape_markers` action instance.
+ */
+function patchShapeMarkersHelper(value: unknown): void {
+  const helper = value as (GeomanShapeMarkersHelper & { [EDGE_MIDPOINT_PATCHED]?: true }) | null;
+  if (
+    !helper ||
+    typeof helper.getSegmentMiddlePosition !== "function" ||
+    helper[EDGE_MIDPOINT_PATCHED]
+  ) {
+    return;
+  }
+  helper[EDGE_MIDPOINT_PATCHED] = true;
+  helper.getSegmentMiddlePosition = (segment) => ({
+    coordinate: mercatorSegmentMidpoint(segment.start.coordinate, segment.end.coordinate),
+    path: [...segment.start.path.slice(0, -1), -1],
+  });
 }
 
 function patchChangeAction(value: unknown): void {
@@ -1069,6 +1149,30 @@ export function getGeometryEditTargetLayerId(): string | null {
   return editTargetLayerId;
 }
 
+/** How a geometry-edit session ended. */
+export interface GeometryEditEnd {
+  /** The layer the session edited. */
+  layerId: string;
+  /** True when the edits were written back to the layer. */
+  saved: boolean;
+}
+
+// Every path that ends a session writes a new record here before notifying
+// listeners: onEditSessionChange in the app API only trusts a record written
+// since its last notification.
+let lastGeometryEditEnd: GeometryEditEnd | null = null;
+
+/**
+ * How the most recent geometry-edit session ended: saved, cancelled, or
+ * abandoned because its layer was removed. Set before session listeners are
+ * notified, so a listener seeing a session end can read it.
+ *
+ * @returns The last session's end, or null before any session has ended.
+ */
+export function getLastGeometryEditEnd(): GeometryEditEnd | null {
+  return lastGeometryEditEnd;
+}
+
 /**
  * Whether the geo editor is in a draw or edit mode that acts on right-click
  * (vertex removal, finishing a draw, the rotate popup). The map's right-click
@@ -1089,20 +1193,32 @@ export function subscribeGeometryEdit(listener: () => void): () => void {
 }
 
 function notifyGeometryEdit(): void {
-  for (const listener of geometryEditListeners) listener();
+  for (const listener of geometryEditListeners) {
+    // Listeners include plugin callbacks (onEditSessionChange). One that throws
+    // must not keep the rest, such as the Layers panel's editing state, from
+    // hearing that a session started or ended.
+    try {
+      listener();
+    } catch (error) {
+      console.error("A geometry edit session listener failed:", error);
+    }
+  }
 }
 
 /**
  * Write the editor's current features back to the target layer. Called only
  * when a session ends with save, so the target's map source is rebuilt once
  * rather than on every edit operation.
+ *
+ * @returns False when there was nothing to write to (no editor, no session, or
+ *   the layer is gone), so the session isn't reported as saved.
  */
-function syncEditTargetToStore(): void {
-  if (!geoEditorControl || !editTargetLayerId) return;
+function syncEditTargetToStore(): boolean {
+  if (!geoEditorControl || !editTargetLayerId) return false;
 
   const store = useAppStore.getState();
   const layer = store.layers.find((l) => l.id === editTargetLayerId);
-  if (!layer) return;
+  if (!layer) return false;
 
   const tagged = cloneFeatureCollection(geoEditorControl.getAllFeatureCollection());
   const edited = reconcileEditedFeatures(
@@ -1130,13 +1246,15 @@ function syncEditTargetToStore(): void {
   // own rather than from `layer.geojson`, so push the edits there too or the map
   // would keep showing the pre-edit geometry.
   writeBackToVectorSource(layer, edited);
+  return true;
 }
 
 /**
  * How features created in a session start out on a data source that needs it:
  * on an ArcGIS feature layer a copy drops the server-assigned object ID (so it
  * saves as a new feature) and a drawn feature gets the service's creation
- * defaults. Other layers keep what the editor produced.
+ * defaults, from the template picked for the session when there is one. Other
+ * layers keep what the editor produced.
  */
 function newFeaturePreparer(
   layer: GeoLibreLayer,
@@ -1144,10 +1262,11 @@ function newFeaturePreparer(
   if (layer.metadata.sourceKind !== ARCGIS_FEATURE_SOURCE_KIND) return undefined;
   const info = layer.metadata.arcgisEditInfo as ArcGISEditInfo | undefined;
   if (!info?.fields?.length) return undefined;
+  const template = editTargetCreationTemplate ?? undefined;
   return (properties, kind) =>
     kind === "copied"
       ? arcGISCopiedFeatureProperties(info, properties)
-      : arcGISNewFeatureProperties(info, properties);
+      : arcGISNewFeatureProperties(info, properties, { template });
 }
 
 /**
@@ -1239,12 +1358,23 @@ function warnUnlessGeomanNotReady(context: string, error: unknown): void {
  *
  * `_app` is accepted for API symmetry with the other plugin entry points but is
  * not used: this function operates through the module-level `appApi`/store.
+ *
+ * `options.creationTemplate` pins the ArcGIS feature template that features
+ * drawn in this session start from (#3179). It applies to the new session
+ * only: a session already open on the layer keeps its own.
  */
 export async function startLayerGeometryEdit(
   _app: GeoLibreAppAPI,
   layerId: string,
+  options: { creationTemplate?: ArcGISCreationTemplateSelection } = {},
 ): Promise<boolean> {
   if (!pluginActive || !geoEditorControl) return false;
+  // A session ended elsewhere (the toolbar's Save or Cancel) may still be
+  // putting the sketches back; starting now would interleave with that.
+  if (pendingSketchesRestore) {
+    await pendingSketchesRestore;
+    if (!pluginActive || !geoEditorControl) return false;
+  }
 
   // Only one session at a time; finish any open one first (saving its work).
   // Await it so its sketches restore completes before the new session starts.
@@ -1272,6 +1402,7 @@ export async function startLayerGeometryEdit(
   // The store layer is left untouched until save, so Cancel simply discards the
   // editor's copy and the original geojson is still in the store.
   editTargetLayerId = layerId;
+  editTargetCreationTemplate = options.creationTemplate ?? null;
   unionSketchesWithStoreOnNextSync = false;
 
   // Hide the target's normal rendering through the store, not via a map-layer
@@ -1318,6 +1449,7 @@ export async function startLayerGeometryEdit(
     editTargetOriginalVisible = null;
     editTargetOriginalProperties = null;
     editTargetOriginalIds = null;
+    editTargetCreationTemplate = null;
     editTargetOriginalGeometries = null;
     editTargetLayerId = null;
     await restoreSketchesAfterSession();
@@ -1378,10 +1510,12 @@ export async function endLayerGeometryEdit(
   // Defensive: if the control was torn down while a session id lingered, clear
   // the session state so the UI does not get stuck in the "editing" state.
   if (!geoEditorControl) {
+    lastGeometryEditEnd = { layerId: editTargetLayerId, saved: false };
     editTargetLayerId = null;
     editTargetOriginalVisible = null;
     editTargetOriginalProperties = null;
     editTargetOriginalIds = null;
+    editTargetCreationTemplate = null;
     editTargetOriginalGeometries = null;
     unionSketchesWithStoreOnNextSync = false;
     notifyGeometryEdit();
@@ -1389,12 +1523,14 @@ export async function endLayerGeometryEdit(
   }
 
   const targetId = editTargetLayerId;
+  let saved = false;
   // Run the write-back in try/finally so a throw (e.g. from the store update)
   // cannot leave the session half-torn-down with the target layer still hidden
   // and the user unable to exit.
   try {
-    if (save) syncEditTargetToStore();
+    if (save) saved = syncEditTargetToStore();
   } finally {
+    lastGeometryEditEnd = { layerId: targetId, saved };
     editTargetLayerId = null;
     unionSketchesWithStoreOnNextSync = false;
     // Restore the target layer's normal rendering (it now reflects the saved
@@ -1404,6 +1540,7 @@ export async function endLayerGeometryEdit(
     // The snapshot only describes the session that just ended.
     editTargetOriginalProperties = null;
     editTargetOriginalIds = null;
+    editTargetCreationTemplate = null;
     editTargetOriginalGeometries = null;
     // Await the sketches restore so a caller switching sessions does not start a
     // new edit while the previous restore is still clearing/loading the editor.
@@ -1425,9 +1562,11 @@ function abortGeometryEditSession(): void {
   );
   // The layer is gone, so there is no visibility to restore; just drop the flag.
   // (restoreSketchesAfterSession exits Geoman edit modes.)
+  if (editTargetLayerId) lastGeometryEditEnd = { layerId: editTargetLayerId, saved: false };
   editTargetOriginalVisible = null;
   editTargetOriginalProperties = null;
   editTargetOriginalIds = null;
+  editTargetCreationTemplate = null;
   editTargetOriginalGeometries = null;
   editTargetLayerId = null;
   unionSketchesWithStoreOnNextSync = false;
@@ -1436,8 +1575,27 @@ function abortGeometryEditSession(): void {
   notifyGeometryEdit();
 }
 
+/**
+ * Clear the editor and reload the sketches stashed at session start, after
+ * any restore already under way.
+ *
+ * @returns Resolves once the sketches are back in the editor.
+ */
+function restoreSketchesAfterSession(): Promise<void> {
+  const restore = pendingSketchesRestore
+    ? pendingSketchesRestore.then(restoreSketchesNow)
+    : restoreSketchesNow();
+  const settled: Promise<void> = restore
+    .catch(() => undefined)
+    .then(() => {
+      if (pendingSketchesRestore === settled) pendingSketchesRestore = null;
+    });
+  pendingSketchesRestore = settled;
+  return restore;
+}
+
 /** Clear the editor and reload the sketches stashed at session start. */
-async function restoreSketchesAfterSession(): Promise<void> {
+async function restoreSketchesNow(): Promise<void> {
   if (!geoEditorControl) {
     savedSketchesCollection = null;
     return;
@@ -1597,6 +1755,10 @@ function isGeoEditorInteractionMode(): boolean {
   const { activeDrawMode, activeEditMode } = geoEditorControl.getState();
   return activeDrawMode !== null || activeEditMode !== null;
 }
+
+// A draw or edit mode's clicks place or pick vertices; Identify must not also
+// open a popup for the layer underneath (GeoLibre#3237).
+registerMapClickClaim(isGeoEditorInteractionMode);
 
 /**
  * The map layers a store GeoJSON layer is drawn with, under both 2D engines'

@@ -19,6 +19,7 @@ import {
 } from "@geolibre/core";
 import type { GeoLibreLayer, LayerGroup } from "@geolibre/core";
 import {
+  isArcGISImageServiceLayer,
   isArcgisSupportedLayer,
   isCesiumSupportedLayerType,
   isMapboxSupportedLayer,
@@ -44,6 +45,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { layerFilteredHintKey } from "../../../lib/layer-filter-hint";
+import { activateLayerPreservingSelection } from "../../../lib/selection-actions";
 import { getLayerRefreshConfig } from "../../../lib/layer-refresh";
 import { notify } from "../../../lib/notify";
 import { LayerSwatchIcon } from "../LayerSwatchIcon";
@@ -143,7 +145,6 @@ export function LayerRow({
   const setLayerOpacity = useAppStore((s) => s.setLayerOpacity);
   const primaryRenderer = useAppStore((s) => s.primaryRenderer);
   const reorderLayer = useAppStore((s) => s.reorderLayer);
-  const selectLayer = useAppStore((s) => s.selectLayer);
   const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
   const { collaboration, mapControllerRef, beginRename, onOpenStylePanel } = menu;
   // When an ancestor group is hidden, a layer whose own visibility
@@ -183,6 +184,8 @@ export function LayerRow({
       // COG layers identify pixel values via the raster control's pixel
       // inspector (see useRasterIdentify), not the vector feature query.
       layer.type === "cog" ||
+      // An ArcGIS ImageServer reports its pixel values through `/identify`.
+      isArcGISImageServiceLayer(layer) ||
       hasNativeIdentifyLayers(layer));
   const identifyActive = identifyLayerId === layer.id;
   // A gesture that takes over map clicks has to turn Identify off, or
@@ -197,7 +200,10 @@ export function LayerRow({
   // the icon's tooltip reflects that distinct action. Time Slider COG
   // and mosaic sources read the same way, at the current timeline
   // date, and mark themselves with `pixelIdentify`.
-  const isPixelIdentify = layer.type === "cog" || layer.metadata.pixelIdentify === true;
+  const isPixelIdentify =
+    layer.type === "cog" ||
+    layer.metadata.pixelIdentify === true ||
+    isArcGISImageServiceLayer(layer);
   // Shared by the button's title and aria-label so they can't diverge.
   const identifyLabel = canIdentify
     ? identifyActive
@@ -382,13 +388,14 @@ export function LayerRow({
             className={`min-w-0 flex-1 truncate rounded text-start text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               groupHidden ? "text-muted-foreground" : ""
             }`}
-            title={
+            // Lead with the full name: the visible label truncates.
+            title={`${layer.name}\n${
               isLayerLocked
                 ? t("collaborate.layerLockedHint")
                 : groupHidden
                   ? `${t("layers.hiddenByGroup")} — ${t("layers.doubleClickToRename")}`
                   : t("layers.doubleClickToRename")
-            }
+            }`}
             onDoubleClick={(e: ReactMouseEvent) => {
               e.stopPropagation();
               if (layerEditable) beginRename(layer);
@@ -617,7 +624,7 @@ export function LayerRow({
             onClick={(e) => {
               e.stopPropagation();
               if (!canIdentify) return;
-              selectLayer(layer.id);
+              activateLayerPreservingSelection(layer.id);
               setIdentifyLayer(identifyActive ? null : layer.id);
             }}
           >
@@ -632,7 +639,7 @@ export function LayerRow({
               aria-label={t("layers.openStylePanel")}
               onClick={(e) => {
                 e.stopPropagation();
-                selectLayer(layer.id);
+                activateLayerPreservingSelection(layer.id);
                 onOpenStylePanel();
               }}
             >

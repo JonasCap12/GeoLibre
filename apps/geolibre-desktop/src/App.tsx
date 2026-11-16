@@ -6,10 +6,12 @@ import { DesktopShell } from "./components/layout/DesktopShell";
 import { ConstructionProgressScreen } from "./components/progress/ConstructionProgressScreen";
 import { NotificationRegion } from "./components/layout/NotificationRegion";
 import { OnboardingDialog } from "./components/layout/OnboardingDialog";
+import { RegionalBasemapPrompt } from "./components/layout/RegionalBasemapPrompt";
 import { UpdateNotificationModal } from "./components/layout/UpdateNotificationModal";
 import { useDesktopSettingsPersistence } from "./hooks/useDesktopSettings";
 import "./lib/s3-signer-setup";
 import { useLayoutOptions } from "./hooks/useLayoutOptions";
+import { useMapCrsUrl } from "./hooks/useMapCrsUrl";
 import { useProjectUrlLoader } from "./hooks/useProjectUrlLoader";
 import { useDataUrlLoader } from "./hooks/useDataUrlLoader";
 import { useStacUrlLoader } from "./hooks/useStacUrlLoader";
@@ -57,7 +59,9 @@ export default function App() {
   useDesktopSettingsPersistence();
   useThemeScheme();
   useRecentProjectsPersistence();
-  const { restoring: restoringStartupProject } = useStartupProject();
+  const { restoring: restoringStartupProject, settled: startupProjectSettled } =
+    useStartupProject();
+  useMapCrsUrl();
   useStyleLibraryPersistence();
   useStartupLayerStyles();
   useLayerLibraryPersistence();
@@ -86,6 +90,7 @@ export default function App() {
             layoutOptions={layoutOptions}
             projectUrlLoadState={projectUrlLoadState}
             dataUrlLoadState={dataUrlLoadState}
+            startupProjectSettled={startupProjectSettled}
             mapAppAPI={mapAppAPI}
             themeMode={themeMode}
             onToggleThemeMode={toggleThemeMode}
@@ -93,6 +98,9 @@ export default function App() {
           />
           <ConstructionProgressScreen camera={mapAppAPI} />
           <OnboardingDialog open={showOnboarding} onClose={dismissOnboarding} />
+          {/* Asks before an opened project's regional basemap (tiles from
+              mainland China) loads; the default basemap shows meanwhile. */}
+          <RegionalBasemapPrompt />
         </>
       )}
       {/* Mounted once, outside the startup-restore branch, so a failure raised

@@ -542,6 +542,48 @@ describe("ArcgisEngine camera moves", () => {
       options: { duration: 30000, easing: "linear" },
     });
   });
+  it("reports arrival before rotating and allows a pause in that callback", async () => {
+    const { engine, goTo } = makeEngine();
+    let arrived = 0;
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true, () => {
+      arrived++;
+      engine.stopStoryCamera();
+    });
+    assert.equal(arrived, 0);
+    await Promise.resolve();
+    assert.equal(arrived, 1);
+    assert.equal(goTo.length, 1, "pause prevents the pending rotation");
+    engine.destroy();
+  });
+  it("continues after camera failures but ignores aborted, stopped, and superseded failures", async (t) => {
+    t.mock.method(console, "warn", () => {});
+    for (const scenario of ["failed", "aborted", "interrupted", "stopped", "superseded"] as const) {
+      const { engine, rawView } = makeEngine();
+      const error = new Error("Camera move failed");
+      if (scenario === "aborted") error.name = "AbortError";
+      if (scenario === "interrupted") error.name = "view:goto-interrupted";
+      rawView.goTo = () => Promise.reject(error);
+      let arrived = 0;
+      engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true, () => arrived++);
+      if (scenario === "stopped") engine.stopStoryCamera();
+      if (scenario === "superseded") engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(arrived, scenario === "failed" ? 1 : 0, scenario);
+      engine.destroy();
+    }
+  });
+  it("cancels a paused or superseded chapter's pending arrival and rotation", async () => {
+    const { engine, goTo } = makeEngine();
+    let arrived = 0;
+    engine.restoreLayerStyles = () => assert.fail("pausing must not restore styles");
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true, () => arrived++);
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo", true, () => arrived++);
+    engine.stopStoryCamera();
+    await Promise.resolve();
+    assert.equal(arrived, 0);
+    assert.equal(goTo.length, 2);
+    engine.destroy();
+  });
   it("marks the settle that ends a story move as scripted", async () => {
     const { engine, fireWatchers, fireViewEvent } = makeEngine();
     const seen: (boolean | undefined)[] = [];
@@ -1220,6 +1262,43 @@ describe("ArcgisEngine layer sync", () => {
       String((engine.getLayerRasterSource("imagery")?.tiles as string[])[0]),
       /ImageServer\/exportImage\?/,
     );
+  });
+  it("draws a raw-LERC image service with ImageryTileLayer", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([
+      {
+        ...geojsonLayer({ id: "wind", name: "wind", geojson: undefined }),
+        type: "arcgis" as const,
+        source: { url: "https://h/rest/services/W/ImageServer" },
+        metadata: { arcgisRawTiles: true },
+      },
+    ]);
+    const native = created.find((layer) => layer.kind === "imagery-tile");
+    assert.ok(native, "an ImageryTileLayer was created");
+    assert.equal(native.props.url, "https://h/rest/services/W/ImageServer");
+    assert.ok(!created.some((layer) => layer.kind === "imagery"));
+    // Its LERC tiles have no plain raster template to hand an export.
+    assert.equal(engine.getLayerRasterSource("wind"), null);
+    assert.equal(native.props.customParameters, undefined);
+  });
+  it("sends a tiled imagery layer's token as a custom request parameter", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([
+      {
+        ...geojsonLayer({ id: "secured", name: "secured", geojson: undefined }),
+        type: "raster" as const,
+        source: {
+          type: "raster",
+          tiles: ["https://h/rest/services/W/ImageServer/tile/{z}/{y}/{x}?token=abc"],
+        },
+        sourcePath: "https://h/rest/services/W/ImageServer",
+        metadata: { sourceKind: "arcgis-image-service", arcgisRawTiles: true },
+      },
+    ]);
+    const native = created.find((layer) => layer.kind === "imagery-tile");
+    assert.ok(native, "an ImageryTileLayer was created");
+    assert.equal(native.props.url, "https://h/rest/services/W/ImageServer");
+    assert.deepEqual(native.props.customParameters, { token: "abc" });
   });
   it("fades a story chapter's layer opacity over the transition", () => {
     const { engine, created } = makeEngine();

@@ -103,8 +103,8 @@ test("a PMTiles asset from a STAC item reaches the map", async ({ page }) => {
   await waitForMap(page);
 
   await page.getByRole("button", { name: "Plugins", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Web Services" }).click();
-  await page.getByRole("menuitem", { name: "STAC Catalogs" }).click();
+  await page.getByRole("menuitem", { name: "Web services" }).click();
+  await page.getByRole("menuitem", { name: "STAC catalogs" }).click();
   await page.getByPlaceholder("https://example.org/stac/").fill(API);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
 
@@ -114,17 +114,13 @@ test("a PMTiles asset from a STAC item reaches the map", async ({ page }) => {
   await collection.dblclick();
   await expect(page.getByText(/Showing \d+ of \d+ items\./)).toBeVisible();
 
-  // The parquet beside the archive is addable too, and being listed first it is the one the
-  // panel preselects, so the archive is chosen explicitly rather than taken as the default.
+  // The parquet beside the archive is addable too, so the archive is chosen by name from the
+  // card's "Assets" menu, which adds it as soon as it is picked.
   const assets = page
-    .locator("select")
-    .filter({ has: page.locator('option[value="pmtiles"]') })
+    .getByRole("combobox")
+    .filter({ hasText: /^Assets/ })
     .first();
-  await assets.selectOption("pmtiles");
-
-  const add = page.getByRole("button", { name: "Add", exact: true }).first();
-  await expect(add).toBeEnabled();
-  await add.click();
+  await assets.selectOption({ label: "PMTiles vector tiles — PMTiles" });
 
   // Named for the item and its asset, and rendering rather than standing in as a placeholder.
   await expect(page.getByText("topo-1 — PMTiles vector tiles")).toBeVisible();

@@ -41,6 +41,7 @@ The same section manages optional **Whitebox language packs**, which translate W
 | **Max pitch** | The maximum tilt angle (0 to 85 degrees). |
 | **Render world copies** | Show repeated copies of the world when zoomed out. |
 | **Celestial body** | The body whose radius drives distance, area, and scale measurements. Pick the one matching your planetary basemap under [Add Data](adding-data.md). |
+| **Map coordinate reference system** | Draws the MapLibre map flat in another CRS: Earth's Arctic or Antarctic polar stereographic or Plate Carrée grid, the Moon's and Mars' polar and simple-cylindrical grids, a simple-cylindrical grid of Mercury, Venus, the Galilean moons, Titan, Pluto or Charon, or **Custom EPSG code…**. Each preset brings a basemap served in that grid (NASA GIBS, USGS Astrogeology). See [the MapLibre renderer](../maplibre-renderer.md#other-coordinate-reference-systems). |
 | **Scale bar units** | Metric (m / km), Imperial (ft / mi), or Nautical (nmi). This also sets the units used by the status bar's **Elev** and **Eye alt** readouts and by the quick-analysis buffer presets. |
 | **Coordinate format** | The notation the status bar reports the pointer coordinate in: decimal degrees, DMS, DDM, UTM, MGRS, USNG, or x/y in a projected CRS. Choosing the projected format shows an **EPSG** field for the CRS code. See [the status bar](interface.md#coordinate-format). |
 
@@ -71,7 +72,7 @@ Panels also auto-hide on small screens for a responsive layout.
 
 ## Geocoding
 
-**Settings → Geocoding** chooses the **Provider** used by Geocode Addresses, address import, and Reverse Geocode. Nominatim is the default and needs no key. For providers that need one, enter an **API key**. You can also override the **Forward endpoint** and **Reverse endpoint**, for example to point at a self-hosted instance, and give Nominatim a **Contact email**. The section notes where keys are stored: in the system keychain when it is available, otherwise in the project file. Keys are sent as query parameters, so they appear in request URLs. See [Data Integrations → Geocoding](data-integrations.md#geocoding) for the provider list.
+**Settings → Geocoding** chooses the **Provider** used by Geocode Addresses, address import, and Reverse Geocode. Nominatim is the default and needs no key. For providers that need one, enter an **API key**. You can also override the **Forward endpoint** and **Reverse endpoint**, for example to point at a self-hosted instance, and give Nominatim a **Contact email**. The section notes where keys are stored: in the system keychain when it is available, otherwise in the project file. Keys are sent as query parameters, so they appear in request URLs. See [Data Integrations → Geocoding](data-integrations.md#geocoding) for the provider list. With **ArcGIS GeocodeServer (organization)** the endpoint fields give way to a list of named **Locators**, each with its service URL, an optional portal for secured services, and a **Check service** button; see [Organization locators](data-integrations.md#organization-locators).
 
 ## AI Providers
 

@@ -93,6 +93,31 @@ export const GITHUB_URL = "https://github.com/opengeos/GeoLibre";
 // out of the box on both the desktop and web builds.
 export const DEFAULT_OSM_PBF_URL = "https://data.source.coop/giswqs/opengeos/LasVegas.osm.pbf";
 
+/**
+ * Sample ArcGIS tile packages for the Add VTPK/TPKX dialog: vector `.vtpk` and
+ * raster `.tpkx` files on Source Cooperative, which serves them with the range
+ * requests and CORS headers the in-browser reader needs. `labelKey` is a
+ * `toolbar.item` i18n key.
+ */
+export const TILE_PACKAGE_SAMPLES = [
+  {
+    labelKey: "toolbar.item.vtpkSampleLeon",
+    url: "https://data.source.coop/gishub/vtpk/leon.vtpk",
+  },
+  {
+    labelKey: "toolbar.item.vtpkSampleWorld",
+    url: "https://data.source.coop/gishub/vtpk/world.vtpk",
+  },
+  {
+    labelKey: "toolbar.item.vtpkSampleSanFrancisco",
+    url: "https://data.source.coop/gishub/vtpk/sanfrancisco.tpkx",
+  },
+  {
+    labelKey: "toolbar.item.vtpkSampleUsa",
+    url: "https://data.source.coop/gishub/vtpk/usa.tpkx",
+  },
+] as const;
+
 // Static command metadata for the menus that map a single id to a label. These
 // drive the command palette so it stays in sync with the menus without each
 // action being defined twice. The `run` closures are built in the component
@@ -106,6 +131,7 @@ export const ADD_DATA_KIND_COMMANDS: Array<{
   { kind: "shared-data", titleKey: "toolbar.item.sharedData" },
   { kind: "gpx", titleKey: "toolbar.layerType.gpx" },
   { kind: "landxml", titleKey: "toolbar.layerType.landxml" },
+  { kind: "indoorgml", titleKey: "toolbar.layerType.indoorgml" },
   { kind: "mbtiles", titleKey: "toolbar.layerType.mbtiles" },
   { kind: "xyz", titleKey: "toolbar.layerType.xyz" },
   { kind: "wms", titleKey: "toolbar.layerType.wms" },
@@ -165,6 +191,7 @@ export const VECTOR_TOOL_COMMANDS: Array<{
   { kind: "difference", titleKey: "toolbar.vectorTool.difference" },
   { kind: "union", titleKey: "toolbar.vectorTool.union" },
   { kind: "spatial-join", titleKey: "toolbar.vectorTool.spatialJoin" },
+  { kind: "summarize-within", titleKey: "toolbar.vectorTool.summarizeWithin" },
   { kind: "attribute-join", titleKey: "toolbar.vectorTool.attributeJoin" },
   { kind: "select-by-value", titleKey: "toolbar.vectorTool.selectByValue" },
   {
@@ -186,6 +213,21 @@ export const VECTOR_TOOL_COMMANDS: Array<{
   { kind: "dggs-bin", titleKey: "toolbar.vectorTool.dggsBinning" },
   { kind: "dggs-compact", titleKey: "toolbar.vectorTool.dggsCompact" },
 ];
+
+/**
+ * Tool ids in the registry's Join group. Kept static so this table doesn't pull
+ * in the tool registry; tests/toolbar-commands.test.ts checks it still matches.
+ */
+const VECTOR_JOIN_KINDS: ReadonlySet<VectorToolKind> = new Set<VectorToolKind>([
+  "spatial-join",
+  "summarize-within",
+  "attribute-join",
+]);
+
+/** The Processing menu's Join group, in command-list order. */
+export const VECTOR_JOIN_TOOL_COMMANDS = VECTOR_TOOL_COMMANDS.filter(({ kind }) =>
+  VECTOR_JOIN_KINDS.has(kind),
+);
 
 export const RASTER_TOOL_COMMANDS: Array<{
   kind: RasterToolKind;

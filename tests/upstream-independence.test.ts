@@ -65,8 +65,10 @@ const DOCUMENTATION_LINKS = new Set([
   // The command palette's search keywords, which name the home page without
   // fetching it. Upstream moved them out of TopToolbar.tsx into this file.
   "apps/geolibre-desktop/src/components/layout/toolbar/toolbar-commands.ts",
-  "apps/geolibre-desktop/src/components/processing/model-builder/ModelBuilderPanel.tsx",
   "apps/geolibre-desktop/src/lib/geolens-fetch.ts",
+  // The model graph's `$schema` identifier, never fetched. Upstream moved it
+  // out of ModelBuilderPanel.tsx into this file in v3.8.
+  "apps/geolibre-desktop/src/lib/model-file.ts",
   "apps/geolibre-desktop/src/lib/updates.ts",
 ]);
 

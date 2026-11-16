@@ -40,6 +40,7 @@ import {
   type MapRenderSurface,
 } from "./map-engine";
 import {
+  ARCGIS_BASE_FIELD,
   ARCGIS_HEIGHT_FIELD,
   ARCGIS_ID_FIELD,
   ARCGIS_LABEL_CLASS_FIELD,
@@ -285,6 +286,7 @@ const ARCGIS_GEOJSON_FIELDS = [
   { name: ARCGIS_LABEL_FIELD, type: "string", length: 4000 },
   { name: ARCGIS_LABEL_CLASS_FIELD, type: "string", length: 16 },
   { name: ARCGIS_HEIGHT_FIELD, type: "double" },
+  { name: ARCGIS_BASE_FIELD, type: "double" },
   { name: ARCGIS_WEIGHT_FIELD, type: "double" },
 ];
 
@@ -1121,10 +1123,14 @@ export class ArcgisEngine implements MapEngine {
     location: StoryChapterLocation,
     animation: StoryChapterAnimation = "flyTo",
     rotate = false,
+    onArrive?: () => void,
   ): void {
     this.stopCamera();
     const view = this.view;
-    if (!view) return;
+    if (!view) {
+      onArrive?.();
+      return;
+    }
     this.markStoryMove();
     const token = this.storyCameraToken;
     void view
@@ -1139,9 +1145,19 @@ export class ArcgisEngine implements MapEngine {
       .then(() => {
         // A later chapter (or any camera stop) superseded this move while it
         // flew; its rotation would otherwise orbit the wrong chapter.
+        if (!this.view || token !== this.storyCameraToken) return;
+        onArrive?.();
         if (rotate && this.view && token === this.storyCameraToken) this.rotate();
       })
-      .catch(reportGoToFailure);
+      .catch((error: unknown) => {
+        reportGoToFailure(error);
+        if (
+          this.view &&
+          token === this.storyCameraToken &&
+          !isAbortError(error as Parameters<typeof isAbortError>[0])
+        )
+          onArrive?.();
+      });
   }
   /**
    * One half turn at MapLibre's story pace (180° over 30 s), as the MapLibre
@@ -1710,6 +1726,17 @@ export class ArcgisEngine implements MapEngine {
         return [new layers.MapImageLayer({ ...common, url: plan.url })];
       case "imagery":
         return [new layers.ImageryLayer({ ...common, url: plan.url })];
+      case "imagery-tile":
+        return [
+          new layers.ImageryTileLayer({
+            ...common,
+            url: plan.url,
+            // ImageryTileLayer has no `apiKey` (SDK 5.1 omits APIKeyMixin);
+            // custom parameters ride on every request it makes, the raster
+            // tile fetches included.
+            ...(plan.token ? { customParameters: { token: plan.token } } : {}),
+          }),
+        ];
       case "media-image": {
         // The four corners are an arbitrary quad (the georeferencer fits an
         // affine transform), which only a control-point georeference can
@@ -2776,6 +2803,9 @@ export class ArcgisEngine implements MapEngine {
     };
   }
   stopCamera(): void {
+    this.stopStoryCamera();
+  }
+  stopStoryCamera(): void {
     this.storyCameraToken++;
     // Stopping the animation settles an in-flight goTo where it is.
     (this.view?.animation as { stop?: () => void } | null | undefined)?.stop?.();

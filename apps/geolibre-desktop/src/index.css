@@ -156,34 +156,43 @@ html:lang(fa) {
   --geolibre-primary: hsl(var(--primary));
 }
 
-.maplibregl-map .maplibregl-ctrl {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl, .mapboxgl-ctrl) {
   font-family: var(--font-sans);
 }
 
-.maplibregl-map .maplibregl-ctrl-group {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group) {
   background: hsl(var(--popover));
   border-radius: var(--radius);
   color: hsl(var(--popover-foreground));
 }
 
-.maplibregl-map .maplibregl-ctrl-group:not(:empty) {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group):not(:empty) {
   box-shadow:
     0 0 0 1px hsl(var(--border)),
     var(--shadow-sm);
 }
 
-.maplibregl-map .maplibregl-ctrl-group button {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group) button {
   color: hsl(var(--popover-foreground));
 }
 
-.maplibregl-map .maplibregl-ctrl-group button + button {
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group)
+  button
+  + button {
   border-top-color: hsl(var(--border));
 }
 
-.maplibregl-map
-  .maplibregl-ctrl-group
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group)
   button:where(
     .maplibregl-ctrl-zoom-in,
+    .mapboxgl-ctrl-zoom-in,
+    .mapboxgl-ctrl-zoom-out,
+    .mapboxgl-ctrl-compass,
+    .mapboxgl-ctrl-fullscreen,
+    .mapboxgl-ctrl-shrink,
+    .mapboxgl-ctrl-geolocate,
     .maplibregl-ctrl-zoom-out,
     .maplibregl-ctrl-compass,
     .maplibregl-ctrl-fullscreen,
@@ -199,61 +208,96 @@ html:lang(fa) {
   background-color: hsl(var(--accent));
 }
 
-.maplibregl-map .maplibregl-ctrl-group button:focus-visible,
-.maplibregl-map .maplibregl-ctrl-attrib-button:focus-visible {
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group)
+  button:focus-visible,
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-attrib-button, .mapboxgl-ctrl-attrib-button):focus-visible {
   outline: 2px solid hsl(var(--ring));
   outline-offset: -2px;
 }
 
-.maplibregl-map .maplibregl-ctrl-group button:disabled {
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group)
+  button:disabled {
   cursor: not-allowed;
 }
 
 /* Native icons are SVG background images, not currentColor. Invert neutral
    icons only; preserve enabled/colored status icons. Never filter map content. */
-.dark .maplibregl-map .maplibregl-ctrl-icon {
+.dark :is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-icon, .mapboxgl-ctrl-icon) {
   filter: invert(1);
 }
 
 .dark
-  .maplibregl-map
+  :is(.maplibregl-map, .mapboxgl-map)
   :is(.maplibregl-ctrl-globe-enabled, .maplibregl-ctrl-terrain-enabled)
   .maplibregl-ctrl-icon,
 .dark
-  .maplibregl-map
+  :is(.maplibregl-map, .mapboxgl-map)
   .maplibregl-ctrl-geolocate:is(
     .maplibregl-ctrl-geolocate-active,
     .maplibregl-ctrl-geolocate-active-error,
     .maplibregl-ctrl-geolocate-background,
     .maplibregl-ctrl-geolocate-background-error
   )
-  .maplibregl-ctrl-icon {
+  .maplibregl-ctrl-icon,
+.dark
+  .mapboxgl-map
+  .mapboxgl-ctrl-geolocate:is(
+    .mapboxgl-ctrl-geolocate-active,
+    .mapboxgl-ctrl-geolocate-active-error,
+    .mapboxgl-ctrl-geolocate-background,
+    .mapboxgl-ctrl-geolocate-background-error
+  )
+  .mapboxgl-ctrl-icon {
   filter: none;
 }
 
-.maplibregl-map .maplibregl-ctrl:is(.maplibregl-ctrl-scale, .maplibregl-ctrl-attrib) {
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl, .mapboxgl-ctrl):is(
+    .maplibregl-ctrl-scale,
+    .mapboxgl-ctrl-scale,
+    .maplibregl-ctrl-attrib,
+    .mapboxgl-ctrl-attrib
+  ) {
   background: hsl(var(--popover) / 0.95);
   color: hsl(var(--popover-foreground));
 }
 
-.maplibregl-map .maplibregl-ctrl-scale {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-scale, .mapboxgl-ctrl-scale) {
   border-color: hsl(var(--popover-foreground));
 }
 
-.maplibregl-map .maplibregl-ctrl-attrib a {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-attrib, .mapboxgl-ctrl-attrib) a {
   color: hsl(var(--muted-foreground));
 }
 
-.maplibregl-map .maplibregl-ctrl-attrib a:hover {
+:is(.maplibregl-map, .mapboxgl-map) :is(.maplibregl-ctrl-attrib, .mapboxgl-ctrl-attrib) a:hover {
   color: hsl(var(--popover-foreground));
 }
 
-.maplibregl-map .maplibregl-ctrl-attrib-button {
+:is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-attrib-button, .mapboxgl-ctrl-attrib-button) {
   background-color: transparent;
 }
 
-.dark .maplibregl-map .maplibregl-ctrl-attrib-button {
+.dark
+  :is(.maplibregl-map, .mapboxgl-map)
+  :is(.maplibregl-ctrl-attrib-button, .mapboxgl-ctrl-attrib-button) {
   filter: invert(1);
+}
+
+/* mapbox-gl's `.mapboxgl-ctrl button:hover` paints #eee behind every button in a
+   control, including the shared controls' unclassed toggles and their panels,
+   whose icons are light in dark mode. This outranks it, and any other hover
+   color a control sets below (0,4,1), which that #eee was already overriding.
+   The attribution button is inverted, which already turns #eee dark. */
+:where(.dark)
+  .mapboxgl-map
+  .mapboxgl-ctrl
+  button:not(:disabled, .mapboxgl-ctrl-attrib-button):hover {
+  background-color: hsl(var(--accent));
 }
 
 /* Shared popup frame covers native Inspect/NLDI popups too. Content-specific
@@ -1905,7 +1949,7 @@ body,
    globally. mapbox-gl's popup has no such lift, so with effects on it opens
    underneath the canvas: visible through nothing and unclickable. Match the
    MapLibre value so the two engines stack popups the same way. `!important`
-   as upstream's: mapbox-gl.css is loaded by a dynamic import after this
+   as upstream's: mapbox-gl.css is loaded from Mapbox's CDN after this
    sheet, so a same-specificity rule there would otherwise win. */
 .mapboxgl-popup {
   z-index: 10 !important;
@@ -4203,6 +4247,15 @@ html
   border-color: hsl(var(--border));
 }
 
+/* These cards ship with light backgrounds; without a dark surface their
+   (already lightened) text is unreadable. */
+.dark .pc-stats-card,
+.dark .pc-legend-card,
+.dark .pc-tilejson-card,
+.dark .pc-inspector-panel {
+  background: hsl(var(--muted));
+}
+
 .dark .pc-collection-item:hover,
 .dark .pc-result-item:hover {
   background: hsl(var(--accent));
@@ -5127,12 +5180,15 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
  * The shell is `flex flex-col`: its direct children are the toolbar, the
  * workspace row (Layers + map + Style), the attribute table, and the status bar.
  * Hide all of them except the row, then within the row hide everything except
- * the `<main>` map landmark, which flexes to fill. */
+ * the map column, and within the column everything except the `<main>` map
+ * landmark, which flexes to fill. The column also holds the bottom panels when
+ * they sit under the map (#3157). */
 [data-map-fullscreen] > *:not([data-workspace-row]) {
   display: none !important;
 }
 
-[data-map-fullscreen] [data-workspace-row] > *:not(main) {
+[data-map-fullscreen] [data-workspace-row] > *:not([data-map-column]),
+[data-map-fullscreen] [data-map-column] > *:not(main) {
   display: none !important;
 }
 
@@ -5860,6 +5916,92 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
 .geolibre-legend-panel.maplibregl-ctrl input::placeholder,
 .geolibre-legend-panel.maplibregl-ctrl textarea::placeholder {
   color: hsl(var(--muted-foreground)) !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * On-map floor picker (FloorPickerPanel). Theme-aware like the legend panel.
+ * Every button rule is scoped under `.geolibre-floor-picker.maplibregl-ctrl`
+ * and repeated for `:hover`, because MapLibre's
+ * `.maplibregl-ctrl button:not(:disabled):hover { background: rgba(0,0,0,.05) }`
+ * outranks Tailwind utilities and would replace the chosen floor's fill on
+ * hover, leaving its label unreadable.
+ * ------------------------------------------------------------------------- */
+.geolibre-floor-picker .geolibre-floor-picker-panel {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+}
+
+.geolibre-floor-picker .geolibre-floor-picker-header {
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.geolibre-floor-picker.maplibregl-ctrl button {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+}
+
+.geolibre-floor-picker.maplibregl-ctrl .geolibre-floor-picker-level,
+.geolibre-floor-picker.maplibregl-ctrl .geolibre-floor-picker-below {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.geolibre-floor-picker.maplibregl-ctrl button:not(:disabled):hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+/* A floor drawn because "+ below" is on. */
+.geolibre-floor-picker.maplibregl-ctrl button[data-shown="true"],
+.geolibre-floor-picker.maplibregl-ctrl button[data-shown="true"]:not(:disabled):hover {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+/* The chosen floor (or All): keeps its fill and label while hovered. */
+.geolibre-floor-picker.maplibregl-ctrl button[data-active="true"],
+.geolibre-floor-picker.maplibregl-ctrl button[data-active="true"]:not(:disabled):hover {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+/* The grip under the floor list: drag (or arrow keys) to resize the list. */
+.geolibre-floor-picker .geolibre-floor-picker-grip {
+  display: flex;
+  height: 8px;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid hsl(var(--border));
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.geolibre-floor-picker .geolibre-floor-picker-grip > span {
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background-color: hsl(var(--muted-foreground) / 0.6);
+}
+
+.geolibre-floor-picker .geolibre-floor-picker-grip:hover > span,
+.geolibre-floor-picker .geolibre-floor-picker-grip:focus-visible > span {
+  background-color: hsl(var(--foreground));
+}
+
+.geolibre-floor-picker .geolibre-floor-picker-grip:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
+/* "+ below" switched on: foreground text on the muted fill (readable in every
+   accent theme; primary-colored text is not, e.g. amber or emerald), marked by
+   a primary bar on the leading edge so the on state still reads at a glance. */
+.geolibre-floor-picker.maplibregl-ctrl .geolibre-floor-picker-below[data-on="true"],
+.geolibre-floor-picker.maplibregl-ctrl
+  .geolibre-floor-picker-below[data-on="true"]:not(:disabled):hover {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  border-inline-start: 3px solid hsl(var(--primary));
 }
 
 /* ---------------------------------------------------------------------------

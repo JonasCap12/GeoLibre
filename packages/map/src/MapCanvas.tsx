@@ -12,6 +12,7 @@ import {
   IDENTIFY_ALL_LAYERS_ID,
   identifyAllIncludes,
   isDuckDBQueryLayer,
+  isMapClickClaimed,
   isPopupClickEnabled,
   isPopupHoverEnabled,
   NETCDF_IMAGE_SOURCE_KIND,
@@ -35,9 +36,12 @@ import { isGlobeControlToggleClick } from "./globe-control-toggle";
 import { createGlobalIdentifyHitDeduper } from "./identify-all";
 import {
   duckDBBridge,
-  fetchWmsIdentifyProperties,
+  fetchServiceIdentifyProperties,
   isAbortError,
+  isBridgedRasterIdentifyLayer,
   isPixelIdentifyLayer,
+  isArcGISImageServiceLayer,
+  isServiceIdentifyLayer,
   isWmsLayer,
   isWmsQueryable,
   pixelIdentifyProperties,
@@ -73,6 +77,12 @@ import { type MapDiagnosticEvent, summarizeDiagnosticTile } from "./map-diagnost
 import "maplibre-gl/dist/maplibre-gl.css";
 import "maplibre-gl-layer-control/style.css";
 import "./layer-control-overrides.css";
+
+/** Reads a pixel layer's identify rows at a clicked `[lng, lat]`; null is a miss. */
+type IdentifyPixelReader = (
+  lngLat: [number, number],
+  options: { signal: AbortSignal },
+) => Promise<Record<string, unknown> | null>;
 
 export interface MapCanvasProps {
   controllerRef?: React.MutableRefObject<MapEngine | null>;
@@ -588,7 +598,9 @@ export const MapCanvas = memo(function MapCanvas({
       setMapLibreIdentifyCursor(map, true);
       let globalIdentifyAbortController: AbortController | null = null;
       const handleIdentifyAllClick = (event: maplibregl.MapMouseEvent) => {
-        if (featureSelectionActive.current) return;
+        // A selection gesture, or a tool drawing on the map (Measure, the Geo
+        // Editor), owns the click: it is a vertex, not a pick.
+        if (featureSelectionActive.current || isMapClickClaimed()) return;
 
         globalIdentifyAbortController?.abort();
         const abortController = new AbortController();
@@ -718,7 +730,9 @@ export const MapCanvas = memo(function MapCanvas({
         const asyncLayers = eligibleLayers.filter(
           (candidate) =>
             (isWmsLayer(candidate) && isWmsQueryable(candidate)) ||
+            isArcGISImageServiceLayer(candidate) ||
             isPixelIdentifyLayer(candidate) ||
+            isBridgedRasterIdentifyLayer(candidate) ||
             candidate.type === "cog" ||
             candidate.metadata.sourceKind === NETCDF_IMAGE_SOURCE_KIND,
         );
@@ -741,12 +755,13 @@ export const MapCanvas = memo(function MapCanvas({
         void Promise.all(
           asyncLayers.map(async (candidate): Promise<GlobalIdentifyHit | null> => {
             try {
-              if (isWmsLayer(candidate)) {
-                const result = await fetchWmsIdentifyProperties(
+              if (isServiceIdentifyLayer(candidate)) {
+                const result = await fetchServiceIdentifyProperties(
                   candidate,
                   [event.lngLat.lng, event.lngLat.lat],
                   map.getZoom(),
                   abortController.signal,
+                  { labels: identifyAllLabels },
                 );
                 if (
                   !result ||
@@ -758,6 +773,9 @@ export const MapCanvas = memo(function MapCanvas({
                   layer: candidate,
                   properties: result.properties,
                   featureId: result.featureId == null ? null : String(result.featureId),
+                  ...(isArcGISImageServiceLayer(candidate)
+                    ? { title: identifyAllLabels.pixel }
+                    : {}),
                 };
               }
 
@@ -879,8 +897,8 @@ export const MapCanvas = memo(function MapCanvas({
     };
 
     const handleIdentifyClick = (event: maplibregl.MapMouseEvent) => {
-      // A selection gesture owns the map clicks while it runs.
-      if (featureSelectionActive.current) return;
+      // A selection gesture or a drawing map tool owns the clicks while it runs.
+      if (featureSelectionActive.current || isMapClickClaimed()) return;
       const clearIdentifyResult = () => {
         wmsIdentifyAbortController?.abort();
         wmsIdentifyAbortController = null;
@@ -924,9 +942,22 @@ export const MapCanvas = memo(function MapCanvas({
         popup.once("close", onClose);
       };
 
-      if (isPixelIdentifyLayer(layer)) {
-        const identifyPixelAt = timeSliderBridge()?.identifyPixelAt;
-        if (!identifyPixelAt) {
+      const bridgedRaster = isBridgedRasterIdentifyLayer(layer);
+      if (isPixelIdentifyLayer(layer) || bridgedRaster) {
+        // Two readers share this flow. The Time Slider bridge reads its own
+        // COG/mosaic sources; any other pixel layer (a Planetary Computer
+        // layer) is read by the application's raster bridge.
+        const timeSliderRead = bridgedRaster ? undefined : timeSliderBridge()?.identifyPixelAt;
+        const readProperties: IdentifyPixelReader | undefined = bridgedRaster
+          ? identifyRasterLayerAt &&
+            (async (lngLat, options) =>
+              (await identifyRasterLayerAt(layer, lngLat, options))?.properties ?? null)
+          : timeSliderRead &&
+            (async (lngLat, options) => {
+              const result = await timeSliderRead(layer.id, lngLat, options);
+              return result ? pixelIdentifyProperties(result) : null;
+            });
+        if (!readProperties) {
           clearIdentifyResult();
           return;
         }
@@ -950,18 +981,22 @@ export const MapCanvas = memo(function MapCanvas({
         };
         loadingPopup!.once("close", onLoadingClose);
 
-        void identifyPixelAt(layer.id, [event.lngLat.lng, event.lngLat.lat], {
+        void readProperties([event.lngLat.lng, event.lngLat.lat], {
           signal: abortController.signal,
         })
-          .then((result) => {
+          .then((properties) => {
             if (userDismissed || abortController.signal.aborted) return;
             pixelIdentifyAbortController = null;
             loadingPopup?.off("close", onLoadingClose);
             // A null result means the click landed off the image grid, which is
             // an ordinary miss rather than a failure.
             showIdentifyPopup(
-              result
-                ? createIdentifyPopupElement(layer.name, pixelIdentifyProperties(result))
+              properties
+                ? createIdentifyPopupElement(layer.name, properties, undefined, {
+                    popup: layer.popup,
+                    fieldVisibility: layer.fieldVisibility,
+                    zoom: map.getZoom(),
+                  })
                 : createIdentifyMessagePopupElement(layer.name, identifyAllLabels.noData),
             );
           })
@@ -986,7 +1021,7 @@ export const MapCanvas = memo(function MapCanvas({
         return;
       }
 
-      if (isWmsLayer(layer)) {
+      if (isServiceIdentifyLayer(layer)) {
         wmsIdentifyAbortController?.abort();
         const abortController = new AbortController();
         wmsIdentifyAbortController = abortController;
@@ -1010,11 +1045,12 @@ export const MapCanvas = memo(function MapCanvas({
         // showIdentifyPopup just assigned identifyPopup.current, so it is set.
         loadingPopup!.once("close", onLoadingClose);
 
-        void fetchWmsIdentifyProperties(
+        void fetchServiceIdentifyProperties(
           layer,
           [event.lngLat.lng, event.lngLat.lat],
           map.getZoom(),
           abortController.signal,
+          { labels: identifyAllLabels },
         )
           .then((result) => {
             if (userDismissed || abortController.signal.aborted) return;
@@ -1149,8 +1185,13 @@ export const MapCanvas = memo(function MapCanvas({
     const handleClick = (event: maplibregl.MapLayerMouseEvent) => {
       // The Identify tool already renders the photo in its own popup; skip ours
       // so one click never opens two popups. Likewise while a selection gesture
-      // is drawing, where a click is a vertex rather than a pick.
-      if (useAppStore.getState().identifyLayerId || featureSelectionActive.current) return;
+      // or a map tool is drawing, where a click is a vertex rather than a pick.
+      if (
+        useAppStore.getState().identifyLayerId ||
+        featureSelectionActive.current ||
+        isMapClickClaimed()
+      )
+        return;
       const feature = event.features?.[0];
       if (!feature) return;
       // Anchor to the feature's own coordinate rather than the click point, so

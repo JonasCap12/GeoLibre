@@ -123,6 +123,10 @@ unit for you, offering only the measures that fit the layer's geometry. Lengths
 take `meters` (the default), `kilometers`, `miles`, `feet`, `yards`, or
 `nautical-miles`; areas take `square-meters` (the default),
 `square-kilometers`, `square-miles`, `hectares`, `acres`, or `square-feet`.
+They are geodesic measures on the WGS 84 ellipsoid, or on the project's
+ellipsoid when it describes another body. A polygon is measured as the smaller
+of the two areas its ring bounds, so one covering more than half the globe gets
+the area outside it.
 
 ```text
 round($area("square-kilometers"), 2)
@@ -186,13 +190,14 @@ form. Set it up in the layer's **Style** panel under **Attributes Form**, with
 
 | Setting | Effect |
 | --- | --- |
-| **Edit widget** | **Text**, **Number**, **Range**, **Checkbox**, **Date**, or **Value map** (a dropdown). |
+| **Edit widget** | **Text**, **Number**, **Range**, **Checkbox**, **Date**, **Value map** (a dropdown), or **Photo** (a picture stored in the field, in Field Collection). |
 | **Alias** | A friendlier label for the field in forms. |
 | **Required** | The field must have a value. |
 | **Value map entries** | One per line, as `value` or `value=Label`. |
 | **Min**, **Max**, **Step** | Bounds for Number and Range widgets (Step for Range). |
 | **Constraint expression** / **Constraint description** | A MapLibre expression the value must satisfy, and the message shown when it does not. |
 | **Visibility expression** | Show the field only when the expression is true. |
+| **Default value** | Fills the field when a new feature is captured in Field Collection. See [Default values](field-collection.md#default-values). |
 
 When you edit the table, value-map fields become dropdowns, checkbox fields
 become checkboxes, and number, range, and date fields get typed inputs. A cell

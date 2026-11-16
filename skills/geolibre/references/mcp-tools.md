@@ -19,11 +19,12 @@ Pick by what the data **is**:
 | A big remote FlatGeobuf / GeoParquet / GeoJSON | `add_vector_layer` | Read in place, not copied. No attribute table in the file. |
 | A Cloud Optimized GeoTIFF / COG | `add_raster_layer` | `bands`, `colormap`, `rescale`. |
 | An XYZ raster tile template (`{z}/{x}/{y}.png`) | `add_tile_layer` | Basemaps like OSM go here, not `set_basemap`. |
+| Satellite or aerial imagery with no URL in hand (Sentinel-2, Landsat, NAIP, a DEM) | `add_planetary_computer_layer` | Microsoft Planetary Computer by collection id: one STAC `item`, or a `datetime` mosaic. No credentials. MapLibre renderer. |
 | A PMTiles archive, or a vector tile service | `add_tiles_layer` | `kind="pmtiles"` (with `tile_type`) or `kind="vector-tiles"`. |
 | A WMS or WMTS endpoint | `add_ogc_layer` | `service="wms"` or `"wmts"`. |
 | A LAS/LAZ/COPC/EPT point cloud | `add_lidar_layer` | COPC and EPT stream by level of detail; the app's Point Cloud Annotation plugin can label it. |
 | An ICESat-2 (ATL06, ATL08) or GEDI (L2A, L2B, L4A) `.h5` granule | `add_spaceborne_lidar_layer` | Local file in the workspace; needs `geolibre[spaceborne]`. `bbox` for a regional subset of a GEDI orbit. |
-| An OGC 3D Tiles tileset | `add_3d_tiles_layer` | `altitude_offset` to sit it on the ground; `ion_asset_id` instead of `url` for a Cesium Ion tileset. |
+| An OGC 3D Tiles tileset or an ArcGIS I3S scene layer | `add_3d_tiles_layer` | `altitude_offset` to sit it on the ground; `ion_asset_id` instead of `url` for a Cesium Ion tileset; a `.../SceneServer/layers/<n>` URL is added as a scene layer. |
 | A Cesium Ion asset (tileset or imagery) | `add_cesium_ion_layer` | 3D globe only: pair it with `set_renderer` / `primaryRenderer: "cesium"`. `kind="imagery"` for imagery. |
 | A CZML (Cesium Language) dynamic scene: orbits, tracks, moving models | `add_czml_layer` | 3D globe only: `url` for a `.czml` document, or `data` for its packet array inline. The globe follows the document's `clock`. |
 | Native KML/KMZ with document styling | `add_cesium_kml_layer` | 3D globe only. Supply `url`, inline XML in `data`, or a KMZ data URL. Package local icons and overlays in KMZ for sharing. |
@@ -81,6 +82,10 @@ add_vector_layer(path, name, url, render_mode="geojson", data_format=None,
 add_raster_layer(path, name, url, bands=None, colormap=None, rescale=None,
                  style=None, index=None)
 add_tile_layer(path, name, url, tile_size=256, attribution=None, index=None)
+add_planetary_computer_layer(path, collection, item=None, name=None, datetime=None,
+                             bbox=None, preset=None, assets=None, expression=None,
+                             rescale=None, colormap=None, max_cloud_cover=None,
+                             index=None)
 add_ogc_layer(path, name, service, endpoint, layers=None, styles="",
               image_format="image/png", transparent=True, tile_size=256,
               version="1.1.1", crs=None, bounds=None, index=None)
@@ -105,6 +110,19 @@ add_cesium_kml_layer(path, name, url=None, data=None, index=None)
   RGB), and `rescale` is a list of `[min, max]` pairs, one per band
   (`[[0, 3000]]`). The COG URL must be publicly readable **and CORS-enabled** —
   the browser fetches the tiles directly.
+- `add_planetary_computer_layer`: with `item` it draws that one STAC item;
+  without it, a mosaic of every item matching `datetime` (`"start/end"`) and
+  `max_cloud_cover`, e.g. a low-cloud Sentinel-2 summer composite
+  (`collection="sentinel-2-l2a", datetime="2024-06-01/2024-08-31",
+  max_cloud_cover=10`). Style it with a `preset` (sentinel-2-l2a: `true-color`,
+  `false-color`, `ndvi`, `ndwi`, `nbr`, `ndbi`, `swir`; landsat-c2-l2:
+  `true-color`, `false-color`, `ndvi`, `ndwi`, `nbr`, `thermal`; naip: `rgb`,
+  `cir`, `ndvi`; cop-dem-glo-30 / cop-dem-glo-90: `elevation`, `hillshade`), or
+  with `assets` / `expression` plus `rescale=[min, max]` and `colormap`. With
+  none of them the collection's default preset applies. The layer stores no
+  tile URL: GeoLibre's Planetary Computer panel builds it when the project
+  opens (MapLibre renderer only), lists it in its Layers tab, and can restyle
+  it. Give a mosaic a `bbox` so zoom-to-layer has an extent.
 - `add_ogc_layer`: `layers` is required when `service="wms"`. `version` defaults
   to `1.1.1`; pass what the server advertises when it differs. For
   `service="wmts"`, `endpoint` is a full tile URL template. `bounds` is the
@@ -142,6 +160,7 @@ classify_layer(path, layer, column, class_count=5, colormap="viridis",
                scheme="equal-interval")
 list_layer_properties(path, layer)
 set_layer_filter(path, layer, expression=None)
+set_floor_picker(path, layer, field="level", level=None, mode=None)
 set_labels(path, layer, field=None, expression=None, enabled=None,
            placement=None, size=None, color=None, halo_color=None,
            halo_width=None, min_zoom=None, max_zoom=None,
@@ -152,9 +171,10 @@ set_labels(path, layer, field=None, expression=None, enabled=None,
 
 `style_layer` merges keys into the layer's existing style rather than replacing
 it. Common keys: `fillColor`, `fillOpacity`, `strokeColor`, `strokeWidth`,
-`circleRadius`, `minZoom`, `maxZoom`, and for rasters `rasterBrightnessMin` /
-`rasterBrightnessMax` / `rasterSaturation` / `rasterContrast` /
-`rasterHueRotate`. Colors are CSS strings (`"#3b82f6"`).
+`strokeOpacity`, `strokeDash`, `strokeBlur`, `circleRadius`, `minZoom`,
+`maxZoom`, and for rasters `rasterBrightnessMin` / `rasterBrightnessMax` /
+`rasterSaturation` / `rasterContrast` / `rasterHueRotate`. Colors are CSS
+strings (`"#3b82f6"`).
 
 `set_layer_popup` chooses what a click (and, with `tooltip`, a hover) shows.
 Without it a layer shows its name plus every visible property. Each `fields`
@@ -190,6 +210,11 @@ writes: `[">=", ["get", "pop"], 100000]`, or several combined with `all` /
 `any`. The data is untouched. Omit `expression` to clear it. An expression that
 is not true/false (`["get", "pop"]`) is refused, because the app would drop it
 on load.
+
+`set_floor_picker` links an indoor layer (rooms with a `level` or `ordinal`
+field) to the app's on-map floor picker. `level` picks the floor shown (`"0"`,
+`-1`; omit it to keep the floor in view, `mode="all"` for every floor) and `mode="below"` keeps the floors under it, for
+a cutaway of a stacked extrusion. The floor is shared by every linked layer.
 
 `set_labels` labels features from a property (`field`) or a text `expression`
 (`["concat", ["get", "name"], " (", ["get", "pop"], ")"]`). Settings you omit
@@ -354,26 +379,50 @@ project file.
 ```text
 live_status()
 live_list_layers()
-live_fly_to(lng=None, lat=None, zoom=None)
+live_get_layer(layer_id)
+live_get_view()
+live_set_view(lng, lat, zoom=None, bearing=None, pitch=None)
+live_fly_to(lng=None, lat=None, zoom=None, bearing=None, pitch=None, duration=None)
 live_fit_bounds(bounds)
 live_zoom_to_layer(layer_id)
 live_set_basemap(basemap)
 live_add_geojson(data, name="GeoJSON", style=None)
+live_add_marker(lng, lat, name="Marker", properties=None, style=None)
+live_add_markers(points, name="Markers", style=None)
+live_get_layer_features(layer_id)
+live_get_selected_features()
+live_get_drawn_features()
+live_identify(lng, lat, layer_id=None)
+live_set_identify(layer_id=None)
+live_get_identify()
+live_set_control_visible(control, visible=True, options=None)
 live_set_visibility(layer_id, visible)
 live_set_opacity(layer_id, opacity)
 live_set_style(layer_id, style)
 live_remove_layer(layer_id)
 live_list_algorithms(query=None)
 live_run_algorithm(algorithm_id, parameters=None)
+live_list_whitebox_tools(query=None)
+live_run_whitebox_tool(tool_id, parameters=None)
+live_run_model_builder(graph)
+live_to_image(out_path=None, overwrite=False)
 ```
 
 Processing runs in the app, so it is live-only: there is no file tool for it.
-`live_list_algorithms` returns each algorithm's `id` and `parameters`;
-`live_run_algorithm` runs one on the open map, adds its result layers, and
-returns their ids. Layer parameters take ids from `live_list_layers()`. The
+`live_list_algorithms` and `live_list_whitebox_tools` return each tool's `id`
+and `parameters`; `live_run_algorithm` and `live_run_whitebox_tool` run one on
+the open map, add its result layers, and return their ids.
+`live_run_model_builder` executes a serialized Model Builder graph (`nodes` and
+`edges`) in one call. Layer parameters take ids from `live_list_layers()`. The
 relay waits about five seconds: a longer run keeps going in the app and the
 call reports that it did not finish, so check `live_list_layers()` before
 running it again.
+
+`live_get_layer_features`, `live_get_selected_features`, and
+`live_get_drawn_features` read GeoJSON features from the live store (including
+user sketches in the Geo Editor); `live_identify` queries rendered features at
+`(lng, lat)`. `live_to_image` captures the current viewport as a PNG data URL
+or writes a `.png` inside the workspace.
 
 `live_set_basemap` takes a catalog name (`liberty`, `bright`, `positron`,
 `dark`, `fiord`) or an `http(s)` style URL. `live_add_geojson` confines a
@@ -381,8 +430,8 @@ local path to the workspace, the same way `add_geojson_layer` does.
 
 ## Workspace rules
 
-- Writes are limited to `.json` (projects) and `.html`/`.htm` (exports). A bare
-  `.json` with no name is refused.
+- Writes are limited to `.json` (projects), `.html`/`.htm` (exports), and `.png`
+  (live map captures). A bare `.json` with no name is refused.
 - Existing files are never replaced without `overwrite=True`.
 - A tool that edits an existing project first checks the file really is one.
 - Reads are capped at 256 MB per project file.

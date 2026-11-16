@@ -8,6 +8,7 @@ import {
   IDENTIFY_ALL_LAYERS_ID,
   identifyAllIncludes,
   isDuckDBQueryLayer,
+  isMapClickClaimed,
   isPopupClickEnabled,
   isPopupHoverEnabled,
   NETCDF_IMAGE_SOURCE_KIND,
@@ -31,6 +32,7 @@ import {
 } from "./map-identify-lifecycle";
 import type { MapDiagnosticEvent } from "./map-diagnostic";
 import { MapboxEngine, redactMapboxError } from "./mapbox-engine";
+import { loadMapboxGl } from "./mapbox-gl-loader";
 import { prepareMapboxStandard } from "./mapbox-standard-style";
 import { styleUsesUnsupportedSource } from "./gl-style-compiler";
 import { resolveMapStyle } from "./basemap-style";
@@ -61,9 +63,11 @@ import {
 } from "./identify-edit-actions";
 import {
   duckDBBridge,
-  fetchWmsIdentifyProperties,
+  fetchServiceIdentifyProperties,
   isAbortError,
   isPixelIdentifyLayer,
+  isArcGISImageServiceLayer,
+  isServiceIdentifyLayer,
   isWmsLayer,
   isWmsQueryable,
   pixelIdentifyProperties,
@@ -126,10 +130,9 @@ export function MapboxCanvas({
       }
     };
     setError(null);
-    void Promise.all([import("mapbox-gl"), import("mapbox-gl/dist/mapbox-gl.css")])
-      .then(async ([module]) => {
+    void loadMapboxGl()
+      .then(async (gl) => {
         if (cancelled || !container.current) return;
-        const gl = module.default;
         const state = useAppStore.getState();
         const pane = state.secondaryMapViews.find((p) => p.id === viewId);
         const view =
@@ -762,6 +765,7 @@ export function MapboxCanvas({
           const asyncLayers = eligibleLayers.filter(
             (candidate) =>
               (isWmsLayer(candidate) && isWmsQueryable(candidate)) ||
+              isArcGISImageServiceLayer(candidate) ||
               isPixelIdentifyLayer(candidate) ||
               candidate.type === "cog" ||
               candidate.metadata.sourceKind === NETCDF_IMAGE_SOURCE_KIND,
@@ -781,12 +785,13 @@ export function MapboxCanvas({
               const asyncHits = await Promise.all(
                 asyncLayers.map(async (candidate): Promise<GlobalIdentifyHit | null> => {
                   try {
-                    if (isWmsLayer(candidate)) {
-                      const result = await fetchWmsIdentifyProperties(
+                    if (isServiceIdentifyLayer(candidate)) {
+                      const result = await fetchServiceIdentifyProperties(
                         candidate,
                         lngLat,
                         zoom,
                         signal,
+                        { labels },
                       );
                       if (
                         !result ||
@@ -797,6 +802,7 @@ export function MapboxCanvas({
                         layer: candidate,
                         properties: result.properties,
                         featureId: result.featureId == null ? null : String(result.featureId),
+                        ...(isArcGISImageServiceLayer(candidate) ? { title: labels.pixel } : {}),
                       };
                     }
                     // Before the pixel branch on purpose: the NetCDF dialog
@@ -896,12 +902,14 @@ export function MapboxCanvas({
             showPopupAt(lngLat, message(labels.wmsNotQueryable), maxWidth);
             return true;
           }
-          if (isWmsLayer(layer)) {
+          if (isServiceIdentifyLayer(layer)) {
             store.selectFeature(null);
             const zoom = map.getZoom();
             identifyAsync(lngLat, message(labels.loading), maxWidth, async (signal) => {
               try {
-                const result = await fetchWmsIdentifyProperties(layer, lngLat, zoom, signal);
+                const result = await fetchServiceIdentifyProperties(layer, lngLat, zoom, signal, {
+                  labels,
+                });
                 const content = createIdentifyPopupElement(
                   layer.name,
                   result?.properties ?? {},
@@ -951,7 +959,8 @@ export function MapboxCanvas({
           return false;
         };
         const handleClick = (e: MapEventOf<"click">) => {
-          if (viewId || featureSelection.active.current) return;
+          // A drawing map tool (Measure, the Geo Editor) owns the click.
+          if (viewId || featureSelection.active.current || isMapClickClaimed()) return;
           const next = useAppStore.getState();
           if (!next.identifyLayerId) {
             showPhotoAt(e.lngLat.toArray());

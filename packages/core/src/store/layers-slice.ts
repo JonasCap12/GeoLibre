@@ -22,10 +22,12 @@ import {
 import { matchLayerStyleEntry, type LayerStyleFileEntry } from "../layer-style-file";
 import { applyJoinsToLayer, cascadeLayerJoinRefresh } from "../joins";
 import { normalizeLayerDescriptiveMetadata } from "../layer-descriptive-metadata";
+import { withRasterSourceDefaults } from "../raster-source-defaults";
 import { scrubPrintLayoutForRemovedLayers } from "../print-layout-config";
 import { identifyStateWithoutLayers } from "./session-slice";
 import {
   DEFAULT_LAYER_STYLE,
+  shouldUseTiledRendering,
   type AddTileLayerOptions,
   type AttributeFormConfig,
   type EditorTrackingConfig,
@@ -33,10 +35,15 @@ import {
   type LayerJoin,
   type LayerDescriptiveMetadata,
   type LayerPopupConfig,
+  type LayerLevelFilter,
   type LayerQuickFilter,
   type LayerStyle,
+  type LevelFilterMode,
   type LayerVirtualField,
 } from "../types";
+import { featureCollectionToGeoArrow, type GeoArrowBatch } from "../geoarrow";
+import { sameLevelLink, selectLevel } from "../level-filter";
+import { resolveLayerTileAddress } from "../tile-address";
 import { hasSimpleStyleProperties } from "../vector-color";
 import {
   cascadeJoinRefreshForRemoved,
@@ -152,6 +159,23 @@ export interface LayersSlice {
   setLayerQuickFilters: (id: string, filters: LayerQuickFilter[]) => void;
   /** Set or clear the project-persisted expression filter for a layer. */
   setLayerFilterExpression: (id: string, expression: unknown[] | null) => void;
+  /**
+   * Link a layer to the floor picker (issue #3341), or unlink it with `null`.
+   * Linking a layer draws every floor until a floor is chosen.
+   */
+  setLayerLevelFilter: (id: string, filter: LayerLevelFilter | null) => void;
+  /**
+   * Choose a floor in the floor picker: every linked layer is narrowed to
+   * `level` (`null` for every floor) under `mode`, in one update, with the
+   * matching values resolved from each layer's own features.
+   */
+  setLevelSelection: (level: string | null, mode: LevelFilterMode) => void;
+  /**
+   * Write floor picker links the picker re-resolved on its own (values missing
+   * from a saved project, or data that changed). Not a user edit: the project
+   * stays clean and, called through `withoutHistory`, no undo step is added.
+   */
+  reconcileLevelLinks: (updates: { id: string; levelFilter: LayerLevelFilter }[]) => void;
   reorderLayer: (id: string, direction: "up" | "down") => void;
   moveLayer: (id: string, targetIndex: number) => void;
   moveLayersRelative: (
@@ -164,6 +188,7 @@ export interface LayersSlice {
     geojson: FeatureCollection,
     sourcePath?: string,
     beforeLayerId?: string | null,
+    extra?: { geoarrow?: GeoArrowBatch; metadata?: Record<string, unknown> },
   ) => string;
   /**
    * Add a georeferenced image overlay (a MapLibre `image` source rendered as a
@@ -214,8 +239,9 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
   layers: [],
   copiedLayerStyle: null,
 
-  addLayer: (layer, beforeLayerId = null) =>
+  addLayer: (inputLayer, beforeLayerId = null) =>
     set((s) => {
+      let layer = withRasterSourceDefaults(inputLayer);
       const layers = [...s.layers];
       // Plugin source identifiers (for example pmtiles://) are not local files.
       const { sourcePath } = layer;
@@ -292,7 +318,22 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
 
   updateLayer: (id, patch) =>
     set((s) => {
-      let layers = s.layers.map((l) => (l.id === id ? { ...l, ...patch } : l));
+      let layers = s.layers.map((l) => {
+        if (l.id !== id) return l;
+        const updated = { ...l, ...patch };
+        // If a patch explicitly replaces geojson but does not explicitly supply geoarrow,
+        // clear the existing GeoArrow batch to avoid retaining stale geometry.
+        if (patch.geojson !== undefined && !("geoarrow" in patch)) {
+          delete updated.geoarrow;
+        } else if ("geoarrow" in patch) {
+          if (patch.geoarrow === null || patch.geoarrow === undefined) {
+            delete updated.geoarrow;
+          } else {
+            updated.geoarrow = patch.geoarrow;
+          }
+        }
+        return updated;
+      });
       // A geojson replacement re-derives the layer's derived columns
       // (persistent joins, then virtual fields): on the layer itself
       // (file reload, attribute edits, processing writes — derived
@@ -352,6 +393,33 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
 
   setLayerFilterExpression: (id, expression) =>
     get().updateLayer(id, { filterExpression: expression ?? undefined }),
+
+  setLayerLevelFilter: (id, filter) => get().updateLayer(id, { levelFilter: filter ?? undefined }),
+
+  setLevelSelection: (level, mode) =>
+    set((s) => {
+      let changed = false;
+      const layers = s.layers.map((layer) => {
+        if (!layer.levelFilter) return layer;
+        const next = selectLevel(layer.levelFilter, layer.geojson?.features, level, mode);
+        // Re-clicking the floor already shown is not an edit.
+        if (sameLevelLink(layer.levelFilter, next)) return layer;
+        changed = true;
+        return { ...layer, levelFilter: next };
+      });
+      return changed ? { layers, isDirty: true } : {};
+    }),
+
+  reconcileLevelLinks: (updates) =>
+    set((s) => {
+      if (updates.length === 0) return {};
+      const byId = new Map(updates.map((update) => [update.id, update.levelFilter]));
+      return {
+        layers: s.layers.map((layer) =>
+          byId.has(layer.id) ? { ...layer, levelFilter: byId.get(layer.id) } : layer,
+        ),
+      };
+    }),
 
   setLayerVisibility: (id, visible) => get().updateLayer(id, { visible }),
 
@@ -462,8 +530,18 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
       return { layers: normalized, isDirty: true };
     }),
 
-  addGeoJsonLayer: (name, geojson, sourcePath, beforeLayerId = null) => {
+  addGeoJsonLayer: (name, geojson, sourcePath, beforeLayerId = null, extra) => {
     const id = uuidv4();
+    // GeoJSON remains authoritative for editing. The optional batch adds
+    // coordinate storage; it does not reduce the memory held by this layer.
+    let geoarrow = extra?.geoarrow;
+    if (!geoarrow && shouldUseTiledRendering(geojson)) {
+      try {
+        geoarrow = featureCollectionToGeoArrow(geojson) ?? undefined;
+      } catch (err) {
+        console.warn("[GeoLibre] GeoArrow batch conversion failed; falling back to GeoJSON", err);
+      }
+    }
     const layer: GeoLibreLayer = {
       id,
       name,
@@ -480,8 +558,9 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
           simpleStyleEnabled: hasSimpleStyleProperties(geojson),
         },
       }),
-      metadata: {},
+      metadata: { ...extra?.metadata },
       geojson,
+      ...(geoarrow ? { geoarrow } : {}),
       sourcePath,
     };
     get().addLayer(layer, beforeLayerId);
@@ -539,6 +618,9 @@ export const createLayersSlice: SliceCreator<LayersSlice> = (set, get) => ({
     if (tiles.length === 0) {
       throw new Error("addTileLayer requires at least one non-empty tile URL template.");
     }
+    // {-y} is accepted on XYZ templates. Reject a template that names both
+    // row tokens before the layer is stored.
+    resolveLayerTileAddress({ type, source: { scheme: options.scheme } }, tiles);
     // MapLibre's addSource throws synchronously when maxzoom < minzoom, and
     // syncRasterTileLayer does not catch it, which would strand a layer in
     // the store with no rendered source. Reject the bad range up front.

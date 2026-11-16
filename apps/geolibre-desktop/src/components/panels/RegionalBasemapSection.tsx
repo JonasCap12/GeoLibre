@@ -1,6 +1,7 @@
 import { visibleRegionalBasemapGroups, type RegionalBasemap } from "@geolibre/core";
 import { cn } from "@geolibre/ui";
 import { useTranslation } from "react-i18next";
+import { useRegionalBasemapsEnabled } from "../../lib/regional-basemap-policy";
 import { regionalBasemapRegionKey } from "../../lib/regional-sections";
 import { CollapsibleSection } from "../CollapsibleSection";
 
@@ -30,6 +31,9 @@ interface RegionalBasemapSectionProps {
  * An empty group list returns nothing, so the section heading and its region
  * note go with the entries. A project that already stores the sentinel still
  * opens; this only changes what the picker offers.
+ *
+ * Renders nothing when the deployment disabled regional basemaps
+ * (`basemaps.regional: false`), which removes them from both panels.
  */
 export function RegionalBasemapSection({
   selectedId,
@@ -37,11 +41,15 @@ export function RegionalBasemapSection({
   onActivate,
 }: RegionalBasemapSectionProps) {
   const { t } = useTranslation();
+  const enabled = useRegionalBasemapsEnabled();
+  // Upstream's runtime policy and this deployment's build-time
+  // `VITE_GEOLIBRE_HIDDEN_BASEMAP_REGIONS` both hide regions.
   const groups = visibleRegionalBasemapGroups();
-  if (groups.length === 0) return null;
   const selectionIsRegional = groups.some((group) =>
     group.basemaps.some((basemap) => basemap.id === selectedId),
   );
+
+  if (!enabled || groups.length === 0) return null;
 
   return (
     <CollapsibleSection

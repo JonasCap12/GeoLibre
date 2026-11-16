@@ -5,8 +5,10 @@ import {
   type MarkerShape,
   type VectorRule,
   type VectorStyleStop,
+  isStrokeDashPattern,
 } from "@geolibre/core";
 import { XMLParser } from "fast-xml-parser";
+import { QGIS_PEN_STYLE_DASH } from "./qml-export";
 import { OGC_SCALE_DENOMINATOR_AT_ZOOM_0 } from "./sld-export";
 
 const MIN_LAYER_ZOOM = DEFAULT_LAYER_STYLE.minZoom;
@@ -106,7 +108,13 @@ function toNum(value: string | null): number | null {
  */
 function rgbaToHex(value: string | null): { hex: string; alpha: number } | null {
   if (value === null) return null;
-  const parts = value.split(",").map((part) => Number.parseInt(part.trim(), 10));
+  // QGIS 3.40+ appends the color in its own color space after the 8-bit
+  // channels ("229,182,54,255,rgb:0.898,0.714,0.212,1"). Only the leading
+  // r,g,b[,a] are read; the tail must not make the whole color unreadable.
+  const parts = value
+    .split(",")
+    .slice(0, 4)
+    .map((part) => (/^\s*-?\d+\s*$/.test(part) ? Number.parseInt(part.trim(), 10) : Number.NaN));
   if (parts.length < 3 || parts.some((part) => !Number.isFinite(part))) {
     return null;
   }
@@ -152,8 +160,96 @@ interface SymbolInfo {
   opacity?: number;
   strokeColor?: string;
   strokeWidth?: number;
+  /** 0..1 opacity of the line or outline: its color's alpha times the symbol's `alpha`. */
+  strokeOpacity?: number;
+  /** Dash pattern of a line or polygon outline, in multiples of its width. */
+  strokeDash?: number[];
+  /** A custom dash was set but could not be converted, so the layer keeps its own. */
+  unreadDash?: boolean;
   markerSize?: number;
   markerName?: string;
+}
+
+/**
+ * Read a line or polygon outline's dash pattern. A QGIS pen style is already
+ * in multiples of the width; a SimpleLine's custom dash (`use_custom_dash`) is
+ * in absolute lengths, so it is divided by the width when both are in the same
+ * unit (QGIS defaults both to millimetres). `"unread"` when a custom dash is
+ * set but cannot be converted (different units, a zero width), and `undefined`
+ * for a pen style that is not one; both leave the layer's own pattern alone.
+ */
+function readDash(
+  opts: Map<string, string>,
+  styleKey: "line_style" | "outline_style",
+  widthKey: "line_width" | "outline_width",
+): number[] | "unread" | undefined {
+  if (styleKey === "line_style" && opts.get("use_custom_dash") === "1") {
+    const width = toNum(opts.get(widthKey) ?? null);
+    const dashUnit = opts.get("customdash_unit") ?? "MM";
+    const widthUnit = opts.get(`${widthKey}_unit`) ?? "MM";
+    const lengths = (opts.get("customdash") ?? "").split(";").filter(Boolean).map(Number);
+    if (width !== null && width > 0 && dashUnit === widthUnit) {
+      const dash = lengths.map((length) => length / width);
+      if (isStrokeDashPattern(dash)) return dash;
+    }
+    // QGIS writes a pen style beside a custom dash too, but it is not the
+    // pattern drawn, so falling back to it would import the wrong one.
+    return "unread";
+  }
+  const penStyle = opts.get(styleKey);
+  if (penStyle === undefined) return [];
+  // Own keys only: an attribute such as "constructor" would otherwise resolve
+  // to an inherited function and break the spread below.
+  const dash = Object.hasOwn(QGIS_PEN_STYLE_DASH, penStyle)
+    ? QGIS_PEN_STYLE_DASH[penStyle]
+    : undefined;
+  return dash ? [...dash] : undefined;
+}
+
+/** Record what {@link readDash} read on the symbol. */
+function applyDash(info: SymbolInfo, dash: ReturnType<typeof readDash>): void {
+  if (dash === "unread") info.unreadDash = true;
+  else if (dash !== undefined) info.strokeDash = dash;
+}
+
+/** Screen pixels per millimetre for QGIS lengths (about 96 dpi). */
+const QGIS_PIXELS_PER_MM = 3.78;
+
+/** Millimetres per QGIS render unit that has a fixed physical size. */
+const QGIS_UNIT_MM: Readonly<Record<string, number>> = {
+  MM: 1,
+  Point: 25.4 / 72,
+  Inch: 25.4,
+};
+
+/**
+ * Convert a QGIS symbol length to screen pixels. Pixels pass through and the
+ * physical units (millimetres, points, inches) convert at
+ * {@link QGIS_PIXELS_PER_MM}. Units with no fixed pixel size (map units,
+ * meters at scale) return `null`, so the caller keeps its own value. Shared by
+ * the QML reader and the single-symbol QGIS project import so the two agree.
+ *
+ * @param value - The length as written in the QGIS file.
+ * @param unit - The QGIS render unit, e.g. `MM`, `Pixel`, `Point`, `MapUnit`.
+ * @returns The length in pixels, rounded to hundredths, or `null`.
+ */
+export function qgisLengthToPixels(value: number, unit: string): number | null {
+  if (unit === "Pixel") return value;
+  const mm = Object.hasOwn(QGIS_UNIT_MM, unit) ? QGIS_UNIT_MM[unit] : undefined;
+  if (mm === undefined) return null;
+  // Rounded to hundredths so 18 mm reads as 68.04 px, not 68.03999999999999.
+  return Math.round(value * mm * QGIS_PIXELS_PER_MM * 100) / 100;
+}
+
+/**
+ * Read a length option (`size`, `line_width`, `outline_width`) in pixels. QGIS
+ * writes each length beside a `<key>_unit` option and defaults it to
+ * millimetres; see {@link qgisLengthToPixels} for the units it converts.
+ */
+function readPixelLength(opts: Map<string, string>, key: string): number | null {
+  const value = toNum(opts.get(key) ?? null);
+  if (value === null) return null;
+  return qgisLengthToPixels(value, opts.get(`${key}_unit`) ?? "MM");
 }
 
 /** Parse one `<symbol>` element into a {@link SymbolInfo}. */
@@ -180,13 +276,17 @@ function readSymbol(symbol: unknown): SymbolInfo {
     const line = rgbaToHex(opts.get("line_color") ?? null);
     if (line) {
       info.color = line.hex;
-      // Computed for consistency. `applySymbol` does not carry a line symbol's opacity into the
-      // flat style — GeoLibre has no stroke-opacity of its own for it to land in — though
-      // `symbolOverrides` still emits it as a rule's fillOpacity, where it is inert at render.
+      // A line's opacity is its stroke opacity, which `applySymbol` reads from `strokeOpacity`.
+      // `opacity` is kept for `symbolOverrides`, which emits it as a rule's fillOpacity, where it
+      // is inert at render.
       info.opacity = line.alpha * symbolAlpha;
+      info.strokeOpacity = info.opacity;
     }
-    const width = toNum(opts.get("line_width") ?? null);
+    const width = readPixelLength(opts, "line_width");
     if (width !== null) info.strokeWidth = width;
+    applyDash(info, readDash(opts, "line_style", "line_width"));
+    // QGIS's "no" pen draws no line at all.
+    if (opts.get("line_style") === "no") info.strokeOpacity = 0;
     return info;
   }
 
@@ -197,11 +297,18 @@ function readSymbol(symbol: unknown): SymbolInfo {
     info.opacity = fill.alpha * symbolAlpha;
   }
   const outline = rgbaToHex(opts.get("outline_color") ?? null);
-  if (outline) info.strokeColor = outline.hex;
-  const outlineWidth = toNum(opts.get("outline_width") ?? null);
+  if (outline) {
+    info.strokeColor = outline.hex;
+    info.strokeOpacity = outline.alpha * symbolAlpha;
+  }
+  const outlineWidth = readPixelLength(opts, "outline_width");
   if (outlineWidth !== null) info.strokeWidth = outlineWidth;
+  // A point outline cannot be dashed in GeoLibre, so only a fill's is read.
+  if (geometry === "fill") applyDash(info, readDash(opts, "outline_style", "outline_width"));
+  // QGIS's "no" pen draws no outline at all.
+  if (opts.get("outline_style") === "no") info.strokeOpacity = 0;
   if (geometry === "marker") {
-    const size = toNum(opts.get("size") ?? null);
+    const size = readPixelLength(opts, "size");
     if (size !== null) info.markerSize = size;
     const name = opts.get("name");
     if (name) info.markerName = name;
@@ -477,6 +584,13 @@ function applySymbol(
   if (info.strokeWidth !== undefined) {
     patch.strokeWidth = info.strokeWidth;
     patch.strokeWidthUnit = "pixels";
+  }
+  if (info.strokeOpacity !== undefined) patch.strokeOpacity = info.strokeOpacity;
+  if (info.strokeDash !== undefined) patch.strokeDash = info.strokeDash;
+  if (info.unreadDash) {
+    warnings.push(
+      "The line's custom dash is in a different unit from its width (or the width is 0), so it could not be read; the layer keeps its current dash pattern.",
+    );
   }
   if (info.geometry === "marker") {
     const name = info.markerName;

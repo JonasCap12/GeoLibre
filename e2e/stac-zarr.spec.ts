@@ -149,8 +149,8 @@ test("a Zarr asset from a STAC item reaches the map as the chosen variable", asy
   await waitForMap(page);
 
   await page.getByRole("button", { name: "Plugins", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Web Services" }).click();
-  await page.getByRole("menuitem", { name: "STAC Catalogs" }).click();
+  await page.getByRole("menuitem", { name: "Web services" }).click();
+  await page.getByRole("menuitem", { name: "STAC catalogs" }).click();
   await page.getByPlaceholder("https://example.org/stac/").fill(API);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
 
@@ -160,19 +160,20 @@ test("a Zarr asset from a STAC item reaches the map as the chosen variable", asy
   await collection.dblclick();
   await expect(page.getByText(/Showing \d+ of \d+ items\./)).toBeVisible();
 
-  // The asset names its format, and the store's drawable arrays are offered — bounds excluded.
-  await expect(page.getByRole("combobox").filter({ hasText: "Demo cube — Zarr" })).toBeVisible();
-  const targets = page.getByRole("combobox").filter({ hasText: "temperature (degC)" });
-  await expect(targets).toBeVisible();
-  await expect(targets.getByRole("option")).toHaveText([
-    "temperature (degC)",
-    "precipitation (mm)",
+  // The asset names its format, and the store's drawable arrays are offered as one entry each
+  // in the "Assets" menu — bounds excluded.
+  const assets = page
+    .getByRole("combobox")
+    .filter({ hasText: /^Assets/ })
+    .first();
+  await expect(assets).toBeVisible();
+  await expect(assets.getByRole("option")).toHaveText([
+    "Assets",
+    "Demo cube — Zarr — temperature (degC)",
+    "Demo cube — Zarr — precipitation (mm)",
   ]);
 
-  await targets.selectOption({ label: "precipitation (mm)" });
-  const add = page.getByRole("button", { name: "Add", exact: true }).first();
-  await expect(add).toBeEnabled();
-  await add.click();
+  await assets.selectOption({ label: "Demo cube — Zarr — precipitation (mm)" });
 
   // Named for the item, its asset and the variable actually drawn. Scoped to the panel because
   // the name also renders in the on-map layer control.

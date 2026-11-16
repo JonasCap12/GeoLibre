@@ -1,6 +1,6 @@
 import type { MapEngine } from "@geolibre/map";
 import i18next from "i18next";
-import { VIEWER_BLOCKED_PLUGIN_IDS } from "@geolibre/plugins";
+import { isViewerBlockedPlugin } from "@geolibre/plugins";
 import {
   useCallback,
   useEffect,
@@ -24,21 +24,28 @@ import {
   satisfiesMinVersion,
   type PluginRegistryEntry,
 } from "../../lib/plugin-registry";
+import { awaitingEntryState, deepLinkSettled } from "../../lib/settle-gate";
 import { mergeStringLists } from "../../lib/string-lists";
 import {
   activateDeepLinkedPlugin,
   DEEP_LINKABLE_PLUGIN_IDS,
   getExternalPluginLoadIssues,
   getPluginManager,
+  markPluginDeepLinkSettled,
   subscribeToExternalPluginLoads,
 } from "../usePlugins";
 import { useDesktopSettingsStore } from "../useDesktopSettings";
+import type { LayoutOptions } from "../useLayoutOptions";
 
 interface PluginDeepLinkOptions {
   mapControllerRef: RefObject<MapEngine | null>;
   enforceViewerPlugins: () => void;
-  /** Whether the app runs in the read-only `layout=viewer` preset. */
-  viewer: boolean;
+  /**
+   * `viewer`: whether the app runs in the read-only `layout=viewer` preset.
+   * `viewerDrawing`: whether that viewer lets the geometry editor run
+   * (`?layout=viewer&draw`).
+   */
+  layoutOptions: Pick<LayoutOptions, "viewer" | "viewerDrawing">;
   externalPluginsReady: boolean;
   mapReadyGeneration: number;
   /**
@@ -120,7 +127,7 @@ function reportActivationFailure(id: string, error: unknown): void {
 export function usePluginDeepLink({
   mapControllerRef,
   enforceViewerPlugins,
-  viewer,
+  layoutOptions: { viewer, viewerDrawing },
   externalPluginsReady,
   mapReadyGeneration,
   projectUrlSettled,
@@ -137,6 +144,10 @@ export function usePluginDeepLink({
   const [pending, setPending] = useState<PluginRegistryEntry[]>([]);
   // Registry plugins the user trusted, activated as each one loads.
   const [awaiting, setAwaiting] = useState<PluginRegistryEntry[]>([]);
+  // The link's own activations are done once its names are resolved and no
+  // registry plugin is left waiting for a trust decision or still activating.
+  const [linkResolved, setLinkResolved] = useState(false);
+  const [activating, setActivating] = useState(0);
   const loadIssues = useSyncExternalStore(
     subscribeToExternalPluginLoads,
     getExternalPluginLoadIssues,
@@ -150,8 +161,15 @@ export function usePluginDeepLink({
 
   useEffect(() => {
     if (projectUrlSettled) projectSettled.current = true;
-    if (!targets || handled.current) return;
-    if (!externalPluginsReady || !mapReadyGeneration || !projectSettled.current) return;
+    if (!projectSettled.current) return;
+    // No link to activate; settled once the `?url=` project has, so a URL load
+    // does not run ahead of that project's plugins.
+    if (!targets) {
+      markPluginDeepLinkSettled();
+      return;
+    }
+    if (handled.current) return;
+    if (!externalPluginsReady || !mapReadyGeneration) return;
     if (!mapControllerRef.current) return;
     handled.current = true;
 
@@ -162,7 +180,7 @@ export function usePluginDeepLink({
         // Skipped rather than left to the guard: activating would mount the
         // editing control for a moment and record it in the project's plugin
         // state, so every later restore would bring it back.
-        if (viewer && VIEWER_BLOCKED_PLUGIN_IDS.includes(id)) continue;
+        if (isViewerBlockedPlugin(id, { viewer, drawing: viewerDrawing })) continue;
         try {
           if (!(await activateDeepLinkedPlugin(id, mapControllerRef))) {
             console.warn(`[GeoLibre] The plugin "${id}" from the ?plugin= link did not activate.`);
@@ -172,7 +190,10 @@ export function usePluginDeepLink({
         }
       }
       await resolveRegistryNames(targets.unknown);
-    })().finally(enforceViewerPlugins);
+    })().finally(() => {
+      enforceViewerPlugins();
+      setLinkResolved(true);
+    });
 
     /**
      * Resolves the names no built-in plugin claimed against the registry:
@@ -249,6 +270,7 @@ export function usePluginDeepLink({
     targets,
     enforceViewerPlugins,
     viewer,
+    viewerDrawing,
     externalPluginsReady,
     mapReadyGeneration,
     projectUrlSettled,
@@ -265,10 +287,15 @@ export function usePluginDeepLink({
         .list()
         .map((plugin) => plugin.id),
     );
-    const ready = awaiting.filter((entry) => loadedIds.has(entry.id) && isLoadedFromEntry(entry));
-    const failed = awaiting.filter(
-      (entry) => !loadedIds.has(entry.id) && loadIssues.has(entry.manifestUrl),
-    );
+    const state = (entry: PluginRegistryEntry) =>
+      awaitingEntryState({
+        loadedFromEntry: loadedIds.has(entry.id) && isLoadedFromEntry(entry),
+        hasLoadIssue: loadIssues.has(entry.manifestUrl),
+      });
+    const ready = awaiting.filter((entry) => state(entry) === "ready");
+    // A manifest that reported a load issue is failed even when another plugin
+    // already holds the id, so it cannot hold the startup gate until the deadline.
+    const failed = awaiting.filter((entry) => state(entry) === "failed");
     if (ready.length === 0 && failed.length === 0) return;
     setAwaiting((entries) =>
       entries.filter((entry) => !ready.includes(entry) && !failed.includes(entry)),
@@ -278,6 +305,8 @@ export function usePluginDeepLink({
         `[GeoLibre] The plugin "${entry.id}" from the ?plugin= link did not load: ${loadIssues.get(entry.manifestUrl)}`,
       );
     }
+    if (ready.length === 0) return;
+    setActivating((count) => count + 1);
     void (async () => {
       for (const { id } of ready) {
         try {
@@ -288,8 +317,25 @@ export function usePluginDeepLink({
           reportActivationFailure(id, error);
         }
       }
-    })();
+    })().finally(() => setActivating((count) => count - 1));
   }, [awaiting, managerVersion, loadIssues, mapControllerRef]);
+
+  // Only now can a URL load count on the link's plugins having registered
+  // their handlers. A plugin still waiting for the user is bounded by the
+  // load's own deadline.
+  useEffect(() => {
+    if (
+      targets &&
+      deepLinkSettled({
+        linkResolved,
+        pending: pending.length,
+        awaiting: awaiting.length,
+        activating,
+      })
+    ) {
+      markPluginDeepLinkSettled();
+    }
+  }, [targets, linkResolved, pending.length, awaiting.length, activating]);
 
   const trust = useCallback(() => {
     if (pending.length === 0) return;

@@ -40,6 +40,7 @@ import {
 } from "../../lib/share-oauth";
 import {
   fetchProjectShares,
+  ShareLinksUnsupportedError,
   isShareableTitle,
   MAX_PROJECT_TITLE_LENGTH,
   resolveShareBaseUrl,
@@ -306,6 +307,9 @@ export function ShareProjectDialog({
   const [activeShares, setActiveShares] = useState<ActiveShare[]>([]);
   const [loadingShares, setLoadingShares] = useState(false);
   const [sharesError, setSharesError] = useState<string | null>(null);
+  // The host of a share server that has no share-link API, so the Manage tab
+  // explains that instead of reporting a failure.
+  const [sharesUnsupportedHost, setSharesUnsupportedHost] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
 
@@ -372,6 +376,7 @@ export function ShareProjectDialog({
     sharesAbortRef.current = controller;
     setLoadingShares(true);
     setSharesError(null);
+    setSharesUnsupportedHost(null);
     try {
       const token = await resolveAuthToken();
       const shares = await fetchProjectShares({ token, signal: controller.signal });
@@ -380,10 +385,14 @@ export function ShareProjectDialog({
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       if (sharesAbortRef.current !== controller) return;
+      setActiveShares([]);
+      if (err instanceof ShareLinksUnsupportedError) {
+        setSharesUnsupportedHost(err.host);
+        return;
+      }
       // An empty list and a failed fetch are not the same thing: swallowing the
       // error would render an expired token or a dropped connection as the
       // reassuring "no active share links" empty state.
-      setActiveShares([]);
       setSharesError(
         err instanceof ShareOAuthError
           ? t(shareOAuthErrorKey(err.code))
@@ -422,6 +431,7 @@ export function ShareProjectDialog({
       setTab("create");
       setRevokeError(null);
       setSharesError(null);
+      setSharesUnsupportedHost(null);
       setActiveShares([]);
       setLoadingShares(false);
       setSelectedOrgId(null);
@@ -849,7 +859,7 @@ export function ShareProjectDialog({
                 }`}
                 onClick={() => setTab("create")}
               >
-                {t("share.createShare", "New Share")}
+                {t("share.createShare", "New share")}
               </button>
               <button
                 type="button"
@@ -860,7 +870,7 @@ export function ShareProjectDialog({
                 }`}
                 onClick={() => setTab("manage")}
               >
-                {t("share.activeShares", "Active Shares")}
+                {t("share.activeShares", "Active shares")}
                 {activeShares.length > 0 && (
                   <span className="ms-1.5 rounded-full bg-secondary px-1.5 py-0.5 text-xs">
                     {activeShares.length}
@@ -922,7 +932,7 @@ export function ShareProjectDialog({
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="share-role">{t("share.role", "Access Role")}</Label>
+                    <Label htmlFor="share-role">{t("share.role", "Access role")}</Label>
                     <Select
                       id="share-role"
                       value={role}
@@ -940,7 +950,7 @@ export function ShareProjectDialog({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="share-expiry">{t("share.expiry", "Link Expiry")}</Label>
+                    <Label htmlFor="share-expiry">{t("share.expiry", "Link expiry")}</Label>
                     <Select
                       id="share-expiry"
                       value={expiresIn}
@@ -1196,6 +1206,10 @@ export function ShareProjectDialog({
                   <div className="flex items-center justify-center py-6">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
+                ) : sharesUnsupportedHost ? (
+                  <p className="py-6 text-center text-sm text-muted-foreground">
+                    {t("share.sharesUnsupported", { shareHost: sharesUnsupportedHost })}
+                  </p>
                 ) : activeShares.length === 0 ? (
                   // Suppress the reassuring empty state when the list failed to
                   // load; the error above already explains why it is empty.

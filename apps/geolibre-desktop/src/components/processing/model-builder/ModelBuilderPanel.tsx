@@ -1,6 +1,5 @@
 import {
   DEFAULT_LAYER_STYLE,
-  normalizeModelGraph,
   useAppStore,
   type GeoLibreLayer,
   type ModelGraphNode,
@@ -10,6 +9,7 @@ import {
   useLayersWhen,
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
+import type { FeatureCollection } from "geojson";
 import {
   VECTOR_TOOLS,
   fetchRemoteWhiteboxCatalogSnapshot,
@@ -20,6 +20,7 @@ import {
   runModelGraph,
   INPUT_NODE_PORT,
   OUTPUT_NODE_PORT,
+  portsFor,
   runWhiteboxToolWasm,
   validateModelGraph,
   graphToLinearSteps,
@@ -29,11 +30,24 @@ import {
   type WhiteboxLayerInput,
   type WhiteboxTool,
 } from "@geolibre/processing";
-import { Button, Input, Label, ScrollArea, Select, cn } from "@geolibre/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+  Input,
+  Label,
+  ScrollArea,
+  Select,
+  cn,
+} from "@geolibre/ui";
 import {
   ChevronDown,
   ChevronUp,
   Copy,
+  BookOpen,
   Download,
   GripVertical,
   LayoutGrid,
@@ -65,7 +79,7 @@ import {
   type ReactElement,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { clamp } from "../../../lib/clamp";
 import { createDuckDbCapability } from "../../../lib/duckdb-processing";
 import { modelGraphToPython } from "../../../lib/model-python-script";
@@ -86,6 +100,7 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   addDataNode,
+  addControlNode,
   addOutputForPort,
   addToolNode,
   autoLayout,
@@ -94,6 +109,7 @@ import {
   graphsEqual,
   layoutGraph,
   moveNode,
+  parseMaxIterations,
   portFeedsOutput,
   removeEdge,
   removeNode,
@@ -104,14 +120,33 @@ import {
 import { fetchLayerBytes } from "../../../lib/whitebox-layer-inputs";
 import { fieldNamesByLayer } from "../../../lib/layer-field-names";
 import { modelFieldOptions } from "../../../lib/model-field-options";
+import {
+  MAX_IMPORT_BYTES,
+  parseModelFile,
+  readTextCapped,
+  serializeModelFile,
+  type ModelFileError,
+} from "../../../lib/model-file";
+import {
+  SAMPLE_MODELS,
+  bindSampleModelInputs,
+  findSampleDataLayer,
+  type SampleModel,
+} from "../../../lib/sample-models";
 import { ParameterField } from "../ParameterField";
 
 /** MIME type carrying a palette tool key through an HTML5 drag. */
 const TOOL_DRAG_TYPE = "application/x-geolibre-model-tool";
 
-/** Identifies an exported Model Builder file, so a stray JSON is rejected. */
-const MODEL_SCHEMA = "https://geolibre.app/schemas/model-graph-v1.json";
-const MODEL_VERSION = "1.0.0";
+const NULL_CHECK_OPERATORS = new Set(["is_null", "not_null", "is_empty", "not_empty"]);
+// Catalog key for each control-flow node's card title.
+const CONTROL_FLOW_TITLE_KEYS: Partial<Record<ModelGraphNodeKind, ParseKeys>> = {
+  "iterate-features": "processing.modelBuilder.controlFlow.kinds.iterateFeatures",
+  "iterate-rasters": "processing.modelBuilder.controlFlow.kinds.iterateRasters",
+  "collect-results": "processing.modelBuilder.controlFlow.kinds.collectResults",
+  "conditional-switch": "processing.modelBuilder.controlFlow.kinds.conditionalSwitch",
+  "conditional-merge": "processing.modelBuilder.controlFlow.kinds.conditionalMerge",
+};
 /** Bounds on the draggable palette and inspector columns, in pixels. */
 const MIN_SIDE_WIDTH = 140;
 const MAX_SIDE_WIDTH = 480;
@@ -131,18 +166,6 @@ const MAX_LOG_FRACTION = 0.6;
  * left to grab a node and drag the column back.
  */
 const MAX_SIDE_FRACTION = 0.4;
-
-/** Sanity bounds on an imported file; a hand-built model is nowhere near these. */
-const MAX_IMPORT_NODES = 2000;
-const MAX_IMPORT_EDGES = 4000;
-/**
- * Byte cap checked before the file is read, mirroring how the other importers
- * in this app bound size (`MAX_CIM_BYTES` in `arcgis-project-import.ts`). The
- * node/edge caps above can only fire once the whole file has been decoded and
- * parsed, so a pathological file would be fully loaded before anything could
- * reject it. A model at the node/edge caps serializes well under this.
- */
-const MAX_IMPORT_BYTES = 16 * 1024 * 1024;
 
 /**
  * Preferred floors. They are *preferences*, not hard limits: a container
@@ -260,7 +283,40 @@ interface ModelBuilderPanelProps {
   mapControllerRef: React.RefObject<MapEngine | null>;
   /** Adds a raster result (COG bytes) to the map, when the host supports it. */
   onAddRaster?: (bytes: Uint8Array, name: string, fileName: string) => Promise<void> | void;
+  /**
+   * Adds a remote COG to the map and resolves to its layer id, when the host
+   * supports it. Loading a sample workflow uses it for the sample's DEM.
+   */
+  onAddRasterUrl?: (url: string, name: string) => Promise<string>;
 }
+
+/** How long a sample's model or data fetch may take before it is abandoned. */
+const SAMPLE_FETCH_TIMEOUT_MS = 30_000;
+/** Size cap on a sample's GeoJSON data; the bundled samples are a few KB. */
+const MAX_SAMPLE_DATA_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Settle with `promise`, or reject once `ms` pass. The underlying work is not
+ * cancelled; this only stops a caller waiting on a host that has stalled.
+ *
+ * @param promise The work to wait for.
+ * @param ms How long to wait, in milliseconds.
+ * @returns The promise's value, if it settles in time.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${ms / 1000} s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Catalog key for each reason a model file is rejected. */
+const MODEL_FILE_ERROR_KEYS: Record<ModelFileError, ParseKeys> = {
+  tooLarge: "processing.modelBuilder.importTooLarge",
+  unsupported: "processing.modelBuilder.importUnsupported",
+  invalid: "processing.modelBuilder.importInvalid",
+};
 
 /**
  * ArcGIS-ModelBuilder-style canvas: drag tools from the palette onto the canvas,
@@ -270,6 +326,7 @@ interface ModelBuilderPanelProps {
 export function ModelBuilderPanel({
   mapControllerRef,
   onAddRaster,
+  onAddRasterUrl,
 }: ModelBuilderPanelProps): ReactElement | null {
   const { t } = useTranslation();
   const open = useAppStore((s) => s.ui.modelBuilderOpen);
@@ -307,6 +364,8 @@ export function ModelBuilderPanel({
   const [compactPane, setCompactPane] = useState<"palette" | "inspector" | null>(null);
   const [modelId, setModelId] = useState<string>(() => createId());
   const [modelName, setModelName] = useState("");
+  /** The sample workflow being fetched, so the menu can show progress and ignore repeats. */
+  const [loadingSampleId, setLoadingSampleId] = useState<string | null>(null);
   const [graph, setGraph] = useState<ProcessingModelGraph>(emptyModelGraph);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ModelToolDescriptor[]>([]);
@@ -319,7 +378,9 @@ export function ModelBuilderPanel({
   const [running, setRunning] = useState(false);
   /** Script for the last graph that completed successfully, not later canvas edits. */
   const [pythonScript, setPythonScript] = useState<string | null>(null);
-  const [nodeStatus, setNodeStatus] = useState<Record<string, "running" | "done" | "error">>({});
+  const [nodeStatus, setNodeStatus] = useState<
+    Record<string, "running" | "done" | "error" | "skipped">
+  >({});
   /**
    * The output port a keyboard/click user has armed, waiting for an input port
    * to complete the connection. Null during pointer drags, which carry their
@@ -329,6 +390,15 @@ export function ModelBuilderPanel({
   const abortRef = useRef<AbortController | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * The canvas and run state as of the latest render, so a sample that is
+   * still fetching can tell whether the user edited the model or started a
+   * run in the meantime.
+   */
+  const latestRef = useRef({ graph, modelName, running });
+  useEffect(() => {
+    latestRef.current = { graph, modelName, running };
+  }, [graph, modelName, running]);
   const importRef = useRef<HTMLInputElement | null>(null);
   const restoredGeometryRef = useRef<{
     position: { x: number; y: number };
@@ -630,11 +700,7 @@ export function ModelBuilderPanel({
   }, [saveModel, modelId, modelName, graph, appendLog, t]);
 
   const handleExport = useCallback(() => {
-    const json = JSON.stringify(
-      { $schema: MODEL_SCHEMA, version: MODEL_VERSION, name: modelName, graph },
-      null,
-      2,
-    );
+    const json = serializeModelFile(modelName, graph);
     const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
     const anchor = document.createElement("a");
     const slug = modelName
@@ -662,29 +728,10 @@ export function ModelBuilderPanel({
         if (file.size > MAX_IMPORT_BYTES) {
           throw new Error(t("processing.modelBuilder.importTooLarge"));
         }
-        const parsed = JSON.parse(await file.text()) as {
-          $schema?: unknown;
-          version?: unknown;
-          name?: unknown;
-          graph?: unknown;
-        };
-        if (parsed.$schema !== undefined && parsed.$schema !== MODEL_SCHEMA) {
-          throw new Error(t("processing.modelBuilder.importUnsupported"));
-        }
-        // normalizeModelGraph is the same coercion the project loader applies:
-        // it drops nodes without a usable id or kind and edges that do not
-        // connect two surviving nodes, so a hand-edited file cannot reach the
-        // canvas with (say) a missing `edges` array that would then throw out
-        // of render, past this try/catch, into the panel's error boundary.
-        const graph = normalizeModelGraph(parsed.graph);
-        if (!graph) throw new Error(t("processing.modelBuilder.importInvalid"));
-        // A canvas is hand-built; anything this large is a corrupt or crafted
-        // file, and laying it out would stall the panel before the user could
-        // even see what went wrong.
-        if (graph.nodes.length > MAX_IMPORT_NODES || graph.edges.length > MAX_IMPORT_EDGES) {
-          throw new Error(t("processing.modelBuilder.importTooLarge"));
-        }
-        setModelName(typeof parsed.name === "string" ? parsed.name : "");
+        const parsed = parseModelFile(await file.text());
+        if (!parsed.ok) throw new Error(t(MODEL_FILE_ERROR_KEYS[parsed.error]));
+        const { graph } = parsed;
+        setModelName(parsed.name);
         setGraph(autoLayout(graph, layoutOptions()));
         setSelectedNodeId(null);
         resetRunState();
@@ -694,6 +741,148 @@ export function ModelBuilderPanel({
       }
     },
     [appendLog, confirmDiscard, layoutOptions, resetRunState, t],
+  );
+
+  /**
+   * Load one of the bundled sample workflows: fetch its `.model.json`, add (or
+   * reuse) the sample datasets its input nodes read, and bind each input to
+   * the matching layer so the model is ready to run as soon as it lands.
+   *
+   * The sample gets a fresh model id, so saving it never overwrites a model
+   * the project already holds.
+   */
+  const handleLoadSample = useCallback(
+    async (sample: SampleModel) => {
+      if (loadingSampleId || !confirmDiscard()) return;
+      const before = latestRef.current;
+      setLoadingSampleId(sample.id);
+      appendLog(t("processing.modelBuilder.samples.loadingLog", { name: sample.title }));
+      try {
+        // A timeout, so a stalled host cannot leave the Samples menu disabled.
+        const response = await fetch(sample.modelUrl, {
+          signal: AbortSignal.timeout(SAMPLE_FETCH_TIMEOUT_MS),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        // Streamed with a byte cap, so an oversized file is never buffered
+        // in full just to be rejected (the same bound Import puts on file.size).
+        const text = await readTextCapped(response, MAX_IMPORT_BYTES);
+        if (text === null) throw new Error(t("processing.modelBuilder.importTooLarge"));
+        const parsed = parseModelFile(text);
+        if (!parsed.ok) throw new Error(t(MODEL_FILE_ERROR_KEYS[parsed.error]));
+
+        // Bind the sample datasets. Read the store directly: a dataset added
+        // for an earlier entry must be visible to the reuse check of the next.
+        // Log lines are collected and written after resetRunState(), which
+        // clears the log; otherwise a failed dataset would leave the input
+        // unbound with nothing saying why.
+        const bindings = new Map<string, string>();
+        const notes: string[] = [];
+        for (const data of sample.data) {
+          const existing = findSampleDataLayer(useAppStore.getState().layers, data.url);
+          if (existing) {
+            bindings.set(data.layerId, existing);
+            continue;
+          }
+          try {
+            let layerId: string | undefined;
+            if (data.kind === "raster") {
+              if (!onAddRasterUrl) {
+                notes.push(
+                  t("processing.modelBuilder.samples.rasterUnsupported", { name: data.name }),
+                );
+                continue;
+              }
+              // Same bound as the fetches: addRasterToMap takes no signal, so
+              // a stalled COG host is raced rather than cancelled.
+              layerId = await withTimeout(
+                onAddRasterUrl(data.url, data.name),
+                SAMPLE_FETCH_TIMEOUT_MS,
+              );
+            } else {
+              const res = await fetch(data.url, {
+                signal: AbortSignal.timeout(SAMPLE_FETCH_TIMEOUT_MS),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const text = await readTextCapped(res, MAX_SAMPLE_DATA_BYTES);
+              if (text === null) {
+                throw new Error(
+                  t("processing.modelBuilder.samples.dataTooLarge", {
+                    size: MAX_SAMPLE_DATA_BYTES / (1024 * 1024),
+                  }),
+                );
+              }
+              let geojson: FeatureCollection | null = null;
+              try {
+                geojson = JSON.parse(text) as FeatureCollection;
+              } catch {
+                // Malformed JSON gets the same message as a non-collection,
+                // not the parser's raw (and untranslated) error.
+              }
+              if (geojson?.type !== "FeatureCollection" || !Array.isArray(geojson.features)) {
+                throw new Error(t("processing.modelBuilder.samples.dataUnusable"));
+              }
+              layerId = addGeoJsonLayer(data.name, geojson, data.url);
+            }
+            if (layerId) {
+              bindings.set(data.layerId, layerId);
+              notes.push(t("processing.modelBuilder.samples.dataAddedLog", { name: data.name }));
+            }
+          } catch (err) {
+            // The model still loads; its input is left for the user to pick.
+            notes.push(
+              `${t("processing.modelBuilder.samples.dataFailed", { name: data.name })}: ${
+                (err as Error).message
+              }`,
+            );
+          }
+        }
+        // The fetches above can take seconds while the canvas stays editable.
+        // The discard prompt covered the model as it was then; ask again if
+        // it changed or a run started since, rather than overwriting it.
+        // Declining keeps the current canvas, but the data added above stays
+        // on the map, so the log still says what was added.
+        const now = latestRef.current;
+        const declined =
+          // Only a run that started during the load: one already running at
+          // the click was covered by the first prompt.
+          (now.running &&
+            !before.running &&
+            !window.confirm(t("processing.modelBuilder.discardRunning"))) ||
+          ((now.graph !== before.graph || now.modelName !== before.modelName) &&
+            !window.confirm(t("processing.modelBuilder.discardChanges")));
+        if (declined) {
+          notes.forEach(appendLog);
+          return;
+        }
+        const graph = bindSampleModelInputs(
+          parsed.graph,
+          bindings,
+          new Set(sample.data.map((data) => data.layerId)),
+        );
+        setModelId(createId());
+        setModelName(parsed.name || sample.title);
+        setGraph(autoLayout(graph, layoutOptions()));
+        setSelectedNodeId(null);
+        resetRunState();
+        canvasRef.current?.scrollTo({ left: 0, top: 0 });
+        notes.forEach(appendLog);
+        appendLog(t("processing.modelBuilder.samples.loadedLog", { name: sample.title }));
+      } catch (err) {
+        appendLog(`${t("processing.modelBuilder.samples.loadFailed")}: ${(err as Error).message}`);
+      } finally {
+        setLoadingSampleId(null);
+      }
+    },
+    [
+      addGeoJsonLayer,
+      appendLog,
+      confirmDiscard,
+      layoutOptions,
+      loadingSampleId,
+      onAddRasterUrl,
+      resetRunState,
+      t,
+    ],
   );
 
   // --- Canvas interaction -------------------------------------------------
@@ -750,6 +939,22 @@ export function ModelBuilderPanel({
         { x: kind === "input" ? 24 : 24 + NODE_WIDTH + 72, y: 24 },
         createId,
       );
+      setGraph(next.graph);
+      setSelectedNodeId(next.nodeId);
+    },
+    [graph],
+  );
+
+  const addControlFlowNode = useCallback(
+    (
+      kind:
+        | "iterate-features"
+        | "iterate-rasters"
+        | "collect-results"
+        | "conditional-switch"
+        | "conditional-merge",
+    ) => {
+      const next = addControlNode(graph, kind, { x: 24 + NODE_WIDTH + 36, y: 48 }, createId);
       setGraph(next.graph);
       setSelectedNodeId(next.nodeId);
     },
@@ -956,23 +1161,30 @@ export function ModelBuilderPanel({
           if (controller.signal.aborted) return;
           if (value.kind === "vector") {
             addGeoJsonLayer(name, value.geojson);
-          } else if (onAddRaster) {
-            pendingAdds.push(
-              Promise.resolve(
-                onAddRaster(value.bytes, name, `${name.replace(/\s+/g, "_")}.tif`),
-              ).catch((err: unknown) => {
-                // Otherwise this is an unhandled rejection and the run still
-                // reports success for an output that never reached the map.
-                failedOutputs.push(name);
-                appendLog(
-                  `${t("processing.modelBuilder.outputAddFailed", { name })}: ${
-                    err instanceof Error ? err.message : String(err)
-                  }`,
-                );
-              }),
-            );
+          } else if (value.kind === "raster") {
+            if (onAddRaster) {
+              pendingAdds.push(
+                Promise.resolve(
+                  onAddRaster(value.bytes, name, `${name.replace(/\s+/g, "_")}.tif`),
+                ).catch((err: unknown) => {
+                  // Otherwise this is an unhandled rejection and the run still
+                  // reports success for an output that never reached the map.
+                  failedOutputs.push(name);
+                  appendLog(
+                    `${t("processing.modelBuilder.outputAddFailed", { name })}: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                }),
+              );
+            } else {
+              appendLog(t("processing.modelBuilder.rasterOutputUnsupported", { name }));
+            }
           } else {
-            appendLog(t("processing.modelBuilder.rasterOutputUnsupported", { name }));
+            // runModelGraph already splits a raster collection into one call
+            // per raster; anything else (a count, a string) has no map form.
+            failedOutputs.push(name);
+            appendLog(t("processing.modelBuilder.outputUnsupported", { name, kind: value.kind }));
           }
         },
         log: (message) => {
@@ -1037,8 +1249,13 @@ export function ModelBuilderPanel({
   const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (maximized) return;
     if ((event.target as HTMLElement).closest("button, input")) return;
-    event.preventDefault();
     const handle = event.currentTarget;
+    // React bubbles events from portaled content (the Samples menu) through
+    // the component tree, so a click on a menu item reaches this handler
+    // although the item is not inside the title bar. Capturing the pointer
+    // here would steal the item's click.
+    if (!handle.contains(event.target as Node)) return;
+    event.preventDefault();
     handle.setPointerCapture(event.pointerId);
     const card = handle.closest("section") as HTMLElement;
     const startX = event.clientX;
@@ -1385,6 +1602,38 @@ export function ModelBuilderPanel({
             <LayoutGrid className="h-3.5 w-3.5" />{" "}
             {!compact && t("processing.modelBuilder.arrange")}
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0 gap-1 px-2"
+                disabled={loadingSampleId !== null}
+                aria-label={t("processing.modelBuilder.samples.menu")}
+                title={t("processing.modelBuilder.samples.menuHint")}
+              >
+                {loadingSampleId ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <BookOpen className="h-3.5 w-3.5" />
+                )}{" "}
+                {!compact && t("processing.modelBuilder.samples.menu")}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80">
+              <DropdownMenuLabel>{t("processing.modelBuilder.samples.heading")}</DropdownMenuLabel>
+              {SAMPLE_MODELS.map((sample) => (
+                <DropdownMenuItem
+                  key={sample.id}
+                  className="flex-col items-start gap-0.5"
+                  onSelect={() => void handleLoadSample(sample)}
+                >
+                  <span className="text-sm font-medium">{sample.title}</span>
+                  <span className="text-xs text-muted-foreground">{sample.description}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             size="sm"
             variant="ghost"
@@ -1560,6 +1809,60 @@ export function ModelBuilderPanel({
                   >
                     {t("processing.modelBuilder.addOutputNode")}
                   </Button>
+                </div>
+                <div className="pt-1">
+                  <div className="flex items-center justify-between pb-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {t("processing.modelBuilder.controlFlow.heading")}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 justify-start px-1.5 text-[10px] truncate"
+                      onClick={() => addControlFlowNode("iterate-features")}
+                      title={t("processing.modelBuilder.controlFlow.add.iterateFeaturesTitle")}
+                    >
+                      {t("processing.modelBuilder.controlFlow.add.iterateFeatures")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 justify-start px-1.5 text-[10px] truncate"
+                      onClick={() => addControlFlowNode("iterate-rasters")}
+                      title={t("processing.modelBuilder.controlFlow.add.iterateRastersTitle")}
+                    >
+                      {t("processing.modelBuilder.controlFlow.add.iterateRasters")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 justify-start px-1.5 text-[10px] truncate"
+                      onClick={() => addControlFlowNode("conditional-switch")}
+                      title={t("processing.modelBuilder.controlFlow.add.switchTitle")}
+                    >
+                      {t("processing.modelBuilder.controlFlow.add.switch")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 justify-start px-1.5 text-[10px] truncate"
+                      onClick={() => addControlFlowNode("conditional-merge")}
+                      title={t("processing.modelBuilder.controlFlow.add.mergeTitle")}
+                    >
+                      {t("processing.modelBuilder.controlFlow.add.merge")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="col-span-2 h-6 justify-center px-1.5 text-[10px] truncate"
+                      onClick={() => addControlFlowNode("collect-results")}
+                      title={t("processing.modelBuilder.controlFlow.add.collectTitle")}
+                    >
+                      {t("processing.modelBuilder.controlFlow.add.collect")}
+                    </Button>
+                  </div>
                 </div>
               </div>
               <ScrollArea className="min-h-0 flex-1 p-2">
@@ -1916,11 +2219,35 @@ function descriptorName(
   });
 }
 
-/** Display name for a port, translating the two synthetic node ports. */
+// Control-flow nodes' port labels come from @geolibre/processing, which has no
+// i18n; map their English labels to catalog keys.
+const CONTROL_FLOW_PORT_KEYS: Record<string, ParseKeys> = {
+  "Feature Collection": "processing.modelBuilder.controlFlow.ports.featureCollection",
+  "Current Feature": "processing.modelBuilder.controlFlow.ports.currentFeature",
+  Index: "processing.modelBuilder.controlFlow.ports.index",
+  "Total Count": "processing.modelBuilder.controlFlow.ports.totalCount",
+  "Raster Collection": "processing.modelBuilder.controlFlow.ports.rasterCollection",
+  "Current Raster": "processing.modelBuilder.controlFlow.ports.currentRaster",
+  "Raster Name": "processing.modelBuilder.controlFlow.ports.rasterName",
+  "Item to Collect": "processing.modelBuilder.controlFlow.ports.itemToCollect",
+  "Collected Results": "processing.modelBuilder.controlFlow.ports.collectedResults",
+  Count: "processing.modelBuilder.controlFlow.ports.count",
+  "Condition Value": "processing.modelBuilder.controlFlow.ports.conditionValue",
+  "True Branch": "processing.modelBuilder.controlFlow.ports.trueBranch",
+  "False Branch": "processing.modelBuilder.controlFlow.ports.falseBranch",
+  "True Result": "processing.modelBuilder.controlFlow.ports.trueResult",
+  "False Result": "processing.modelBuilder.controlFlow.ports.falseResult",
+  "Active Output": "processing.modelBuilder.controlFlow.ports.activeOutput",
+};
+
+/** Display name for a port, translating the synthetic node ports and the control-flow ports. */
 function portLabel(t: TFunction, label: string): string {
   if (label === INPUT_NODE_PORT) return t("processing.modelBuilder.outputNode");
   if (label === OUTPUT_NODE_PORT) return t("processing.modelBuilder.inputNode");
-  return label;
+  const key = Object.hasOwn(CONTROL_FLOW_PORT_KEYS, label)
+    ? CONTROL_FLOW_PORT_KEYS[label]
+    : undefined;
+  return key ? t(key) : label;
 }
 
 /** SVG layer drawing every connection, plus the in-progress link. */
@@ -2006,15 +2333,7 @@ function portsOf(
   node: ModelGraphNode,
   descriptor: ModelToolDescriptor | undefined,
 ): { inputs: { id: string; label: string }[]; outputs: { id: string; label: string }[] } {
-  // Stable ids, matching the engine's own portsFor: portLabel() resolves these
-  // for display, and a hardcoded English word here would slip past it.
-  if (node.kind === "input") {
-    return { inputs: [], outputs: [{ id: INPUT_NODE_PORT, label: INPUT_NODE_PORT }] };
-  }
-  if (node.kind === "output") {
-    return { inputs: [{ id: OUTPUT_NODE_PORT, label: OUTPUT_NODE_PORT }], outputs: [] };
-  }
-  return { inputs: descriptor?.inputs ?? [], outputs: descriptor?.outputs ?? [] };
+  return portsFor(node, descriptor);
 }
 
 /**
@@ -2042,7 +2361,7 @@ const GraphNodeCard = memo(function GraphNodeCard({
   descriptor: ModelToolDescriptor | undefined;
   layers: GeoLibreLayer[];
   selected: boolean;
-  status?: "running" | "done" | "error";
+  status?: "running" | "done" | "error" | "skipped";
   hasIssue: boolean;
   /** The output port on this node armed for a keyboard connection, if any. */
   armedPortId?: string;
@@ -2058,13 +2377,19 @@ const GraphNodeCard = memo(function GraphNodeCard({
   const { t } = useTranslation();
   const ports = portsOf(node, descriptor);
   const layout = cardLayout(ports, node.kind);
+
+  const controlFlowTitleKey = CONTROL_FLOW_TITLE_KEYS[node.kind];
+  const isControlFlow = controlFlowTitleKey !== undefined;
+
   const title =
     node.kind === "input"
       ? (layers.find((layer) => layer.id === node.layerId)?.name ??
         t("processing.modelBuilder.inputNode"))
       : node.kind === "output"
         ? node.name?.trim() || t("processing.modelBuilder.outputNode")
-        : descriptorName(t, descriptor, node.toolId ?? "");
+        : isControlFlow
+          ? t(controlFlowTitleKey)
+          : descriptorName(t, descriptor, node.toolId ?? "");
 
   return (
     // Focusable with a role, so the card can be reached and selected from the
@@ -2090,17 +2415,23 @@ const GraphNodeCard = memo(function GraphNodeCard({
       style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: layout.height }}
       className={cn(
         "absolute cursor-grab select-none border p-2 shadow-sm active:cursor-grabbing",
-        // A tool is a square-cornered card; the model's own inputs and outputs
-        // are rounded and tinted, so the data flowing in and out reads apart
-        // from the processing between it at a glance — the same split ArcGIS
-        // ModelBuilder and QGIS draw as ovals versus rectangles. Safe for
-        // exactly these two kinds: each has a single, vertically centred port,
-        // so no port dot ever lands on the rounded part of the edge.
-        node.kind === "tool" ? "rounded-md bg-card" : "rounded-xl border-primary/40 bg-primary/10",
+        // A tool is a square-cornered card (control-flow nodes too, tinted
+        // amber); the model's own inputs and outputs are rounded and tinted, so
+        // the data flowing in and out reads apart from the processing between
+        // it at a glance — the same split ArcGIS ModelBuilder and QGIS draw as
+        // ovals versus rectangles. Safe for exactly these two kinds: each has a
+        // single, vertically centred port, so no port dot ever lands on the
+        // rounded part of the edge.
+        isControlFlow
+          ? "rounded-md border-amber-500/40 bg-amber-500/10"
+          : node.kind === "tool"
+            ? "rounded-md bg-card"
+            : "rounded-xl border-primary/40 bg-primary/10",
         selected && "border-primary ring-2 ring-primary/30",
         hasIssue && !selected && "border-destructive",
         status === "running" && "ring-2 ring-primary",
         status === "done" && "border-primary/60",
+        status === "skipped" && "opacity-60 border-muted-foreground/30 bg-muted/40",
         status === "error" && "border-destructive ring-2 ring-destructive/40",
       )}
     >
@@ -2109,7 +2440,9 @@ const GraphNodeCard = memo(function GraphNodeCard({
           ? (node.provider ?? "")
           : node.kind === "input"
             ? t("processing.modelBuilder.inputNode")
-            : t("processing.modelBuilder.outputNode")}
+            : node.kind === "output"
+              ? t("processing.modelBuilder.outputNode")
+              : t("processing.modelBuilder.controlFlow.heading")}
       </p>
       <p className="truncate text-xs font-medium" title={title}>
         {title}
@@ -2312,6 +2645,174 @@ function NodeInspector({
             onChange={(event) => onFieldChange("name", event.target.value)}
             placeholder={t("processing.modelBuilder.resultNamePlaceholder")}
           />
+        </div>
+      )}
+
+      {node.kind === "conditional-switch" && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            {t("processing.modelBuilder.controlFlow.switch.description")}
+          </p>
+          <div className="space-y-1">
+            <Label htmlFor="switch-condition-type" className="text-[11px]">
+              {t("processing.modelBuilder.controlFlow.switch.conditionType")}
+            </Label>
+            <Select
+              id="switch-condition-type"
+              className="h-7 w-full text-xs"
+              value={String(node.parameters?.conditionType || "compare")}
+              onChange={(event) => {
+                onParamChange("conditionType", event.target.value);
+                // A null check needs a null/empty operator (the node starts on
+                // "=="), and a comparison must not keep one, or it would still
+                // run as a null check and ignore the target value.
+                const operator = String(node.parameters?.operator ?? "");
+                const nullOperator = NULL_CHECK_OPERATORS.has(operator);
+                if (event.target.value === "null_check" && !nullOperator) {
+                  onParamChange("operator", "is_null");
+                } else if (event.target.value === "compare" && nullOperator) {
+                  onParamChange("operator", "==");
+                }
+              }}
+            >
+              <option value="compare">
+                {t("processing.modelBuilder.controlFlow.switch.typeCompare")}
+              </option>
+              <option value="boolean">
+                {t("processing.modelBuilder.controlFlow.switch.typeBoolean")}
+              </option>
+              <option value="null_check">
+                {t("processing.modelBuilder.controlFlow.switch.typeNullCheck")}
+              </option>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="switch-property" className="text-[11px]">
+              {t("processing.modelBuilder.controlFlow.switch.property")}
+            </Label>
+            <Input
+              id="switch-property"
+              className="h-7 text-xs"
+              value={String(node.parameters?.property ?? "")}
+              onChange={(event) => onParamChange("property", event.target.value)}
+              placeholder={t("processing.modelBuilder.controlFlow.switch.propertyPlaceholder")}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="switch-operator" className="text-[11px]">
+              {t("processing.modelBuilder.controlFlow.switch.operator")}
+            </Label>
+            <Select
+              id="switch-operator"
+              className="h-7 w-full text-xs"
+              value={String(node.parameters?.operator || "==")}
+              onChange={(event) => onParamChange("operator", event.target.value)}
+            >
+              <option value="==">{t("processing.modelBuilder.controlFlow.switch.opEqual")}</option>
+              <option value="!=">
+                {t("processing.modelBuilder.controlFlow.switch.opNotEqual")}
+              </option>
+              <option value="<">{t("processing.modelBuilder.controlFlow.switch.opLess")}</option>
+              <option value="<=">
+                {t("processing.modelBuilder.controlFlow.switch.opLessOrEqual")}
+              </option>
+              <option value=">">{t("processing.modelBuilder.controlFlow.switch.opGreater")}</option>
+              <option value=">=">
+                {t("processing.modelBuilder.controlFlow.switch.opGreaterOrEqual")}
+              </option>
+              <option value="contains">
+                {t("processing.modelBuilder.controlFlow.switch.opContains")}
+              </option>
+              <option value="starts_with">
+                {t("processing.modelBuilder.controlFlow.switch.opStartsWith")}
+              </option>
+              <option value="ends_with">
+                {t("processing.modelBuilder.controlFlow.switch.opEndsWith")}
+              </option>
+              <option value="is_empty">
+                {t("processing.modelBuilder.controlFlow.switch.opIsEmpty")}
+              </option>
+              <option value="not_empty">
+                {t("processing.modelBuilder.controlFlow.switch.opNotEmpty")}
+              </option>
+              <option value="is_null">
+                {t("processing.modelBuilder.controlFlow.switch.opIsNull")}
+              </option>
+              <option value="not_null">
+                {t("processing.modelBuilder.controlFlow.switch.opNotNull")}
+              </option>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="switch-value" className="text-[11px]">
+              {t("processing.modelBuilder.controlFlow.switch.value")}
+            </Label>
+            <Input
+              id="switch-value"
+              className="h-7 text-xs"
+              value={String(node.parameters?.value ?? "")}
+              onChange={(event) => onParamChange("value", event.target.value)}
+              placeholder={t("processing.modelBuilder.controlFlow.switch.valuePlaceholder")}
+            />
+          </div>
+        </div>
+      )}
+
+      {(node.kind === "iterate-features" || node.kind === "iterate-rasters") && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            {node.kind === "iterate-features"
+              ? t("processing.modelBuilder.controlFlow.iterate.featuresDescription")
+              : t("processing.modelBuilder.controlFlow.iterate.rastersDescription")}
+          </p>
+          <div className="space-y-1">
+            <Label htmlFor="iter-max" className="text-[11px]">
+              {t("processing.modelBuilder.controlFlow.iterate.maxIterations")}
+            </Label>
+            <Input
+              id="iter-max"
+              type="number"
+              min={1}
+              step={1}
+              placeholder="1000"
+              value={
+                node.parameters?.maxIterations !== undefined
+                  ? String(node.parameters.maxIterations)
+                  : ""
+              }
+              onChange={(event) =>
+                onParamChange("maxIterations", parseMaxIterations(event.target.value))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between pt-1">
+            <Label htmlFor="iter-stop-on-error" className="text-[11px]">
+              {t("processing.modelBuilder.controlFlow.iterate.stopOnError")}
+            </Label>
+            <input
+              id="iter-stop-on-error"
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              checked={node.parameters?.stopOnError !== false}
+              onChange={(event) => onParamChange("stopOnError", event.target.checked)}
+            />
+          </div>
+        </div>
+      )}
+
+      {node.kind === "collect-results" && (
+        <div className="space-y-1">
+          <p className="text-[11px] text-muted-foreground">
+            {t("processing.modelBuilder.controlFlow.collectDescription")}
+          </p>
+        </div>
+      )}
+
+      {node.kind === "conditional-merge" && (
+        <div className="space-y-1">
+          <p className="text-[11px] text-muted-foreground">
+            {t("processing.modelBuilder.controlFlow.mergeDescription")}
+          </p>
         </div>
       )}
 
@@ -2538,10 +3039,20 @@ async function executeModelTool({
 
   const layerInputs: Record<string, WhiteboxLayerInput> = {};
   for (const [portId, value] of Object.entries(inputs)) {
-    layerInputs[portId] =
-      value.kind === "vector"
-        ? { name: portId, kind: "vector_in", geojson: value.geojson }
-        : { name: portId, kind: "raster_in", bytes: value.bytes };
+    if (value.kind === "vector") {
+      layerInputs[portId] = { name: portId, kind: "vector_in", geojson: value.geojson };
+    } else if (value.kind === "raster") {
+      layerInputs[portId] = { name: portId, kind: "raster_in", bytes: value.bytes };
+    } else {
+      // A raster collection, number or string has no Whitebox input form;
+      // say so here rather than fail later as a missing input.
+      throw new Error(
+        t("processing.modelBuilder.portCannotTake", {
+          port: portLabel(t, portId),
+          kind: value.kind,
+        }),
+      );
+    }
   }
   const job = await runWhiteboxToolWasm({
     tool_id: descriptor.toolId,

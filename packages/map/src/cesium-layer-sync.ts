@@ -2,7 +2,10 @@ import {
   cesiumKmlSource,
   isCesiumKmlLayer,
   installCogTilerDatumShift,
+  i3sGroundOffset,
+  visibleI3sBuildingSublayers,
   withJpegTablesPatch,
+  type I3sBuildingState,
 } from "@geolibre/core";
 import { bindDocumentOpacity } from "./cesium-document-opacity";
 import { imageryColorAdjustments } from "./raster-color-adjustments";
@@ -13,7 +16,9 @@ import {
   compileLayerFilters,
   czmlSource,
   DEFAULT_LAYER_STYLE,
+  extrusionBaseValue,
   extrusionColorValue,
+  extrusionFloorHeightValue,
   geojsonHasZCoordinates,
   getCesiumIonToken,
   isCzmlLayer,
@@ -22,6 +27,7 @@ import {
   ruleBasedVisibilityFilter,
   transformGeojsonElevation,
   resolveProjectHeaderReferences,
+  resolveLayerTileAddress,
   useAppStore,
   type GeoLibreLayer,
   type LayerStyle,
@@ -168,6 +174,13 @@ const ZOOM_TO_LAYER_SECONDS = 0.8;
  * bounds in the store anyway.
  */
 const FLY_TO_KINDS = new Set<EntryKind>(["imagery", "geojson", "kml", "czml", "3dtiles"]);
+
+/** A tileset with a bounding sphere wider than this (metres) is framed at street level. */
+const LARGE_TILESET_RADIUS_M = 20_000;
+/** Above this radius (metres) a tileset is global, not regional, and is framed whole. */
+const REGIONAL_TILESET_MAX_RADIUS_M = 1_000_000;
+/** The camera distance (metres) for framing a large tileset's centre. */
+const LARGE_TILESET_VIEW_RANGE_M = 1_200;
 
 /** The subset of a Cesium `Event` the camera watch needs. */
 interface CameraEvent {
@@ -767,6 +780,50 @@ function i3sTilesets(provider: Partial<I3SDataProvider>): Cesium3DTileset[] {
   return tilesets;
 }
 
+/** The parts of Cesium's `I3SSublayer` the Building visibility walk uses. */
+interface I3sSublayerLike {
+  data?: { id?: unknown; modelName?: unknown };
+  sublayers?: I3sSublayerLike[];
+  visibility: boolean;
+}
+
+/**
+ * Show the Building Scene Layer sublayers the layer's Building settings pick.
+ *
+ * Cesium's `I3SDataProvider` loads every sublayer of a Building Scene Layer and
+ * showed them all at once, the Overview shell over all of the Full Model's
+ * categories. This applies the same choice the 2D overlay draws
+ * (`metadata.i3sBuilding`, set in the Style panel's Building section); a layer
+ * without that state (never opened on the 2D map) shows its Overview, the
+ * same default as there. A provider with no sublayers is left alone.
+ *
+ * @param provider The layer's I3S provider.
+ * @param layer The store layer.
+ */
+export function applyI3sBuildingVisibility(provider: I3SDataProvider, layer: GeoLibreLayer): void {
+  const top = (provider as unknown as { sublayers?: I3sSublayerLike[] }).sublayers;
+  if (!top?.length) return;
+  const state = layer.metadata?.i3sBuilding as I3sBuildingState | undefined;
+  let visible: Set<number>;
+  if (state) {
+    visible = new Set(visibleI3sBuildingSublayers(state));
+  } else {
+    const overview = top.find((sub) => sub.data?.modelName === "Overview");
+    if (!overview) return;
+    visible = new Set([Number(overview.data?.id)]);
+  }
+  const walk = (subs: I3sSublayerLike[]): boolean => {
+    let any = false;
+    for (const sub of subs) {
+      const show = sub.sublayers?.length ? walk(sub.sublayers) : visible.has(Number(sub.data?.id));
+      if (sub.visibility !== show) sub.visibility = show;
+      any ||= show;
+    }
+    return any;
+  };
+  walk(top);
+}
+
 /** Whether a tileset (or every tileset of an I3S provider) has loaded its tiles. */
 function tilesLoaded(handle: Cesium3DTileset | I3SDataProvider): boolean {
   const provider = handle as Partial<I3SDataProvider>;
@@ -1225,8 +1282,11 @@ function tileTemplateImageryProvider(
   layer: GeoLibreLayer,
   makeResource: ImageryResourceFactory,
 ): ImageryProvider {
-  const url = firstTile(layer);
-  if (!url) throw new Error("no tile URL template");
+  const rawUrl = firstTile(layer);
+  if (!rawUrl) throw new Error("no tile URL template");
+  const addressed = resolveLayerTileAddress(layer, [rawUrl]);
+  const url = addressed.tiles[0] ?? rawUrl;
+  const tileScheme = addressed.scheme;
   const maxLevel = Number(layer.source.maxzoom);
   const minLevel = Number(layer.source.minzoom);
   const scheme = protocolScheme(url);
@@ -1252,7 +1312,7 @@ function tileTemplateImageryProvider(
       throw new Error(`no MapLibre protocol handler registered for "${scheme}://"`);
     return new ProtocolImageryProvider(Cesium, {
       template: url,
-      scheme: layer.source.scheme === "tms" ? "tms" : "xyz",
+      scheme: tileScheme,
       tileWidth,
       tileHeight: tileWidth,
       rectangle,
@@ -1262,7 +1322,7 @@ function tileTemplateImageryProvider(
     });
   }
   let finalUrl = url;
-  if (layer.source.scheme === "tms") {
+  if (tileScheme === "tms") {
     finalUrl = finalUrl.replace(/\{y\}/g, "{-y}");
   }
   const resource = makeResource(finalUrl);
@@ -1386,14 +1446,16 @@ function ringTopAltitude(feature: Feature | null): number {
 }
 
 /**
- * The extrusion's optional per-feature height and colour expressions,
- * compiled once per layer; either is undefined when unset or invalid.
+ * The extrusion's optional per-feature height, base and colour expressions,
+ * compiled once per layer; each is undefined when unset or invalid.
  */
 function compileExtrusionEvaluators(
   style: LayerStyle,
   extColorVal: ReturnType<typeof extrusionColorValue>,
+  baseVal: ReturnType<typeof extrusionBaseValue>,
 ): {
   heightEvaluator: ((f: Feature) => unknown) | undefined;
+  baseEvaluator: ((f: Feature) => unknown) | undefined;
   colorEvaluator: ((f: Feature) => unknown) | undefined;
 } {
   let heightEvaluator: ((f: Feature) => unknown) | undefined;
@@ -1417,13 +1479,21 @@ function compileExtrusionEvaluators(
     });
     if (res.ok && res.evaluate) colorEvaluator = res.evaluate;
   }
-  return { heightEvaluator, colorEvaluator };
+
+  let baseEvaluator: ((f: Feature) => unknown) | undefined;
+  if (Array.isArray(baseVal)) {
+    const res = compileFeatureExpression(JSON.stringify(baseVal), { expectedType: "number" });
+    if (res.ok && res.evaluate) baseEvaluator = res.evaluate;
+  }
+  return { heightEvaluator, baseEvaluator, colorEvaluator };
 }
 
 /**
  * Extrude every polygon entity: its roof height from the height expression
- * or property, its colour from the colour expression or the flat extrusion
- * colour, both faded by the extrusion opacity.
+ * or property, its floor from the base (flat, or per feature from the base
+ * property or expression), its colour from the colour expression or the flat
+ * extrusion colour, faded by the extrusion opacity. As on the 2D map the
+ * height is the roof's altitude, not a thickness above the base.
  */
 function applyGeoJsonExtrusion(
   Cesium: CesiumNs,
@@ -1439,13 +1509,23 @@ function applyGeoJsonExtrusion(
   const heightScale = Number.isFinite(style.extrusionHeightScale)
     ? (style.extrusionHeightScale as number)
     : 1;
-  const base = Number.isFinite(style.extrusionBase) ? (style.extrusionBase as number) : 0;
+  const baseVal = extrusionBaseValue(style);
+  // The flat base, which is also the fallback when a base expression throws
+  // for a feature (as a throwing height expression falls back to the
+  // property): with a base property it is the property's offset.
+  const flatBaseValue = typeof baseVal === "number" ? baseVal : style.extrusionBase;
+  const flatBase = Number.isFinite(flatBaseValue) ? Math.max(0, flatBaseValue as number) : 0;
+  const floorHeight = extrusionFloorHeightValue(style);
   const extColorVal = extrusionColorValue(style);
   const extColorStr =
     typeof extColorVal === "string"
       ? extColorVal
       : style.extrusionColor || style.fillColor || "#3b82f6";
-  const { heightEvaluator, colorEvaluator } = compileExtrusionEvaluators(style, extColorVal);
+  const { heightEvaluator, baseEvaluator, colorEvaluator } = compileExtrusionEvaluators(
+    style,
+    extColorVal,
+    baseVal,
+  );
 
   // Parsed once: a full 3D-buildings layer would otherwise re-parse the
   // same CSS string per polygon. withAlpha() below returns a fresh Color.
@@ -1455,15 +1535,27 @@ function applyGeoJsonExtrusion(
     const index = entityFeatureIndex(viewer, entity);
     const feat = Number.isInteger(index) && features ? features[index] : null;
 
-    const height = extrusionFeatureHeight(viewer, entity, feat, heightEvaluator, heightProp);
+    const top = extrusionFeatureHeight(
+      viewer,
+      entity,
+      feat,
+      heightEvaluator,
+      heightProp,
+      heightScale,
+    );
+    const base = extrusionFeatureBase(feat, baseEvaluator, flatBase);
+    // A floor height makes the roof relative to this feature's base, as
+    // `extrusionHeightValue` does on the 2D map.
+    const roof = floorHeight > 0 ? base + floorHeight : top;
 
     // Never below the base: a negative height property or expression would
     // otherwise put the roof under the floor.
-    const relativeTop = Math.max(base, height * heightScale + base);
+    const relativeTop = Math.max(base, roof);
     // With perPositionHeight Cesium takes each vertex's own height as the
-    // base but reads extrudedHeight as an absolute altitude, so lift the
-    // roof by the ring's highest vertex; otherwise it would extrude down
-    // to `relativeTop` metres above the ellipsoid.
+    // base (so neither a flat nor a data-driven base moves the floor of a
+    // polygon with Z coordinates) but reads extrudedHeight as an absolute
+    // altitude, so lift the roof by the ring's highest vertex; otherwise it
+    // would extrude down to `relativeTop` metres above the ellipsoid.
     const extrudedHeight = perPositionHeight(entity.polygon)
       ? ringTopAltitude(feat) + relativeTop
       : relativeTop;
@@ -1481,9 +1573,11 @@ function applyGeoJsonExtrusion(
 }
 
 /**
- * A polygon entity's raw extrusion height (before scale and base): the height
- * expression, else the feature's height property, else the entity's own
- * property when the entity maps to no feature; 0 when none is a number.
+ * A polygon entity's roof altitude in metres, as `extrusionHeightValue` gives
+ * it on the 2D map: the height expression's value as written, else the
+ * feature's height property (or, for an entity that maps to no feature, the
+ * entity's own property) times `heightScale`; 0 when none is a number. An
+ * expression that throws falls back to the scaled property.
  */
 function extrusionFeatureHeight(
   viewer: CesiumWidget,
@@ -1491,11 +1585,14 @@ function extrusionFeatureHeight(
   feat: Feature | null,
   heightEvaluator: ((f: Feature) => unknown) | undefined,
   heightProp: string,
+  heightScale: number,
 ): number {
   let rawHeight: unknown;
+  let scale = heightScale;
   if (feat && heightEvaluator) {
     try {
       rawHeight = heightEvaluator(feat);
+      scale = 1;
     } catch {
       rawHeight = feat.properties?.[heightProp];
     }
@@ -1509,7 +1606,28 @@ function extrusionFeatureHeight(
 
   const num =
     typeof rawHeight === "number" && Number.isFinite(rawHeight) ? rawHeight : Number(rawHeight);
-  return Number.isFinite(num) ? num : 0;
+  return Number.isFinite(num) ? num * scale : 0;
+}
+
+/**
+ * A polygon entity's extrusion base in metres: the per-feature base
+ * expression's value (clamped to the ground, as MapLibre clamps
+ * `fill-extrusion-base`), else the flat base, which is also the fallback when
+ * the expression throws for this feature.
+ */
+function extrusionFeatureBase(
+  feat: Feature | null,
+  baseEvaluator: ((f: Feature) => unknown) | undefined,
+  flatBase: number,
+): number {
+  if (!feat || !baseEvaluator) return flatBase;
+  let value: number;
+  try {
+    value = Number(baseEvaluator(feat));
+  } catch {
+    return flatBase;
+  }
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 /** A polygon entity's extrusion colour: the colour expression's, else `baseColor`. */
@@ -2110,6 +2228,7 @@ export class CesiumLayerSync {
       });
       return true;
     }
+    if (this.flyToLargeTilesetCentre(entry)) return true;
     void Promise.resolve(
       viewer.flyTo(handle as ImageryLayer | DataSource | Cesium3DTileset, {
         duration: ZOOM_TO_LAYER_SECONDS,
@@ -2122,6 +2241,48 @@ export class CesiumLayerSync {
         if (completed) this.deps.onFlyToComplete?.();
       })
       .catch(() => this.deps.onFlyToComplete?.());
+    return true;
+  }
+
+  /**
+   * Frame a tileset that spans a region at its centre, from street level.
+   *
+   * `Viewer.flyTo` frames a tileset's whole bounding sphere. For a national
+   * building tileset such as 3D BAG (all of the Netherlands) that is a view
+   * from about 100 km up, where its level of detail loads no buildings, so the
+   * layer looked as if it had not drawn. A tileset wider than
+   * {@link LARGE_TILESET_RADIUS_M} is framed at the ground point under its
+   * centre instead, as the 2D map's fly-to does. (The sphere's own centre lies
+   * kilometres underground for a region that wide, so it cannot be the target.)
+   *
+   * @param entry The entry being framed.
+   * @returns True when it started the flight.
+   */
+  private flyToLargeTilesetCentre(entry: LayerEntry): boolean {
+    if (entry.kind !== "3dtiles") return false;
+    const sphere = (entry.handle as Partial<Cesium3DTileset> | undefined)?.boundingSphere;
+    // A global tileset (a sphere the size of the Earth, centred near its core)
+    // has no meaningful ground point; it keeps the whole-tileset framing.
+    if (
+      !sphere ||
+      !(sphere.radius > LARGE_TILESET_RADIUS_M) ||
+      sphere.radius > REGIONAL_TILESET_MAX_RADIUS_M
+    ) {
+      return false;
+    }
+    const { Cesium, viewer } = this;
+    const centre = Cesium.Cartographic.fromCartesian(sphere.center);
+    if (!centre) return false;
+    const ground = Cesium.Cartesian3.fromRadians(centre.longitude, centre.latitude, 0);
+    viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(ground, 1), {
+      duration: ZOOM_TO_LAYER_SECONDS,
+      offset: new Cesium.HeadingPitchRange(
+        0,
+        Cesium.Math.toRadians(-45),
+        LARGE_TILESET_VIEW_RANGE_M,
+      ),
+      complete: () => this.deps.onFlyToComplete?.(),
+    });
     return true;
   }
 
@@ -2226,6 +2387,26 @@ export class CesiumLayerSync {
   ) {}
 
   private unsubscribeEnvironment: (() => void) | null = null;
+  private unwatchTerrain: (() => void) | null = null;
+
+  /**
+   * Re-ground the I3S scene layers whenever the globe's terrain provider
+   * changes (#3374). Their offset depends on whether there is terrain, and
+   * switching it (including World Terrain arriving asynchronously after the
+   * first sync) changes no layer record, so the store-driven sync never sees it.
+   */
+  private watchTerrain(): void {
+    if (this.unwatchTerrain) return;
+    const scene = this.viewer.scene as {
+      terrainProviderChanged?: { addEventListener(listener: () => void): unknown };
+    };
+    const remove = scene.terrainProviderChanged?.addEventListener(() => {
+      for (const entry of this.entries.values()) {
+        if (entry.kind === "3dtiles" && isI3sLayer(entry.layer)) this.applyTilesetAltitude(entry);
+      }
+    });
+    this.unwatchTerrain = typeof remove === "function" ? (remove as () => void) : () => {};
+  }
 
   /**
    * Rebuild the imagery and 3D Tiles entries whose `${NAME}` request headers
@@ -2305,6 +2486,7 @@ export class CesiumLayerSync {
     this.restoreHighlight();
     this.currentLayers = layers;
     this.watchEnvironment();
+    this.watchTerrain();
     for (const layer of layers) {
       if (Array.isArray(layer.timeFilter) && layer.timeFilter.length > 0) {
         const d = extractTimeFilterDate(layer.timeFilter);
@@ -2437,6 +2619,8 @@ export class CesiumLayerSync {
     this.entries.clear();
     this.unsubscribeEnvironment?.();
     this.unsubscribeEnvironment = null;
+    this.unwatchTerrain?.();
+    this.unwatchTerrain = null;
     this.removeDrapeLayer();
     this.drape?.destroy();
     this.drape = undefined;
@@ -3650,7 +3834,7 @@ export class CesiumLayerSync {
    */
   private applyTilesetAltitude(entry: LayerEntry): void {
     const raw = Number(entry.layer.source.altitudeOffset);
-    const offset = Number.isFinite(raw) ? raw : 0;
+    const offset = (Number.isFinite(raw) ? raw : 0) + this.i3sEntryGroundOffset(entry);
     if ((entry.appliedAltitude ?? 0) === offset) return;
     const { Cesium } = this;
     const tilesets = this.entryTilesets(entry);
@@ -3674,6 +3858,35 @@ export class CesiumLayerSync {
     }
     entry.appliedAltitude = offset;
     this.viewer.scene.requestRender();
+  }
+
+  /**
+   * How far to lower an I3S scene layer onto a globe without terrain (#3374).
+   *
+   * A scene layer stores absolute elevations (Building E in Redlands sits at
+   * 383 to 445 m, NAVD 88). On the default globe, the bare ellipsoid, the
+   * ground is at 0 m, so the building floated out of sight above the camera.
+   * As on the 2D map, a layer whose geometry starts above 0 m is lowered onto
+   * the ground; with terrain the absolute heights are kept.
+   *
+   * @param entry The 3D Tiles entry.
+   * @returns The offset in metres, or 0.
+   */
+  private i3sEntryGroundOffset(entry: LayerEntry): number {
+    if (!isI3sLayer(entry.layer) || !entry.handle) return 0;
+    const Ellipsoid = this.Cesium.EllipsoidTerrainProvider;
+    if (!Ellipsoid || !(this.viewer.terrainProvider instanceof Ellipsoid)) return 0;
+    const data = (entry.handle as Partial<I3SDataProvider>).data as
+      | { fullExtent?: { zmin?: unknown } }
+      | undefined;
+    // The provider's own document first; the probed value when it has none.
+    const zmin = data?.fullExtent?.zmin;
+    return i3sGroundOffset(
+      typeof zmin === "number" && Number.isFinite(zmin)
+        ? zmin
+        : entry.layer.metadata?.i3sBaseElevation,
+      false,
+    );
   }
 
   /**
@@ -3723,6 +3936,7 @@ export class CesiumLayerSync {
       this.applyGeoJsonFilter(entry);
     } else {
       (handle as Cesium3DTileset | I3SDataProvider).show = layer.visible;
+      if (isI3sLayer(layer)) applyI3sBuildingVisibility(handle as I3SDataProvider, layer);
       this.applyTilesetAltitude(entry);
       this.applyTilesetStyle(entry);
     }

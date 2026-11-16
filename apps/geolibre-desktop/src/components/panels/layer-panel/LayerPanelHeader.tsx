@@ -63,14 +63,16 @@ export function LayerPanelHeader({
   const { t } = useTranslation();
   const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
   const [compactLayerList, setCompactLayerList] = useCompactLayerList();
+  // The header row wraps (flex-wrap) instead of overflowing, since the panel
+  // can be resized down to MIN_SIDE_PANEL_WIDTH (usePanelResize.ts).
   return (
-    <div className="flex items-center justify-between border-b px-3 py-1.5">
+    <div className="flex flex-wrap items-center justify-between gap-x-2 border-b px-3 py-1.5">
       {/* Fork: the accent bar sits on the panel edge (-ms-3 cancels the row's
           px-3), so it costs the button row no width. */}
       <span className="-ms-3 min-w-0 truncate border-s-[3px] border-primary ps-[9px] text-xs font-semibold uppercase tracking-wide text-primary">
         {t("sharedRail.layers")}
       </span>
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="ms-auto flex flex-wrap items-center justify-end gap-0.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button

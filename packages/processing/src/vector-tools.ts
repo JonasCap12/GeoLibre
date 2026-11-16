@@ -39,11 +39,19 @@ import {
   decodePolylineDetailed,
   earthLengthToBody,
   encodePolyline,
-  getActiveBodyRadiusRatio,
+  getActiveEllipsoid,
   horizontalBbox,
   layerJoinKey,
   type GeoLibreLayer,
 } from "@geolibre/core/worker-safe";
+import {
+  centralAngle,
+  geodesicDistance,
+  geodesicRadiusBounds,
+  geodesicRingArea,
+  isLonLat,
+  withinGeodesicDistance,
+} from "@geolibre/core/geodesic";
 import type { GeometryFamily, ProcessingAlgorithm, ProcessingContext } from "./types";
 
 /** Upper bound on input×overlay pairs for the main-thread pairwise loops. */
@@ -1036,6 +1044,256 @@ export const spatialJoinTool: ProcessingAlgorithm = {
     }
     ctx.log(`Spatial join: produced ${results.length} feature(s)`);
     ctx.addResultLayer?.("Spatial join", featureCollection(results));
+  },
+};
+
+/** Statistics Summarize within adds for its optional numeric field. */
+const SUMMARIZE_STATS = ["sum", "mean", "min", "max"] as const;
+
+/**
+ * Area in square metres of a Polygon or MultiPolygon on the active body: each
+ * outer ring minus its holes, measured geodesically like the Measure tool.
+ */
+function polygonAreaM2(geometry: Polygon | MultiPolygon): number {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  let total = 0;
+  for (const rings of polygons) {
+    rings.forEach((ring, index) => {
+      total += index === 0 ? geodesicRingArea(ring) : -geodesicRingArea(ring);
+    });
+  }
+  return Math.max(0, total);
+}
+
+/** True when two `[west, south, east, north]` boxes overlap or touch; a missing box never does. */
+function bboxesOverlap(a: BBox | null, b: BBox | null): boolean {
+  if (!a || !b) return false;
+  return a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+}
+
+/**
+ * Upper bound on polygon-to-polygon clips in one Summarize within run. Each is a
+ * full polygon-clipping pass, which costs milliseconds on detailed parcels, so
+ * the pair cap alone does not bound the runtime.
+ */
+const MAX_SUMMARIZE_CLIPS = 20_000;
+
+/**
+ * Area of the union of the overlap pieces inside one polygon, so two pieces of
+ * the summarized layer that overlap each other are not counted twice. Returns
+ * null when Turf cannot union them: summing the pieces instead would double
+ * count exactly the overlaps the union exists to remove.
+ */
+function coveredAreaM2(pieces: Feature<Polygon | MultiPolygon>[]): number | null {
+  if (!pieces.length) return 0;
+  if (pieces.length === 1) return polygonAreaM2(pieces[0].geometry);
+  try {
+    const merged = union(featureCollection(pieces));
+    return merged ? polygonAreaM2(merged.geometry as Polygon | MultiPolygon) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Summarize within: for each polygon, count the features of another layer that
+ * fall in it, reduce one of their numeric fields, and, when that layer has
+ * polygons, report how much of the polygon they cover.
+ *
+ * Points and lines count when they intersect the polygon (a point on a shared
+ * edge counts for both sides). Polygons count only when they overlap it by a
+ * positive area at least `min_overlap_pct` of the polygon, so a neighbour that
+ * only touches along an edge, or a digitizing sliver, is left out of the count,
+ * the statistics and the covered area alike.
+ */
+export const summarizeWithinTool: ProcessingAlgorithm = {
+  id: "summarize-within",
+  name: "Summarize within",
+  description:
+    "Count the features of another layer that intersect each polygon, summarize a numeric field, and measure how much of each polygon they cover",
+  group: "Join",
+  parameters: [
+    {
+      id: "layer",
+      label: "Polygon layer",
+      type: "layer",
+      required: true,
+      geometryFilter: ["polygon"],
+    },
+    { id: "overlay", label: "Layer to summarize", type: "layer", required: true },
+    {
+      id: "field",
+      label: "Numeric field",
+      type: "field",
+      fieldSource: "overlay",
+      description: "Optional. Adds the sum, mean, min and max of this field for each polygon.",
+    },
+    {
+      id: "min_overlap_pct",
+      label: "Ignore overlaps smaller than (%)",
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 100,
+      step: 0.1,
+      description:
+        "When the layer to summarize has polygons, skip any that cover less than this share of a polygon, such as slivers along shared edges.",
+    },
+  ],
+  run: (ctx) => {
+    const input = requireFeatures(ctx, "layer");
+    if (!input) return;
+    const overlayLayer = getLayer(ctx, "overlay");
+    if (!overlayLayer) {
+      ctx.log('Error: parameter "overlay" has no layer selected');
+      return;
+    }
+    if (ctx.parameters.layer === ctx.parameters.overlay) {
+      // Not an error (Spatial join allows it too), but every polygon then
+      // matches itself and reads as fully covered.
+      ctx.log(
+        "Warning: both inputs are the same layer, so each polygon counts itself and shows 100% coverage",
+      );
+    }
+    const targets = polygonFeatures(input);
+    if (!targets.length) {
+      ctx.log("Error: the polygon layer has no polygon features");
+      return;
+    }
+    const nonPolygons = input.features.length - targets.length;
+    if (nonPolygons > 0) {
+      ctx.log(
+        `Note: ${nonPolygons} non-polygon feature(s) in the polygon layer were skipped and are not in the result`,
+      );
+    }
+    const field = typeof ctx.parameters.field === "string" ? ctx.parameters.field.trim() : "";
+    const minPct = numberParam(ctx, "min_overlap_pct", 0);
+    if (minPct < 0 || minPct > 100) {
+      ctx.log("Error: the minimum overlap must be between 0 and 100%");
+      return;
+    }
+    const overlayFeatures = (overlayLayer.geojson?.features ?? []).filter((f) => f.geometry);
+    if (!overlayFeatures.length) {
+      ctx.log("Warning: the layer to summarize has no features, so every count is 0");
+    }
+    if (
+      field &&
+      overlayFeatures.length &&
+      !overlayFeatures.some((f) => f.properties && field in f.properties)
+    ) {
+      ctx.log(`Warning: no feature in the layer to summarize has a field "${field}"`);
+    }
+    // Pairwise on the main thread (or a worker); cap it like Spatial join.
+    const pairs = targets.length * overlayFeatures.length;
+    if (pairs > MAX_CLIENT_PAIRS) {
+      ctx.log(
+        `Error: summarize within needs ${pairs} comparisons (limit ${MAX_CLIENT_PAIRS}); filter or clip the layers first`,
+      );
+      return;
+    }
+    // Turf returns a feature's stored bbox member unless told to recompute, and
+    // a stale one from the source file would hide real matches.
+    const boundsOf = (f: Feature) => horizontalBbox(bbox(f, { recompute: true }));
+    const overlayBoxes = overlayFeatures.map(boundsOf);
+    const isPolygon = overlayFeatures.map((f) => isFamily(f.geometry, "polygon"));
+    const hasPolygons = isPolygon.some(Boolean);
+    const candidates = targets.map((target) => {
+      const box = boundsOf(target);
+      return overlayFeatures.flatMap((_, i) => (bboxesOverlap(box, overlayBoxes[i]) ? [i] : []));
+    });
+    const clips = candidates.reduce((n, list) => n + list.filter((i) => isPolygon[i]).length, 0);
+    if (clips > MAX_SUMMARIZE_CLIPS) {
+      ctx.log(
+        `Error: summarize within needs ${clips} polygon overlaps (limit ${MAX_SUMMARIZE_CLIPS}); filter or clip the layers first`,
+      );
+      return;
+    }
+
+    const statKeys = field ? SUMMARIZE_STATS.map((stat) => `${stat}_${field}`) : [];
+    const outputKeys = [
+      "count",
+      ...statKeys,
+      ...(hasPolygons ? ["overlap_km2", "overlap_pct"] : []),
+    ];
+    const existing = new Set(targets.flatMap((t) => Object.keys(t.properties ?? {})));
+    const clashes = outputKeys.filter((key) => existing.has(key));
+    if (clashes.length) {
+      ctx.log(`Warning: replacing the existing field(s) ${clashes.join(", ")}`);
+    }
+
+    let slivers = 0;
+    let failedClips = 0;
+    let matched = 0;
+    const results: Feature[] = targets.map((target, targetIndex) => {
+      const targetArea = hasPolygons ? polygonAreaM2(target.geometry) : 0;
+      let count = 0;
+      const values: number[] = [];
+      const pieces: Feature<Polygon | MultiPolygon>[] = [];
+      for (const index of candidates[targetIndex]) {
+        const feature = overlayFeatures[index];
+        if (isPolygon[index]) {
+          let piece: Feature<Polygon | MultiPolygon> | null;
+          try {
+            piece = intersect(
+              featureCollection([target, feature as Feature<Polygon | MultiPolygon>]),
+            ) as Feature<Polygon | MultiPolygon> | null;
+          } catch {
+            // Invalid or self-intersecting geometry; reported once below.
+            failedClips += 1;
+            continue;
+          }
+          const pieceArea = piece ? polygonAreaM2(piece.geometry) : 0;
+          if (!piece || pieceArea <= 0) continue;
+          if (targetArea > 0 && (pieceArea / targetArea) * 100 < minPct) {
+            slivers += 1;
+            continue;
+          }
+          pieces.push(piece);
+        } else if (!matchesPredicate(feature, target, "intersects")) {
+          continue;
+        }
+        count += 1;
+        if (field) {
+          const value = toNumeric(feature.properties?.[field]);
+          if (value !== null) values.push(value);
+        }
+      }
+
+      if (count > 0) matched += 1;
+      const properties: Record<string, unknown> = { ...(target.properties ?? {}), count };
+      if (field) {
+        SUMMARIZE_STATS.forEach((stat, i) => {
+          properties[statKeys[i]] = computeStat(values, stat);
+        });
+      }
+      if (hasPolygons) {
+        const covered = coveredAreaM2(pieces);
+        if (covered === null) {
+          ctx.log(
+            `Warning: could not merge the overlaps in polygon ${targetIndex + 1}, so its coverage is left empty`,
+          );
+        }
+        // Rounded so the table reads cleanly: km² to 6 places (about 1 m²), the
+        // share to 2 places. Geodesic edges leave noise past those digits.
+        properties.overlap_km2 = covered === null ? null : Math.round(covered) / 1e6;
+        properties.overlap_pct =
+          covered !== null && targetArea > 0
+            ? Math.round(Math.min(100, (covered / targetArea) * 100) * 100) / 100
+            : null;
+      }
+      return { ...target, properties };
+    });
+
+    ctx.log(`Summarize within: ${matched} of ${results.length} polygon(s) contain features`);
+    if (slivers) {
+      ctx.log(`Summarize within: ignored ${slivers} overlap(s) below ${minPct}% of a polygon`);
+    }
+    if (failedClips) {
+      ctx.log(
+        `Warning: skipped ${failedClips} polygon pair(s) whose geometry could not be intersected; try Fix geometries first`,
+      );
+    }
+    ctx.addResultLayer?.("Summarize within", featureCollection(results));
   },
 };
 
@@ -2608,6 +2866,12 @@ export const voronoiTool: ProcessingAlgorithm = {
 /** Linear/angular units shared by the sector and proximity tools. */
 const LINEAR_UNITS = new Set(["kilometers", "meters", "miles"]);
 type LinearUnit = "kilometers" | "meters" | "miles";
+/** Metres in one of each {@link LINEAR_UNITS} unit (the international mile). */
+const METERS_PER_LINEAR_UNIT: Record<LinearUnit, number> = {
+  kilometers: 1000,
+  meters: 1,
+  miles: 1609.344,
+};
 
 /**
  * Read a feature property as a finite number, or null when it is missing or
@@ -2671,11 +2935,22 @@ function collectTimedPoints(
   fc: FeatureCollection,
   timeField: string,
   idField: string | undefined,
-): { groups: Map<string, TimedPoint[]>; skipped: number; skippedNoId: number } {
+): {
+  groups: Map<string, TimedPoint[]>;
+  skipped: number;
+  skippedNoId: number;
+  skippedPosition: number;
+} {
   const groups = new Map<string, TimedPoint[]>();
   let skipped = 0;
   let skippedNoId = 0;
+  let skippedPosition = 0;
   for (const point of collectPoints(fc)) {
+    // A latitude beyond ±90° has no geodesic distance (GeographicLib gives NaN).
+    if (!isLonLat(point.geometry.coordinates)) {
+      skippedPosition += 1;
+      continue;
+    }
     const time = parseTimestamp(point.properties?.[timeField]);
     if (time === null) {
       skipped += 1;
@@ -2704,7 +2979,7 @@ function collectTimedPoints(
     else groups.set(key, [entry]);
   }
   for (const bucket of groups.values()) bucket.sort((a, b) => a.time - b.time);
-  return { groups, skipped, skippedNoId };
+  return { groups, skipped, skippedNoId, skippedPosition };
 }
 
 export const cellSectorsTool: ProcessingAlgorithm = {
@@ -2912,17 +3187,19 @@ export const trajectorySpeedTool: ProcessingAlgorithm = {
       ctx.log(`Error: unknown speed units '${speedUnits}'`);
       return;
     }
-    const { groups, skipped, skippedNoId } = collectTimedPoints(fc, timeField, idField);
+    const { groups, skipped, skippedNoId, skippedPosition } = collectTimedPoints(
+      fc,
+      timeField,
+      idField,
+    );
     const segments: Feature<LineString>[] = [];
-    // turf measures on Earth; rescale to this body's ground distance
-    // (GeoLibre#1128) so the derived speeds are correct off Earth too. Read the
-    // ratio once rather than per segment.
-    const bodyRatio = getActiveBodyRadiusRatio();
+    const ellipsoid = getActiveEllipsoid();
     for (const [key, pts] of groups) {
       for (let i = 1; i < pts.length; i += 1) {
         const a = pts[i - 1];
         const b = pts[i];
-        const meters = distance(a.coord, b.coord, { units: "meters" }) * bodyRatio;
+        // On the active body's ellipsoid, so speeds are correct off Earth too.
+        const meters = geodesicDistance(a.coord, b.coord, ellipsoid);
         const seconds = (b.time - a.time) / 1000;
         // Equal timestamps (the only non-positive gap after sorting) give an
         // undefined speed; emit the segment with null rather than Infinity.
@@ -2944,6 +3221,7 @@ export const trajectorySpeedTool: ProcessingAlgorithm = {
     }
     if (skipped) ctx.log(`Skipped ${skipped} point(s) with no parseable time`);
     if (skippedNoId) ctx.log(`Skipped ${skippedNoId} point(s) with no '${idField}' value`);
+    if (skippedPosition) ctx.log(`Skipped ${skippedPosition} point(s) with an invalid position`);
     if (!segments.length) {
       ctx.log("Error: need at least two timed fixes in a target to build a segment");
       return;
@@ -2962,9 +3240,11 @@ export const trajectorySpeedTool: ProcessingAlgorithm = {
 
 /**
  * Point cap for the stop scan. The scan re-anchors on every non-stop advance
- * (see the loop below), so its worst case is O(n²) Haversine calls on the UI
- * thread. 5,000 points bounds that to ~12.5M calls (~1-2 s) in the degenerate
- * case; the typical case is far cheaper because a formed stop jumps the anchor.
+ * (see the loop below), so its worst case is O(n²) distance checks on the UI
+ * thread. Each check is decided from a haversine bound and reaches the geodesic
+ * (about 1 µs) only near the threshold. 5,000 points bounds that to ~12.5M
+ * checks in the degenerate case; the typical case is far cheaper because a
+ * formed stop jumps the anchor.
  * Larger inputs get a clear "split the layer" error rather than a frozen tab.
  */
 const STOPS_MAX_POINTS = 5_000;
@@ -3048,7 +3328,11 @@ export const detectStopsTool: ProcessingAlgorithm = {
       return;
     }
     const minDurationMs = numberParam(ctx, "minDuration", 60) * 1000;
-    const { groups, skipped, skippedNoId } = collectTimedPoints(fc, timeField, idField);
+    const { groups, skipped, skippedNoId, skippedPosition } = collectTimedPoints(
+      fc,
+      timeField,
+      idField,
+    );
     let totalPoints = 0;
     for (const pts of groups.values()) totalPoints += pts.length;
     if (totalPoints === 0) {
@@ -3062,10 +3346,11 @@ export const detectStopsTool: ProcessingAlgorithm = {
       return;
     }
     const stops: Feature<Point>[] = [];
-    // Convert the threshold into turf's Earth-based units once, rather than
-    // converting every measured distance inside the O(n²) scan below
-    // (GeoLibre#1128). Equivalent comparison, no per-iteration ellipsoid lookup.
-    const maxTurfDistance = bodyLengthToEarth(maxDistance);
+    // Convert the threshold to metres once, rather than converting every
+    // measured distance inside the O(n²) scan below.
+    const maxMeters = maxDistance * METERS_PER_LINEAR_UNIT[distanceUnits as LinearUnit];
+    const ellipsoid = getActiveEllipsoid();
+    const bounds = geodesicRadiusBounds(ellipsoid);
     for (const [key, pts] of groups) {
       let i = 0;
       while (i < pts.length) {
@@ -3080,9 +3365,7 @@ export const detectStopsTool: ProcessingAlgorithm = {
         // absorbed into a single stop.
         while (
           j < pts.length &&
-          distance(pts[i].coord, pts[j].coord, {
-            units: distanceUnits as LinearUnit,
-          }) <= maxTurfDistance
+          withinGeodesicDistance(pts[i].coord, pts[j].coord, maxMeters, ellipsoid, bounds)
         ) {
           j += 1;
         }
@@ -3126,6 +3409,7 @@ export const detectStopsTool: ProcessingAlgorithm = {
     }
     if (skipped) ctx.log(`Skipped ${skipped} point(s) with no parseable time`);
     if (skippedNoId) ctx.log(`Skipped ${skippedNoId} point(s) with no '${idField}' value`);
+    if (skippedPosition) ctx.log(`Skipped ${skippedPosition} point(s) with an invalid position`);
     ctx.log(`Detect stops: found ${stops.length} stop(s) across ${groups.size} target(s)`);
     ctx.addResultLayer?.("Stops", featureCollection(stops));
   },
@@ -3133,8 +3417,9 @@ export const detectStopsTool: ProcessingAlgorithm = {
 
 /**
  * Worst-case pair cap for the space-time proximity scan. Each pair within the
- * time window costs one Haversine call on the UI thread, so this bounds the
- * absolute worst case (all points inside the window) to ~2M calls (~1s). Typical
+ * time window costs one distance check on the UI thread: a haversine bound, and
+ * the geodesic (about 1 µs) only near the threshold. This bounds the absolute
+ * worst case (all points inside the window) to ~2M checks. Typical
  * runs are far cheaper because the time-sorted loop breaks out once the gap is
  * exceeded; the cap only rejects layers whose worst case would freeze the tab.
  */
@@ -3245,7 +3530,13 @@ export const spaceTimeProximityTool: ProcessingAlgorithm = {
       [];
     let skipped = 0;
     let skippedNoId = 0;
+    let skippedPosition = 0;
     for (const point of collectPoints(fc)) {
+      // A latitude beyond ±90° has no geodesic distance (GeographicLib gives NaN).
+      if (!isLonLat(point.geometry.coordinates)) {
+        skippedPosition += 1;
+        continue;
+      }
       const time = parseTimestamp(point.properties?.[timeField]);
       if (time === null) {
         skipped += 1;
@@ -3297,21 +3588,23 @@ export const spaceTimeProximityTool: ProcessingAlgorithm = {
     // Sort by time so the inner loop can stop once the time gap is exceeded.
     timed.sort((a, b) => a.time - b.time);
     const pairs: Feature<LineString>[] = [];
-    // As in stop detection: convert the threshold into turf's Earth-based units
-    // once so the O(n²) candidate scan does no per-iteration conversion
-    // (GeoLibre#1128). Only the pairs that survive the test are converted back
-    // to this body's ground distance for the reported `distance` property.
-    const maxTurfDistance = bodyLengthToEarth(maxDistance);
+    // As in stop detection: compare in metres so the O(n²) candidate scan does
+    // no per-iteration conversion. Only the pairs that survive the test are
+    // converted back to the chosen units for the reported `distance` property.
+    const metersPerUnit = METERS_PER_LINEAR_UNIT[distanceUnits as LinearUnit];
+    const maxMeters = maxDistance * metersPerUnit;
+    // Pairs whose lower bound is already past the threshold skip the geodesic.
+    const ellipsoid = getActiveEllipsoid();
+    const minRadius = geodesicRadiusBounds(ellipsoid).min;
     for (let i = 0; i < n; i += 1) {
       for (let j = i + 1; j < n; j += 1) {
         const dt = timed[j].time - timed[i].time; // >= 0 (sorted)
         if (dt > maxTimeMs) break; // later j only widens the gap
         if (idField && timed[i].id === timed[j].id) continue;
-        const turfDistance = distance(timed[i].coord, timed[j].coord, {
-          units: distanceUnits as LinearUnit,
-        });
-        if (turfDistance > maxTurfDistance) continue;
-        const dist = earthLengthToBody(turfDistance);
+        if (centralAngle(timed[i].coord, timed[j].coord) * minRadius > maxMeters) continue;
+        const meters = geodesicDistance(timed[i].coord, timed[j].coord, ellipsoid);
+        if (meters > maxMeters) continue;
+        const dist = meters / metersPerUnit;
         pairs.push({
           type: "Feature",
           properties: {
@@ -3331,6 +3624,7 @@ export const spaceTimeProximityTool: ProcessingAlgorithm = {
     }
     if (skipped) ctx.log(`Skipped ${skipped} point(s) with no parseable time`);
     if (skippedNoId) ctx.log(`Skipped ${skippedNoId} point(s) with no '${idField}' value`);
+    if (skippedPosition) ctx.log(`Skipped ${skippedPosition} point(s) with an invalid position`);
     ctx.log(
       `Space-time proximity: found ${pairs.length} pair(s) within ${maxDistance} ${distanceUnits} and ${maxTimeValue} ${timeUnits}`,
     );

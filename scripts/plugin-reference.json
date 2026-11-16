@@ -1,6 +1,6 @@
 {
   "maplibre-layer-control": {
-    "menu": "Controls → Layer Control",
+    "menu": "Controls → Layer control",
     "description": "The on-map layer list. On by default."
   },
   "maplibre-gl-geo-editor": {
@@ -94,6 +94,10 @@
     "description": "The GIS and open-data portals of about 150 large US cities, counties, and regional agencies.",
     "docs": "web-services.md#us-local-gis"
   },
+  "geolibre-india-gis": {
+    "description": "Open national, state, and city boundary datasets for India.",
+    "docs": "web-services.md#india-gis"
+  },
   "maplibre-gl-socrata": {
     "description": "Search government Socrata open-data portals.",
     "docs": "web-services.md#socrata"
@@ -141,6 +145,10 @@
   "geolibre-dynamical": {
     "description": "dynamical.org weather forecasts, ensembles and analyses (NOAA GFS, GEFS, HRRR and MRMS, ECMWF AIFS and IFS, DWD ICON-EU, ECCC HRDPS, NASA IMERG) as Zarr layers.",
     "docs": "web-services.md#dynamical"
+  },
+  "geolibre-jaxa-earth": {
+    "description": "JAXA Earth API datasets (ALOS elevation and forest maps, GSMaP precipitation, GCOM-C land and sea surface temperature, vegetation, soil moisture) drawn as color-mapped tiles.",
+    "docs": "web-services.md#jaxa-earth"
   },
   "maplibre-gl-geolens": {
     "description": "A self-hosted GeoLens spatial catalog.",
@@ -213,7 +221,7 @@
     "description": "RainViewer precipitation radar, animated over roughly the last two hours."
   },
   "maplibre-atmosphere-effects": {
-    "menu": "Controls → Atmospheric Effects",
+    "menu": "Controls → Atmospheric effects",
     "description": "A deep-space backdrop, starfield, comets, and an atmospheric halo at low zoom."
   },
   "geolibre-sun": {
@@ -221,11 +229,11 @@
     "description": "The sun's position and the day/night terminator for any date and time."
   },
   "geolibre-route-animation": {
-    "menu": "Controls → Route Animation",
+    "menu": "Controls → Route animation",
     "description": "Animate a marker along a line layer with play/pause, speed, a trail, and camera follow."
   },
   "geolibre-flight-simulator": {
-    "menu": "Plugins; also Controls → Flight Simulator",
+    "menu": "Plugins; also Controls → Flight simulator",
     "description": "Fly over terrain and 3D layers with keyboard controls."
   },
   "gods-eye-view": {
@@ -245,11 +253,11 @@
     "description": "Click the map to add waypoints and get a route from the public OSRM demo server."
   },
   "maplibre-reverse-geocode": {
-    "menu": "Controls → Reverse Geocode",
+    "menu": "Controls → Reverse geocode",
     "description": "Click the map to look up the address at that point through the configured geocoding provider."
   },
   "maplibre-deckgl-viz": {
-    "menu": "Add Data → Deck.gl Layer",
+    "menu": "Add data → Deck.gl layer",
     "description": "The deck.gl overlay that renders layers built in the Deck.gl Layer dialog."
   },
   "maplibre-gl-components": {

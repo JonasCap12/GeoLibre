@@ -1,9 +1,11 @@
 import {
   createEmptyProject,
+  mapCrsPreferencePatch,
   useAppStore,
   type MapProjection,
   type MapViewState,
 } from "@geolibre/core";
+import { requestInitialMapCrsFrame } from "@geolibre/map";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { dataUrlParameters, serviceUrlParameter, stacUrlParameter } from "../lib/data-url";
@@ -19,7 +21,8 @@ import { DEFAULT_STARTUP_SETTINGS, useDesktopSettingsStore } from "./useDesktopS
 import { loadRecentProjects } from "./useRecentProjectsPersistence";
 import { consumeInlineProjectFragment } from "../lib/inline-project-fragment";
 import { initialNativeProjectPath } from "../lib/native-project-open";
-import { coordinateTargetFromSearch } from "../lib/coordinate-url";
+import { coordinateTargetFromSearch, type CoordinateTarget } from "../lib/coordinate-url";
+import { mapCrsRequestFromSearch } from "../lib/map-crs-url";
 import {
   initialNativeCoordinateTarget,
   finishNativeCoordinateStartup,
@@ -128,8 +131,28 @@ function seedStartupLayers(): Set<string> {
   return startupLayerIds(project);
 }
 
+/**
+ * Draw the first map in the CRS the link names (`?crs=`), before the map exists
+ * so the Web Mercator basemap never loads. Not dirtying, like the seed above; a
+ * `?url=` project takes it in `useProjectUrlLoader`, on top of its own
+ * preferences, and `useMapCrsUrl` backs out a code that does not resolve.
+ */
+function seedLinkedMapCrs(location: CoordinateTarget | null): void {
+  const mapCrs = mapCrsRequestFromSearch(window.location.search)?.mapCrs;
+  if (mapCrs == null || projectUrlFromLocation() !== null) return;
+  useAppStore.setState((state) => ({
+    preferences: {
+      ...state.preferences,
+      map: { ...state.preferences.map, ...mapCrsPreferencePatch(mapCrs) },
+    },
+  }));
+  // Without a view of its own the default one may lie outside the CRS's area.
+  if (!location) requestInitialMapCrsFrame();
+}
+
 export function useStartupProject(): {
   restoring: boolean;
+  settled: boolean;
 } {
   const { t } = useTranslation();
   // Consume a direct-file export before the shell and MapCanvas mount. Loading
@@ -176,6 +199,7 @@ export function useStartupProject(): {
         ...startupDefaultWorkspace(useDesktopSettingsStore.getState().desktopSettings.startup),
         ...location,
       });
+      seedLinkedMapCrs(location);
       return false;
     }
     const plan = currentStartupPlan(openedProjectPath);
@@ -183,8 +207,11 @@ export function useStartupProject(): {
       seededLayerIds.current = seedStartupLayers();
       applyDefaultWorkspace(plan);
     }
-    return plan.kind === "restore";
+    if (plan.kind === "restore") return true;
+    seedLinkedMapCrs(location);
+    return false;
   });
+  const [settled, setSettled] = useState(!restoring);
 
   // Fetch the features of the URL layers the seeding above added, and only
   // those. In an effect, not the initializer, so a render that is thrown away
@@ -245,6 +272,9 @@ export function useStartupProject(): {
     // spinner would break it, and this call would need the same guard.
     const gateTimer = window.setTimeout(() => {
       if (cancelled) return;
+      console.warn(
+        "[GeoLibre] Startup project restore is still pending; showing the default workspace meanwhile",
+      );
       openDefaultWorkspace({ seedLayers: true });
       // Seeding the Startup setting's layers starts a new project. The restore
       // may still replace this workspace while the user has not touched it, so
@@ -265,6 +295,14 @@ export function useStartupProject(): {
         const { projectGeneration, isDirty } = useAppStore.getState();
         if (projectGeneration !== restoringOver || isDirty) return;
         useAppStore.getState().loadProject(project, result.path);
+        // Kept on screen: the project may be missing changes made to the file
+        // since, and the user should not keep working without knowing.
+        if (result.fromStoredCopy) {
+          notify.warning(t("settings.startup.storedCopyWarning"), {
+            dedupeKey: "stored-project-copy",
+            durationMs: null,
+          });
+        }
       } catch (error) {
         if (cancelled) return;
         if (error instanceof RecentProjectGoneError) {
@@ -305,7 +343,13 @@ export function useStartupProject(): {
         openDefaultWorkspace({ seedLayers: true });
       } finally {
         window.clearTimeout(gateTimer);
-        if (!cancelled) setRestoring(false);
+        // `settled` deliberately waits for the restore itself, not the gate
+        // timer: opening the deployment `openPanel` over the default workspace
+        // would leave it open once a late restore replaces that workspace.
+        if (!cancelled) {
+          setRestoring(false);
+          setSettled(true);
+        }
       }
     })();
     return () => {
@@ -318,5 +362,5 @@ export function useStartupProject(): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inlineProject, openedProjectPath]);
 
-  return { restoring };
+  return { restoring, settled };
 }

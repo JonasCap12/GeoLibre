@@ -38,6 +38,7 @@ They are grouped together because they behave the same way, not because they sha
 | [US Federal GIS](#us-federal-gis) | US federal agencies | The public GIS portals of 24 federal agencies, from the Census Bureau and NOAA to USGS and FEMA |
 | [US State GIS](#us-state-gis) | US state GIS offices | The public GIS data portals of all 50 states and DC |
 | [US Local GIS](#us-local-gis) | US cities and counties | The GIS and open-data portals of about 150 large US cities, counties, and regional agencies |
+| [India GIS](#india-gis) | DataMeet, GADM, geoBoundaries | Open national, state, and city boundary datasets for India |
 | [Socrata](#socrata) | Socrata | Government open-data portals |
 | [CKAN](#ckan) | HDX | Humanitarian Data Exchange resources |
 | [STAC Catalogs](#stac-catalogs) | any STAC | Any STAC API or static catalog, via STAC Index |
@@ -264,6 +265,15 @@ Browses the public GIS and open-data portals of large US cities and counties, pl
 - The rest are [Socrata](#socrata) portals, which many of the largest cities use (New York, Chicago, San Francisco, Seattle, Austin, Dallas). There the panel lists only datasets with a geometry column and adds each one as GeoJSON, zooming to what was loaded. A Socrata export is capped at 50,000 features, so a city-wide incident log arrives as its first 50,000 rows; filter it on the portal first for a complete subset. Socrata cannot search by extent, so **Search the current map area** is unavailable for those portals, and the result count is the number found so far rather than a total.
 - Portals on other platforms (CKAN, OpenDataSoft, or custom sites such as Boston's or Pittsburgh's main portals) cannot be searched and are not listed, though their ArcGIS Hub sites are where one exists. Every listed portal was checked to return datasets in September 2026; `npm run check:gis-portals` repeats the check.
 
+## India GIS
+
+Lists open boundary and municipal datasets for India, grouped by region: national boundaries, then state and city portals (Delhi, Bengaluru, Chennai, Hyderabad, Mumbai, Ahmedabad, Chandigarh, and others).
+
+- Choose a region, then a portal; the panel lists its datasets immediately. Type a keyword to filter them by title and description. **Search the current map area** does not apply.
+- No Indian government portal offers a catalog the panel can search, so each portal is a fixed list of GeoJSON files, and every card names where its file comes from: [DataMeet](https://datameet.org/) (the national outline and city wards), [GADM](https://gadm.org/) (states, districts, and sub-districts, with older boundaries), or [geoBoundaries](https://www.geoboundaries.org/). **Open portal** opens the government agency's own site.
+- A state's district card loads only that state's districts from the all-India GADM file; **Download** saves the whole file.
+- `npm run check:gis-portals -- india` downloads every file and checks that it is GeoJSON in longitude and latitude.
+
 ## Socrata
 
 Searches public [Socrata](https://dev.socrata.com/) open-data catalogs — the platform behind many city, county, and state data portals — and adds their GeoJSON datasets to the map. Keyword search, paged results, and **Load more**, the same as ArcGIS Hub.
@@ -403,6 +413,19 @@ Browses the open weather data catalog of [dynamical.org](https://dynamical.org/c
 
 !!! note "Regional datasets draw when zoomed in"
     A map draws one slice, but the reader has to decode whole chunks. The forecasts dynamical.org stores one run per chunk (NOAA GFS forecast, NOAA HRRR 48-hour forecast, ECMWF AIFS Single, DWD ICON-EU, ECCC HRDPS) and the virtual datasets (one GRIB2 message per chunk) draw the whole globe in seconds. The analyses and ensembles (NOAA GFS, GEFS, HRRR and MRMS analyses, GEFS 35-day, ECMWF AIFS and IFS ensembles, NASA IMERG) pack hundreds to thousands of time steps or members into each chunk, so a whole-globe map would read gigabytes. They are listed as **Regional** and draw from a minimum zoom, worked out from the chunk size and the size of the map so a view reads at most about 256 MB: around zoom 3 to 6 for the global ones, 8 for HRRR and 9 to 10 for MRMS. The panel names that zoom, **Add to map** zooms the map in to it (over the dataset, if the view is elsewhere), and the layer hides when you zoom out past it. Moving the sliders while zoomed out reads nothing until you zoom back in, and stepping through time is quick once a region is loaded, since its chunks already hold the neighbouring steps. The data is free under CC BY 4.0; credit the source shown under the panel.
+
+## JAXA Earth
+
+Browses the [JAXA Earth API](https://data.earth.jaxa.jp/en/), JAXA's catalog of Earth observation datasets published as cloud-optimized GeoTIFFs: ALOS World 3D (AW3D30) elevation and PALSAR-2 forest maps, GSMaP precipitation, GCOM-C and MODIS land and sea surface temperature, vegetation index, aerosols, chlorophyll-a, AMSR2 soil moisture, land cover, and monthly climatologies of many of them. No account or API key is needed.
+
+- Pick a **Dataset**: JAXA's recommended datasets come first, grouped by theme, then the rest of the catalog alphabetically. **Search** filters the list by title, satellite, sensor, or keyword. The card shows the provider, resolution, time step and range, and a **Dataset details** link to JAXA's page for it.
+- Pick a **Band** when the dataset has more than one, and a **Date**: the panel opens on the latest date, and the arrows step to the first, previous, next, or latest date with data. **Go to date** jumps to a calendar day, rounded down to the nearest date JAXA has. A climatology steps through its months (or half-months).
+- **Colormap**, **Min**, and **Max** color the band's values. Opening a dataset reads a coarse sample of it at that date and sets the range to the 2nd to 98th percentile of the values; **Auto** reads it again for the date shown. Land cover, forest maps, and other bands that carry their own colors ignore the color map.
+- **Add to map** adds the band as a tile layer named after the dataset and date. Changing the band, date, colors, or resampling afterward updates that layer in place, so you can step through a time series; add it again to keep a date side by side. The layer's name follows the date unless you have renamed it. The layer is saved with the project and draws again when the project is reopened.
+- Tiles are drawn in the browser by JAXA's own [JavaScript API](https://data.earth.jaxa.jp/api/javascript/v2.0.1/en/docs/), which reads only the resolution and area each map tile covers. GeoLibre loads that module from JAXA's server the first time a JAXA layer draws and checks it against a pinned checksum.
+- Datasets on projections other than latitude/longitude (EPSG:4326), such as the polar stereographic sea ice grids, are listed but cannot be added yet. The plugin runs on the MapLibre and globe (Cesium) renderers.
+
+Most datasets can be used commercially; a few, noted on their dataset pages, cannot. See JAXA's [terms of use](https://earth.jaxa.jp/en/data/policy/).
 
 ## GeoLens
 

@@ -12,6 +12,13 @@ export {
   type AssistantToolEntry,
 } from "./assistant-tool-registry";
 export * from "./types";
+export {
+  setI3sBuildingNodeVisible,
+  visibleI3sBuildingSublayers,
+  type I3sBuildingNode,
+  type I3sBuildingState,
+} from "./plugins/i3s-building";
+export { openControlPanel, closeControlPanel, isControlPanelVisible } from "./control-panels";
 export { PluginManager } from "./plugin-manager";
 export {
   registerRightPanel,
@@ -52,6 +59,14 @@ export {
   type MenuContributionsSnapshot,
   type MenuContributionEntry,
 } from "./menu-contribution-registry";
+export {
+  registerFileHandler,
+  unregisterFileHandler,
+  listFileHandlers,
+  findFileHandlerByDataType,
+  isFileHandlerDataType,
+  type FileHandlerEntry,
+} from "./file-handler-registry";
 export {
   registerFloatingPanel,
   unregisterFloatingPanel,
@@ -136,6 +151,18 @@ export {
   type ArcGISSourceType,
 } from "./plugins/arcgis-layer";
 export type { ArcGISDomainDiagnostic } from "./plugins/arcgis-domains";
+export {
+  arcGISContingencyChecks,
+  arcGISContingentChoices,
+  blocksArcGISEdit,
+  type ArcGISContingencyCheck,
+  type ArcGISContingentValues,
+} from "./plugins/arcgis-contingent-values";
+export {
+  arcGISLayerCreationTemplates,
+  type ArcGISCreationTemplate,
+  type ArcGISCreationTemplateSelection,
+} from "./plugins/arcgis-defaults";
 export {
   addArcGISAttachment,
   arcGISAttachmentObjectId,
@@ -241,6 +268,7 @@ export {
   type CloudNetcdfLayerOptions,
   addZarrRasterLayer,
   restoreArcgisZarrLayers,
+  restoreZarrLayers,
   queryZarrLayer,
   setZarrLayerSelector,
   setZarrLocalStoreProvider,
@@ -338,10 +366,26 @@ export {
   overtureTilesForBBox,
 } from "./plugins/overture-query";
 export {
+  addPlanetaryComputerItemLayer,
+  addPlanetaryComputerMosaicLayer,
   closePlanetaryComputerPanel,
+  identifyPlanetaryComputerLayer,
+  isPlanetaryComputerPanelSupported,
   openPlanetaryComputerPanel,
   PLANETARY_COMPUTER_SOURCE_KIND,
   restorePlanetaryComputerLayers,
+  searchPlanetaryComputerItems,
+} from "./plugins/maplibre-planetary-computer";
+export {
+  createPlanetaryComputerCustomActions,
+  setPlanetaryComputerLabels,
+  type PlanetaryComputerLabels,
+} from "./plugins/planetary-computer-actions";
+export type {
+  PlanetaryComputerAddResult,
+  PlanetaryComputerPixelReading,
+  PlanetaryComputerSearchInput,
+  PlanetaryComputerStyleInput,
 } from "./plugins/maplibre-planetary-computer";
 export {
   closeEarthEnginePanel,
@@ -360,6 +404,7 @@ export {
   restoreThreeDTilesLayers,
   THREE_D_TILES_SOURCE_KIND,
 } from "./plugins/maplibre-3d-tiles";
+export { probeArcgisI3sLayers } from "./plugins/arcgis-i3s-tiles";
 export { isRecoverableNonTiledRasterError } from "./plugins/non-tiled-raster-error";
 export {
   addRasterToMap,
@@ -526,7 +571,7 @@ export {
   DECK_VIZ_SOURCE_KIND,
   isDeckVizLayer,
 } from "./plugins/deckgl-viz/store-layer";
-export { VIEWER_BLOCKED_PLUGIN_IDS } from "./viewer-plugins";
+export { VIEWER_BLOCKED_PLUGIN_IDS, isViewerBlockedPlugin } from "./viewer-plugins";
 export {
   maplibreAnnotationsPlugin,
   ANNOTATIONS_PLUGIN_ID,
@@ -560,12 +605,15 @@ export {
   GEO_EDITOR_PLUGIN_ID,
   DEFAULT_GEO_EDITOR_LABELS,
   setGeoEditorLabels,
+  setGeoEditorFileTools,
   type GeoEditorLabels,
   canEditLayerGeometry,
   SKETCHES_SOURCE_KIND,
   startLayerGeometryEdit,
   endLayerGeometryEdit,
   getGeometryEditTargetLayerId,
+  getLastGeometryEditEnd,
+  type GeometryEditEnd,
   selectGeometryEditFeature,
   isGeoEditorUsingRightClick,
   subscribeGeometryEdit,
@@ -664,12 +712,24 @@ export {
 } from "./plugins/maplibre-sentinel2-explorer";
 export { registerSentinel2CompositeProtocol } from "./plugins/sentinel2-composite";
 export {
+  DEFAULT_RENDER_RAMP,
+  RENDER_RAMPS,
+  registerStacRenderProtocol,
+  renderTileUrl,
+  specFromTileUrl,
+  withRenderStyle,
+  type RenderRamp,
+  type RenderStyle,
+} from "./plugins/stac-render";
+export {
   OCEAN_DATA_PLATFORM_PLUGIN_ID,
   maplibreOceanDataPlatformPlugin,
   setOceanDataPlatformFileSaver,
   type OceanDataPlatformFileSaver,
 } from "./plugins/maplibre-ocean-data-platform";
 export { DYNAMICAL_PLUGIN_ID, maplibreDynamicalPlugin } from "./plugins/maplibre-dynamical";
+export { JAXA_EARTH_PLUGIN_ID, maplibreJaxaEarthPlugin } from "./plugins/maplibre-jaxa-earth";
+export { registerJaxaEarthProtocol } from "./plugins/jaxa-earth-api";
 export {
   maplibreSatelliteEmbeddingsPlugin,
   SATELLITE_EMBEDDINGS_PLUGIN_ID,
@@ -686,9 +746,12 @@ export {
   defaultOverpassEndpoint,
   downloadOsmGeoJson,
   escapeOverpassString,
+  INVALID_OVERPASS_ENDPOINT_MESSAGE,
   overpassJsonToGeoJson,
   OVERPASS_DEFAULT_ENDPOINT,
   OVERPASS_DEV_ENDPOINT,
+  OVERPASS_URL_PATTERN,
+  setOverpassEndpoint,
   type OsmDownloadFilter,
   type OsmDownloadPreset,
   type OverpassElement,
@@ -750,6 +813,13 @@ export {
   US_LOCAL_GIS_PLUGIN_ID,
 } from "./plugins/maplibre-us-local-gis";
 export { US_LOCAL_GIS_CATALOGS } from "./plugins/us-local-gis-catalogs";
+export {
+  DEFAULT_INDIA_GIS_LABELS,
+  maplibreIndiaGisPlugin,
+  setIndiaGisLabels,
+  INDIA_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-india-gis";
+export { INDIA_GIS_CATALOGS } from "./plugins/india-gis-catalogs";
 export {
   DEFAULT_US_FEDERAL_GIS_LABELS,
   maplibreUsFederalGisPlugin,

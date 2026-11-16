@@ -1,18 +1,28 @@
 import { shouldZoomToNewLayers, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import {
+  arcGISLayerCreationTemplates,
   endLayerGeometryEdit,
-  GEO_EDITOR_PLUGIN_ID,
   getGeometryEditTargetLayerId,
   isPluginEngineSupported,
   maplibreGeoEditorPlugin,
   selectGeometryEditFeature,
   startLayerGeometryEdit,
 } from "@geolibre/plugins";
-import type { FeatureCollection } from "geojson";
 import type { TFunction } from "i18next";
 import { type Dispatch, type RefObject, type SetStateAction, useCallback, useRef } from "react";
+import {
+  startGeometryEditSession,
+  type GeometryEditStartOptions,
+} from "../../lib/geometry-edit-session";
+import { useCreationTemplatePrompt } from "../useCreationTemplatePrompt";
 import { createAppAPI, getPluginManager } from "../usePlugins";
+
+const GEOMETRY_EDIT_START_ERRORS = {
+  "unsupported-renderer": "renderer.pluginUnsupported",
+  "activation-failed": "layers.editGeometryActivateFailed",
+  "start-failed": "layers.editGeometryStartFailed",
+} as const;
 
 interface LayerEditActionsOptions {
   mapControllerRef: RefObject<MapEngine | null>;
@@ -20,6 +30,34 @@ interface LayerEditActionsOptions {
   setDropMessage: Dispatch<SetStateAction<string | null>>;
   clearDropMessageLater: () => void;
   t: TFunction;
+}
+
+/**
+ * Ask which feature template new features should start from, when the layer is
+ * an ArcGIS feature layer publishing several (#3179).
+ *
+ * @param layerId - The layer about to be edited.
+ * @param ask - Whether to prompt at all; without it new features get defaults only.
+ * @returns The session's start options and the chosen template's display name,
+ *   or null when the user cancelled.
+ */
+async function chooseStartOptions(
+  layerId: string,
+  ask: boolean,
+): Promise<{ start: GeometryEditStartOptions; templateName?: string } | null> {
+  const layer = useAppStore.getState().layers.find((candidate) => candidate.id === layerId);
+  const templates = ask && layer ? arcGISLayerCreationTemplates(layer) : [];
+  if (!layer || !templates.length) return { start: {} };
+  const choice = await useCreationTemplatePrompt
+    .getState()
+    .prompt({ layerName: layer.name, templates });
+  if (!choice) return null;
+  if (!choice.template) return { start: {} };
+  const picked = templates.find((template) => template.selection === choice.template);
+  return {
+    start: { creationTemplate: choice.template },
+    ...(picked?.name ? { templateName: picked.name } : {}),
+  };
 }
 
 /**
@@ -41,35 +79,8 @@ export function useLayerEditActions({
   const togglingGeometryEditRef = useRef(false);
   const addGeoJsonLayer = useAppStore((s) => s.addGeoJsonLayer);
 
-  const ensureLayerGeojsonFromSource = useCallback(
-    async (layerId: string) => {
-      const layer = useAppStore.getState().layers.find((candidate) => candidate.id === layerId);
-      if (!layer || layer.geojson) return;
-      const sourceIds = layer.metadata.sourceIds;
-      const sourceId = Array.isArray(sourceIds) ? sourceIds[0] : undefined;
-      if (typeof sourceId !== "string") return;
-      const source = mapControllerRef.current?.getMap()?.getSource(sourceId) as
-        | { getData?: () => Promise<unknown> }
-        | undefined;
-      if (!source || typeof source.getData !== "function") return;
-      try {
-        const data = await source.getData();
-        if (
-          data &&
-          typeof data === "object" &&
-          (data as { type?: string }).type === "FeatureCollection"
-        ) {
-          useAppStore.getState().updateLayer(layerId, { geojson: data as FeatureCollection });
-        }
-      } catch {
-        // Best effort; startLayerGeometryEdit will fail and surface an error.
-      }
-    },
-    [mapControllerRef],
-  );
-
   const handleToggleGeometryEdit = useCallback(
-    async (layerId: string) => {
+    async (layerId: string, { askForTemplate = true }: { askForTemplate?: boolean } = {}) => {
       const appAPI = createAppAPI(mapControllerRef);
       if (getGeometryEditTargetLayerId() === layerId) {
         await endLayerGeometryEdit(appAPI, { save: true });
@@ -83,52 +94,43 @@ export function useLayerEditActions({
       // Clear any stale error from a previous failed attempt.
       setDropError(null);
       try {
-        // Add Vector Layer (geojson-mode) layers keep their features in a
-        // MapLibre source rather than in `layer.geojson`. Read them back once so
-        // the editor has features to load. (Plain geojson layers already have
-        // `geojson`.)
-        // The editor draws through a MapLibre or Mapbox map; on another
-        // renderer it cannot start, and waiting for the map will not help.
-        if (
-          !isPluginEngineSupported(maplibreGeoEditorPlugin, useAppStore.getState().primaryRenderer)
-        ) {
-          setDropError(t("renderer.pluginUnsupported"));
+        const options = await chooseStartOptions(layerId, askForTemplate);
+        if (!options) return;
+        const result = await startGeometryEditSession(
+          layerId,
+          {
+            app: appAPI,
+            manager: getPluginManager(),
+            map: mapControllerRef.current,
+            geoEditor: { isPluginEngineSupported, maplibreGeoEditorPlugin, startLayerGeometryEdit },
+          },
+          options.start,
+        );
+        if (result !== "started") {
+          setDropError(t(GEOMETRY_EDIT_START_ERRORS[result]));
           clearDropMessageLater();
-          return;
-        }
-        await ensureLayerGeojsonFromSource(layerId);
-        const manager = getPluginManager();
-        if (!manager.isActive(GEO_EDITOR_PLUGIN_ID)) {
-          // The editor's packages load on first activation, so the result can
-          // be a promise; awaiting a plain boolean is harmless.
-          const activated = await manager.activate(GEO_EDITOR_PLUGIN_ID, appAPI);
-          if (!activated || !manager.isActive(GEO_EDITOR_PLUGIN_ID)) {
-            setDropError(t("layers.editGeometryActivateFailed"));
-            clearDropMessageLater();
-            return;
-          }
-        }
-        const started = await startLayerGeometryEdit(appAPI, layerId);
-        if (!started) {
-          setDropError(t("layers.editGeometryStartFailed"));
+        } else if (options.templateName !== undefined) {
+          setDropMessage(t("layers.editGeometryTemplateActive", { name: options.templateName }));
           clearDropMessageLater();
         }
       } finally {
         togglingGeometryEditRef.current = false;
       }
     },
-    [clearDropMessageLater, ensureLayerGeojsonFromSource, mapControllerRef, setDropError, t],
+    [clearDropMessageLater, mapControllerRef, setDropError, setDropMessage, t],
   );
 
   /**
    * Start (or keep) a geometry-edit session on `layerId` and select one of its
    * features in the editor: Identify's Edit geometry action (#2932). Unlike
    * {@link handleToggleGeometryEdit}, a session already open on this layer is
-   * kept rather than finished.
+   * kept rather than finished, and no creation template is asked for: the
+   * session is opened to reshape an existing feature.
    */
   const handleEditFeatureGeometry = useCallback(
     async (layerId: string, featureId: string) => {
-      if (getGeometryEditTargetLayerId() !== layerId) await handleToggleGeometryEdit(layerId);
+      if (getGeometryEditTargetLayerId() !== layerId)
+        await handleToggleGeometryEdit(layerId, { askForTemplate: false });
       if (getGeometryEditTargetLayerId() === layerId) selectGeometryEditFeature(featureId);
     },
     [handleToggleGeometryEdit],

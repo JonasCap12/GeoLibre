@@ -13,6 +13,7 @@ import {
   reattachSun,
   restoreArcGISViewportLayers,
   restoreArcgisZarrLayers,
+  restoreZarrLayers,
   restoreDeckViz,
   restoreDirections,
   restoreEffects,
@@ -21,6 +22,7 @@ import {
   restoreRasterLayers,
   restoreReverseGeocode,
   restoreSplattingLayers,
+  probeArcgisI3sLayers,
   restoreThreeDTilesLayers,
   restoreVectorLayers,
   REVERSE_GEOCODE_PLUGIN_ID,
@@ -28,9 +30,10 @@ import {
 import i18next from "i18next";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { notify } from "../../lib/notify";
+import { startupActivationSettled } from "../../lib/settle-gate";
 import { restoreLocalFileLayers } from "../../lib/restore-local-layers";
 import { hasReverseGeocodeConsent } from "../../lib/reverse-geocode-consent";
-import { createAppAPI, getPluginManager } from "../usePlugins";
+import { createAppAPI, getPluginManager, markPluginActivationSettled } from "../usePlugins";
 
 /** Saved point clouds that could not be reloaded vanish from the map otherwise. */
 function notifyLidarRestoreFailed(error: unknown): void {
@@ -46,6 +49,8 @@ interface PluginStateRestoreOptions {
   externalPluginsReady: boolean;
   mapReadyGeneration: number;
   projectGeneration: number;
+  /** Whether a `?url=` project (if the link has one) has finished loading. */
+  projectUrlSettled: boolean;
 }
 
 /**
@@ -61,8 +66,17 @@ export function usePluginStateRestore({
   externalPluginsReady,
   mapReadyGeneration,
   projectGeneration,
+  projectUrlSettled,
 }: PluginStateRestoreOptions): number | null {
   const [restoredGeneration, setRestoredGeneration] = useState<number | null>(null);
+  // Startup activation counts as settled only for the restore that follows the
+  // `?url=` project, not the one for the empty project before it, since that
+  // project's plugins are what a URL load's file handlers may come from.
+  useEffect(() => {
+    if (startupActivationSettled({ projectUrlSettled, restoredGeneration, projectGeneration })) {
+      markPluginActivationSettled();
+    }
+  }, [projectUrlSettled, restoredGeneration, projectGeneration]);
   // A renderer swap restores the plugins from the store's projectPlugins, which
   // is only refreshed when a plugin is toggled or moved, so it would roll every
   // plugin back to how it was then (a Time Slider stack added since came back
@@ -192,7 +206,7 @@ export function usePluginStateRestore({
     // here; MapLibre restores them on the native path below.
     if (engine.capabilities.deckOverlay && !engine.capabilities.nativeMapInstance) {
       restoreThreeDTilesLayers(appAPI);
-      void restoreLidarLayers(appAPI).catch(notifyLidarRestoreFailed);
+      void restoreLidarLayers(appAPI, { keepCamera: true }).catch(notifyLidarRestoreFailed);
     }
     // Same contract for the shared deck.gl overlay: re-attach it to the current
     // map and re-render any deckgl-viz layers a restored project carries. It
@@ -212,12 +226,19 @@ export function usePluginStateRestore({
     // because the handle it wants is the globe's, which that gate excludes.
     // Reattach only — the per-feed toggles come from its applyProjectState.
     reattachGodsEyeView(appAPI);
+    // ArcGIS scene layers: read each one's layer document once, on any engine.
+    // The 2D overlay probes as it mounts, but the globe draws scene layers
+    // itself and has no other reader for the Building sublayer tree and base
+    // elevation it uses (#3374).
+    probeArcgisI3sLayers();
     if (!engine.capabilities.nativeMapInstance) {
       // eslint-disable-next-line local/no-renderer-kind-checks -- the globe draws COGs from the record; the 2D engines restore through the raster plugin's own per-engine path
       if (engine.kind === "mapbox" || engine.kind === "arcgis") restoreRasterLayers(appAPI);
       // Both draw Zarr from the layer record, so only the Time Slider binding
-      // needs restoring (opengeos/GeoLibre#2261).
+      // needs restoring (opengeos/GeoLibre#2261). Mapbox hosts the MapLibre
+      // Zarr control, so its saved layers are re-added through it.
       if (engine.capabilities.nativeZarr) restoreArcgisZarrLayers();
+      else void restoreZarrLayers(appAPI);
       void restoreLocalFileLayers();
       // Same cleanup as the native path: this branch also starts an async
       // handleUrlParameters above, so an older completion must not publish its
@@ -229,14 +250,19 @@ export function usePluginStateRestore({
     restoreThreeDTilesLayers(appAPI);
     restoreRasterLayers(appAPI);
     restorePlanetaryComputerLayers(appAPI);
+    // Re-draw saved Zarr layers. Like a COG or a point cloud, a `zarr` layer
+    // restores into the store as an inert record: the Zarr control draws it,
+    // not layer sync, so without this it shows in the panel and paints nothing.
+    void restoreZarrLayers(appAPI);
     // Re-bind saved ArcGIS feature layers to the viewport. Without this a
     // reopened project's layer stays frozen on the extent it was saved with.
     restoreArcGISViewportLayers(appAPI);
     // Re-stream saved LiDAR (COPC) point clouds. A `lidar-url` layer restores
     // into the store as inert metadata; the point cloud is loaded by the LiDAR
     // control, not the store, so without this the layer shows in the panel but
-    // renders nothing.
-    void restoreLidarLayers(appAPI).catch(notifyLidarRestoreFailed);
+    // renders nothing. `keepCamera` holds the project's saved view instead of
+    // flying to each cloud.
+    void restoreLidarLayers(appAPI, { keepCamera: true }).catch(notifyLidarRestoreFailed);
     // Same for saved Gaussian splats and 3D models (`splatting-url`): the
     // splatting control draws them, so reload them through it.
     void restoreSplattingLayers(appAPI).catch((error: unknown) => {

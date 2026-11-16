@@ -6,6 +6,7 @@ import {
   type GeoLibreLayer,
   shouldZoomToNewLayers,
   useAppStore,
+  ARCGIS_IMAGE_SERVICE_SOURCE_KIND,
 } from "@geolibre/core";
 import type { HostedLayer, VectorTileLayer } from "@esri/maplibre-arcgis";
 import type { Feature, FeatureCollection, MultiPolygon, Position } from "geojson";
@@ -28,6 +29,13 @@ import {
   type ArcGISDomainDiagnostic,
 } from "./arcgis-domains";
 import { ARCGIS_FEATURE_SOURCE_KIND } from "./arcgis-defaults";
+import {
+  arcGISContingencyChecks,
+  arcGISContingentChoices,
+  withArcGISContingentValues,
+  type ArcGISContingencyCheck,
+  type ArcGISContingentValues,
+} from "./arcgis-contingent-values";
 import {
   arcgisQuantizationParams,
   decodeArcGISQuantizedFeatures,
@@ -87,7 +95,8 @@ export function parseArcGISLayerType(
  * marks where it came from.
  */
 export const ARCGIS_MAP_SERVICE_SOURCE_KIND = "arcgis-map-service";
-export const ARCGIS_IMAGE_SERVICE_SOURCE_KIND = "arcgis-image-service";
+// Shared with `@geolibre/map`'s Identify, so it lives in core.
+export { ARCGIS_IMAGE_SERVICE_SOURCE_KIND };
 export const ARCGIS_MAP_SERVICE_URL_ERROR = "Enter an ArcGIS MapServer URL.";
 export const ARCGIS_IMAGE_SERVICE_URL_ERROR = "Enter an ArcGIS ImageServer URL.";
 // Catalog namespace for the errors this module raises for the UI.
@@ -238,7 +247,10 @@ interface ArcGISFeatureLayerInfo extends ArcGISEditInfo {
 interface ArcGISFeatureServiceInfo {
   layers?: Array<{
     id: number;
-    subLayerIds?: number[];
+    /** A map service names each layer's kind ("Feature Layer", "Raster Layer"...). */
+    type?: string;
+    /** Null, not absent, on a map service's non-group layers. */
+    subLayerIds?: number[] | null;
   }>;
 }
 
@@ -254,6 +266,10 @@ interface ArcGISServiceInfo {
  * has a Web Mercator tile cache that can be consumed as XYZ tiles.
  */
 interface ArcGISImageProducingServiceInfo extends ArcGISServiceInfo {
+  /** An ImageServer's band names, in band order (`Red`, `NearInfrared`...). */
+  bandNames?: string[];
+  /** Comma-separated operations; an ImageServer without `Image` has no `/exportImage`. */
+  capabilities?: string;
   copyrightText?: string;
   layers?: Array<{
     defaultVisibility?: boolean;
@@ -262,8 +278,18 @@ interface ArcGISImageProducingServiceInfo extends ArcGISServiceInfo {
     subLayerIds?: number[] | null;
   }>;
   mapName?: string;
+  /**
+   * The scale range an ImageServer's tile cache was built for. The cache's
+   * `tileInfo.lods` can list levels outside it, which answer 404. Zero means
+   * unbounded.
+   */
+  maxScale?: number;
+  minScale?: number;
   name?: string;
+  /** An ImageServer's native pixel size, in its `spatialReference` units. */
+  pixelSizeX?: number;
   singleFusedMapCache?: boolean;
+  spatialReference?: { latestWkid?: number; wkid?: number; wkt?: string };
   tileInfo?: ArcGISTileInfo;
 }
 
@@ -285,13 +311,26 @@ export interface ArcGISImageServiceRasterFunction {
 
 interface ArcGISTileInfo {
   cols?: number;
-  lods?: Array<{ level?: number; resolution?: number }>;
+  /** The cache's tile encoding: `PNG`, `JPEG`, `MIXED`, or `LERC`/`LERC2D` raw data. */
+  format?: string;
+  lods?: Array<{ level?: number; resolution?: number; scale?: number }>;
   origin?: { x?: number; y?: number };
   rows?: number;
   spatialReference?: {
     latestWkid?: number;
     wkid?: number;
   };
+}
+
+/**
+ * Whether an ImageServer's tile cache holds raw pixel values (LERC) instead of
+ * rendered images, as a hosted tiled imagery layer's does.
+ *
+ * @param info - The service's `?f=json` description.
+ * @returns True when the cache is LERC-encoded.
+ */
+function isArcGISRawTileCache(info: { tileInfo?: { format?: string } }): boolean {
+  return /^lerc/i.test(info.tileInfo?.format?.trim() ?? "");
 }
 
 /** A cached service's tile endpoint, resolved to what a raster source needs. */
@@ -582,7 +621,7 @@ async function addArcGISFeatureLayerAsGeoJson(
     options.sourceType === "url"
       ? await resolveFeatureLayerUrl(input, options, undefined)
       : await resolvePortalFeatureLayerUrl(input, options, undefined);
-  const layerInfo = await fetchArcGISJson<ArcGISFeatureLayerInfo>(layerUrl, options, undefined);
+  const layerInfo = await fetchArcGISFeatureLayerInfo(layerUrl, options, undefined);
   if (!layerInfo.geometryType) {
     throw new LocalizedError(
       `${ERROR_KEY}.missingGeometryType`,
@@ -913,7 +952,7 @@ export function restoreArcGISViewportLayers(app: GeoLibreAppAPI): void {
     // instead of leaving the layer permanently unbound.
     let pending: Promise<ArcGISFeatureLayerInfo> | null = null;
     const resolveLayerInfo = (): Promise<ArcGISFeatureLayerInfo> =>
-      (pending ??= fetchArcGISJson<ArcGISFeatureLayerInfo>(
+      (pending ??= fetchArcGISFeatureLayerInfo(
         trimTrailingSlash(queryUrl).replace(/\/query$/i, ""),
         options,
         undefined,
@@ -1341,9 +1380,20 @@ async function addArcGISImageServiceLayer(
       : undefined;
   const token = options.token?.trim() || undefined;
 
+  const bounds =
+    arcgisExtentToBounds(info.fullExtent ?? info.initialExtent ?? info.extent) ??
+    (options.layerType === "map-service"
+      ? await resolveArcGISMapServiceBounds(serviceUrl, info, options, sublayers)
+      : undefined);
+
   // Sublayers and rendering rules are dynamic-only, so the cache is only an
   // option when neither was asked for.
-  const tileScheme = sublayers || renderingRule ? null : arcgisTileScheme(info);
+  const tileScheme =
+    sublayers || renderingRule
+      ? null
+      : options.layerType === "image-service"
+        ? arcgisImageServiceTileScheme(info, bounds)
+        : arcgisTileScheme(info);
   const tiles = tileScheme
     ? arcgisCachedTileUrl(serviceUrl, token)
     : arcgisExportTileUrl(serviceUrl, {
@@ -1352,12 +1402,10 @@ async function addArcGISImageServiceLayer(
         sublayers,
         token,
       });
-
-  const bounds =
-    arcgisExtentToBounds(info.fullExtent ?? info.initialExtent ?? info.extent) ??
-    (options.layerType === "map-service"
-      ? await resolveArcGISMapServiceBounds(serviceUrl, info, options, sublayers)
-      : undefined);
+  const bandNames =
+    options.layerType === "image-service" && Array.isArray(info.bandNames)
+      ? info.bandNames.filter((name): name is string => typeof name === "string")
+      : [];
   const attribution = info.copyrightText?.trim() || undefined;
   const id = createArcGISLayerId();
   const layer: GeoLibreLayer = {
@@ -1379,6 +1427,21 @@ async function addArcGISImageServiceLayer(
       arcgisLayerType: options.layerType,
       arcgisSourceType: options.sourceType,
       arcgisTiled: tileScheme !== null,
+      // A hosted tiled imagery layer caches raw LERC pixel values rather than
+      // rendered images, and is usually `TilesOnly` (no `/exportImage`), so
+      // neither MapLibre template above can draw it. The ArcGIS renderer's
+      // ImageryTileLayer decodes and symbolizes those tiles client-side.
+      // A rendering rule needs `/exportImage`, which that layer does not apply.
+      // When the cache was passed over for `/exportImage` (the service can
+      // export and the cache stops short of the source rasters), the ArcGIS
+      // renderer must not read the cache either: an explicit `false` also
+      // overrides its hosted-tiled-imagery host detection.
+      ...(options.layerType === "image-service" && !renderingRule && isArcGISRawTileCache(info)
+        ? // Only a cache passed over for `/exportImage` turns the flag off; one
+          // rejected for its scheme (a TilesOnly service in another CRS, say)
+          // is still the SDK's to draw.
+          { arcgisRawTiles: tileScheme !== null || arcgisTileScheme(info) === null }
+        : {}),
       ...(bounds ? { bounds } : {}),
       // The token has to travel in the tile URL for the tiles to render at all,
       // unlike the feature path where it is only on the live requests. It is
@@ -1389,6 +1452,8 @@ async function addArcGISImageServiceLayer(
       ...(options.sourceType === "portal-item" ? { itemId: input } : {}),
       ...(options.portalUrl?.trim() ? { portalUrl: options.portalUrl.trim() } : {}),
       ...(renderingRule ? { arcgisRenderingRule: renderingRule } : {}),
+      // Labels for the Identify popup's pixel values, one per band.
+      ...(bandNames.length > 0 ? { arcgisBandNames: bandNames } : {}),
       ...(sublayers ? { arcgisSublayers: sublayers } : {}),
       sourceKind:
         options.layerType === "image-service"
@@ -1736,6 +1801,156 @@ function arcgisTileScheme(info: ArcGISImageProducingServiceInfo): ArcGISTileSche
   };
 }
 
+/** Map scale per metre of ground resolution at the 96 DPI ArcGIS assumes. */
+const ARCGIS_SCALE_PER_RESOLUTION = 96 / 0.0254;
+/** Metres per degree of latitude, for a pixel size in a geographic CRS. */
+const METERS_PER_DEGREE = 111_320;
+/**
+ * How much coarser than the source pixels the cache's finest level may be and
+ * still count as drawing them: one zoom level of slack, since a cache is built
+ * to the nearest level rather than to the exact native resolution.
+ */
+const ARCGIS_CACHE_NATIVE_SLACK = 2;
+
+/**
+ * Read an ImageServer's tile cache as an XYZ scheme, when MapLibre should use
+ * it rather than `/exportImage`.
+ *
+ * On top of {@link arcgisTileScheme}'s checks, an image service's cache is:
+ *
+ * - **Clipped to `minScale`/`maxScale`**, the scales it was actually built for.
+ *   Its `tileInfo.lods` often list the whole Web Mercator ladder, and a level
+ *   outside the range answers 404.
+ * - **Passed over for `/exportImage`** when the service can export (it has the
+ *   `Image` capability and is not `TilesOnly`) and the cache stops short of the
+ *   source rasters' resolution, or holds raw LERC values MapLibre cannot draw.
+ *   A cache built only for small scales holds the mosaic's overviews, so
+ *   overzooming its finest level would show those overviews where the service
+ *   would draw the source rasters, as ArcGIS clients do by going dynamic.
+ *
+ * @param info - The service's `?f=json` description.
+ * @param bounds - The service's WGS84 bounds, to judge ground resolution at its latitude.
+ * @returns The tile size and zoom range, or null to draw through `/exportImage`.
+ */
+function arcgisImageServiceTileScheme(
+  info: ArcGISImageProducingServiceInfo,
+  bounds: [number, number, number, number] | undefined,
+): ArcGISTileScheme | null {
+  const scheme = arcgisTileScheme(info);
+  if (!scheme) return null;
+
+  const capabilities = (info.capabilities ?? "")
+    .split(",")
+    .map((capability) => capability.trim().toLowerCase());
+  // Without the capability list, assume the export is there: it is for every
+  // ImageServer but a hosted tiled imagery layer, which advertises `TilesOnly`.
+  const canExport =
+    !capabilities.includes("tilesonly") &&
+    (info.capabilities === undefined || capabilities.includes("image"));
+
+  // The cache's levels within its built scale range; one percent of slack, as
+  // services round the scales they advertise.
+  const minScale = typeof info.minScale === "number" && info.minScale > 0 ? info.minScale : null;
+  const maxScale = typeof info.maxScale === "number" && info.maxScale > 0 ? info.maxScale : null;
+  const level0Resolution = WEB_MERCATOR_LEVEL0_RESOLUTION * (256 / scheme.tileSize);
+  const levels: number[] = [];
+  for (let level = scheme.minzoom; level <= scheme.maxzoom; level += 1) {
+    const lod = info.tileInfo?.lods?.find((candidate) => candidate.level === level);
+    if (!lod) continue;
+    const scale =
+      typeof lod.scale === "number" && lod.scale > 0
+        ? lod.scale
+        : (level0Resolution / 2 ** level) * ARCGIS_SCALE_PER_RESOLUTION;
+    if (minScale !== null && scale > minScale * 1.01) continue;
+    if (maxScale !== null && scale < maxScale * 0.99) continue;
+    levels.push(level);
+  }
+  // A scale range that excludes every level is one the cache cannot serve.
+  if (levels.length === 0) return canExport ? null : scheme;
+  const clipped = { ...scheme, minzoom: Math.min(...levels), maxzoom: Math.max(...levels) };
+  if (!canExport) return clipped;
+  if (isArcGISRawTileCache(info)) return null;
+
+  const nativeResolution = arcgisNativeWebMercatorResolution(info, bounds);
+  if (nativeResolution === null) return clipped;
+  const finestCacheResolution = level0Resolution / 2 ** clipped.maxzoom;
+  return finestCacheResolution <= nativeResolution * ARCGIS_CACHE_NATIVE_SLACK ? clipped : null;
+}
+
+/**
+ * A WKT string with its first `name[...]` node removed, brackets balanced.
+ *
+ * @param wkt - The WKT text.
+ * @param name - The node keyword, such as `GEOGCS`.
+ * @returns The WKT without that node, or unchanged when it has none.
+ */
+function withoutWktNode(wkt: string, name: string): string {
+  const start = wkt.search(new RegExp(`\\b${name}\\s*\\[`, "i"));
+  if (start < 0) return wkt;
+  let depth = 0;
+  for (let index = wkt.indexOf("[", start); index < wkt.length; index += 1) {
+    if (wkt[index] === "[") depth += 1;
+    else if (wkt[index] === "]" && --depth === 0) return wkt.slice(0, start) + wkt.slice(index + 1);
+  }
+  return wkt;
+}
+
+/**
+ * Metres per unit of a service's spatial reference, for its native pixel size.
+ *
+ * A geographic CRS (by WKID, or a `GEOGCS` WKT) measures in degrees; a
+ * projected WKT in the linear `UNIT` it closes with (`Foot_US`, 0.3048...). A
+ * bare projected WKID carries no unit, so it is read as metres: for a foot-based
+ * one that overstates the pixel size and errs toward keeping the cache.
+ *
+ * @param spatialReference - The service's `spatialReference`.
+ * @returns The ground length of one unit, in metres.
+ */
+function arcgisMetersPerUnit(
+  spatialReference: ArcGISImageProducingServiceInfo["spatialReference"],
+): number {
+  const wkid = spatialReference?.latestWkid ?? spatialReference?.wkid;
+  if (typeof wkid === "number" && isGeographicWkid(wkid)) return METERS_PER_DEGREE;
+  const wkt = spatialReference?.wkt?.trim() ?? "";
+  // WKT2 (PROJCRS/GEOGCRS, LENGTHUNIT) is not parsed: read as metres.
+  if (/^GEOGC(S|RS)\b/i.test(wkt)) return METERS_PER_DEGREE;
+  if (/^PROJCRS\b/i.test(wkt)) return 1;
+  // The linear unit is PROJCS's own UNIT: the first one left once the nested
+  // GEOGCS (whose UNIT is angular) is cut out. Trailing AXIS or AUTHORITY
+  // clauses after it do not matter.
+  const unit = /\bUNIT\[\s*"[^"]*"\s*,\s*([0-9.eE+-]+)/i.exec(withoutWktNode(wkt, "GEOGCS"));
+  const metersPerUnit = unit ? Number(unit[1]) : Number.NaN;
+  return Number.isFinite(metersPerUnit) && metersPerUnit > 0 ? metersPerUnit : 1;
+}
+
+/**
+ * An ImageServer's native pixel size as a Web Mercator resolution at the
+ * service's latitude, comparable with a cache level's resolution.
+ *
+ * @param info - The service's `?f=json` description.
+ * @param bounds - The service's WGS84 bounds, for the latitude.
+ * @returns The resolution in Web Mercator metres, or null when the service does not say.
+ */
+function arcgisNativeWebMercatorResolution(
+  info: ArcGISImageProducingServiceInfo,
+  bounds: [number, number, number, number] | undefined,
+): number | null {
+  const pixelSize = info.pixelSizeX;
+  if (typeof pixelSize !== "number" || !Number.isFinite(pixelSize) || pixelSize <= 0) return null;
+  const wkid = info.spatialReference?.latestWkid ?? info.spatialReference?.wkid;
+  // A Web Mercator pixel size is already in the cache's units.
+  if (wkid === 3857 || wkid === 102100 || wkid === 102113) return pixelSize;
+  const groundMeters = pixelSize * arcgisMetersPerUnit(info.spatialReference);
+  // A Web Mercator metre shrinks on the ground by cos(latitude), on both axes
+  // for a projected pixel. For a geographic one (a square of degrees) only the
+  // y axis is stretched by 1/cos: x is a degree of longitude, 111 320 Web
+  // Mercator metres at any latitude. Dividing by cos gives the larger, y-axis
+  // value, the coarser of the two, which is the side the cache must match.
+  const latitude = bounds ? (bounds[1] + bounds[3]) / 2 : 0;
+  const cosine = Math.cos((Math.max(-85, Math.min(85, latitude)) * Math.PI) / 180);
+  return groundMeters / cosine;
+}
+
 /**
  * Re-download an ArcGIS feature layer, replaying the paging it was added with.
  *
@@ -1766,7 +1981,7 @@ export async function refreshArcGISFeatureLayer(params: {
   });
   // Re-read the metadata rather than trusting a stored copy: `maxRecordCount`
   // and the paging capabilities are the service's to change between sessions.
-  const layerInfo = await fetchArcGISJson<ArcGISFeatureLayerInfo>(queryUrl, options, undefined);
+  const layerInfo = await fetchArcGISFeatureLayerInfo(queryUrl, options, undefined);
   const data = identifyArcGISFeatures(
     await fetchArcGISFeaturePages(`${queryUrl}/query`, options, layerInfo),
     layerInfo.objectIdField,
@@ -2568,11 +2783,32 @@ async function resolvePortalFeatureLayerUrl(
       { cause },
     );
   }
-  // City and county ArcGIS Server sites often register a map service layer as
-  // a "Feature Service" item. Such a layer answers the same `/query` requests
-  // as a FeatureServer layer; the caller's geometry-type check still rejects
-  // one that is not a feature layer.
+  // City and county ArcGIS Server sites often register a map service or map
+  // service layer as a "Feature Service" item. Such a layer answers the same
+  // `/query` requests as a FeatureServer layer; the caller's geometry-type
+  // check still rejects one that is not a feature layer.
   if (/\/MapServer\/\d+\/?$/i.test(itemInfo.url)) return trimTrailingSlash(itemInfo.url);
+  if (/\/MapServer\/?$/i.test(itemInfo.url)) {
+    const serviceInfo = await fetchArcGISJson<ArcGISFeatureServiceInfo>(
+      itemInfo.url,
+      options,
+      cause,
+    );
+    // A map service can list raster or annotation layers before its first
+    // feature layer; older servers omit `type`, so fall back to any non-group.
+    const layerId = serviceInfo.layers?.find((layer) =>
+      layer.type ? layer.type === "Feature Layer" : !layer.subLayerIds?.length,
+    )?.id;
+    if (layerId == null) {
+      throw new LocalizedError(
+        `${ERROR_KEY}.noFeatureLayer`,
+        "The ArcGIS feature service does not list a feature layer.",
+        undefined,
+        { cause },
+      );
+    }
+    return `${trimTrailingSlash(itemInfo.url)}/${layerId}`;
+  }
   return resolveFeatureLayerUrl(itemInfo.url, options, cause);
 }
 
@@ -2629,6 +2865,44 @@ async function fetchArcGISJson<T>(
   }
   return json;
 }
+
+/**
+ * A feature layer's `?f=json` metadata, with its contingent values when it
+ * publishes them. Their definition lives in a separate resource, so it is
+ * requested here, once per metadata load, and travels with the metadata to
+ * the editors and the save. A failure to retrieve it is recorded on the
+ * metadata as `unavailable` rather than failing the layer.
+ *
+ * @param layerUrl - The layer's REST URL.
+ * @param options - The connection, including its token.
+ * @param cause - Attached to request errors.
+ * @param signal - Aborts both requests.
+ * @param lookup - `fresh`: ask about contingent values even when the service
+ *   was found to have none for this layer before (a save checks current rules).
+ * @returns The metadata.
+ */
+async function fetchArcGISFeatureLayerInfo(
+  layerUrl: string,
+  options: ArcGISLayerOptions,
+  cause: unknown,
+  signal?: AbortSignal,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<ArcGISFeatureLayerInfo> {
+  const info = await fetchArcGISJson<ArcGISFeatureLayerInfo>(layerUrl, options, cause, signal);
+  // A nonhosted layer is only found to have no contingent values by asking its
+  // service; a confirmed answer is remembered, so a layer on an automatic
+  // refresh does not ask again every time. A save always asks.
+  return withArcGISContingentValues(
+    trimTrailingSlash(layerUrl),
+    info,
+    (resource) => fetchArcGISJson<unknown>(resource, options, cause, signal),
+    signal,
+    { knownAbsent: layersWithoutContingentValues, fresh },
+  );
+}
+
+/** Layers whose service confirmed it has no contingent values for them. */
+const layersWithoutContingentValues = new Set<string>();
 
 async function resolveArcGISLayerBounds(
   input: string,
@@ -2910,6 +3184,25 @@ export interface ArcGISAttributeConstraints {
   subtypeField?: string;
   /** Metadata problems that leave some checks to the server. */
   diagnostics: ArcGISDomainDiagnostic[];
+  /**
+   * How each field group judges a candidate record against its baseline (the
+   * record as currently stored); empty when the layer publishes no usable
+   * contingent values.
+   */
+  contingencyChecks: (
+    candidate: Record<string, unknown>,
+    baseline: Record<string, unknown> | null | undefined,
+  ) => ArcGISContingencyCheck[];
+  /**
+   * Which values of a field fit the rest of a drafted record, or `undefined`
+   * when no field group governs the field.
+   */
+  contingentChoices: (
+    candidate: Record<string, unknown>,
+    field: string,
+  ) => ((value: unknown) => boolean) | undefined;
+  /** Contingent values the layer publishes but that cannot be evaluated, and why. */
+  contingentValuesProblem?: Exclude<ArcGISContingentValues, { status: "ready" }>;
 }
 
 /**
@@ -2930,6 +3223,11 @@ export function arcGISAttributeConstraints(
     formFor: (properties) => arcGISServiceAttributeForm(info, properties),
     subtypeField: arcGISSubtypeField(info),
     diagnostics: arcGISDomainDiagnostics(info),
+    contingencyChecks: (candidate, baseline) => arcGISContingencyChecks(info, candidate, baseline),
+    contingentChoices: (candidate, field) => arcGISContingentChoices(info, candidate, field),
+    ...(info.contingentValues && info.contingentValues.status !== "ready"
+      ? { contingentValuesProblem: info.contingentValues }
+      : {}),
   };
 }
 
@@ -3006,7 +3304,11 @@ export async function saveArcGISLayerEdits(
     const options = await withFreshArcGISToken(
       arcgisEditOptions.get(layerId) ?? { layerType: "feature", sourceType: "url" },
     );
-    const fetched = await fetchArcGISJson<ArcGISFeatureLayerInfo>(layerUrl, options, undefined);
+    // Re-read the contingent values too, so the edits are checked against the
+    // rules the service holds now rather than the ones loaded with the layer.
+    const fetched = await fetchArcGISFeatureLayerInfo(layerUrl, options, undefined, undefined, {
+      fresh: true,
+    });
     const current = useAppStore.getState().layers.find((l) => l.id === layerId);
     if (!current?.geojson) {
       throw new LocalizedError(`${ERROR_KEY}.layerRemoved`, "ArcGIS layer was removed.");
