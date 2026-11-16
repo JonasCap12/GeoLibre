@@ -452,10 +452,10 @@ export function ProgressV2Dashboard({
           <HistoryCurve schedule={schedule} today={todayIso()} />
           <p className="dashboard-history-note">{t("progress.v2.dashboard.historyScope")}</p>
         </Card>
-        <Card title={t("progress.v2.dashboard.delays")}>
+        <Card title={t("progress.v2.dashboard.delays")} className="dashboard-delays">
           <GroupedAlerts groups={alertGroups} onSelect={selectStructure} onOpen={onOpen} />
         </Card>
-        <Card title={t("progress.v2.dashboard.itemsChart")}>
+        <Card title={t("progress.v2.dashboard.itemsChart")} className="dashboard-items">
           <div className="dashboard-scroll">
             <section aria-label={t("progress.v2.dashboard.packagesChart")}>
               <h3>{t("progress.v2.dashboard.packagesChart")}</h3>
@@ -485,7 +485,7 @@ export function ProgressV2Dashboard({
               ))}
           </div>
         </Card>
-        <Card title={t("progress.v2.dashboard.yardChart")}>
+        <Card title={t("progress.v2.dashboard.yardChart")} className="dashboard-yard-card">
           <div className="dashboard-scroll">
             {yard.map((entry) => {
               const total = Math.max(1, entry.total),

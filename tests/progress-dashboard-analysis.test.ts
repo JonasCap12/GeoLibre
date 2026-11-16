@@ -29,8 +29,10 @@ import {
   watchDashboardMap,
   fitDashboardMap,
   captureDashboardMap,
+  DASHBOARD_MAX_ZOOM,
 } from "../apps/geolibre-desktop/src/lib/progress-dashboard-map";
 import type { Map as MapLibreMap } from "maplibre-gl";
+import type { GeoLibreLayer } from "@geolibre/core";
 import { geojsonLayer } from "./helpers/layer-fixtures";
 
 function fixture() {
@@ -218,6 +220,28 @@ it("separates manual map movement from camera fits and resolves hover against or
   fitDashboardMap({ fitBounds: (value) => bounds.push(value) }, layer, [0]);
   assert.equal(bounds.length, 1);
   assert.equal(await captureDashboardMap(null), null);
+});
+it("frames one small structure no closer than the satellite imagery reaches", () => {
+  const layer = {
+    geojson: {
+      type: "FeatureCollection",
+      features: [
+        { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [108, 11.6] } },
+      ],
+    },
+  } as unknown as GeoLibreLayer;
+  const calls: Array<{ maxZoom?: number; pitch?: number }> = [];
+  const map = {
+    resize() {},
+    fitBounds: (_b: unknown, options: { maxZoom?: number; pitch?: number }) => calls.push(options),
+  };
+  fitDashboardMap({ fitBounds() {}, getMap: () => map as never }, layer, [0]);
+  // Esri World Imagery has no z19 on parts of the owner's route; tilted at 55°,
+  // a culvert framed past z16.5 would load z19 near the camera and show
+  // "Map data not yet available".
+  assert.equal(calls[0].maxZoom, DASHBOARD_MAX_ZOOM);
+  assert.ok(DASHBOARD_MAX_ZOOM <= 16.5);
+  assert.equal(calls[0].pitch, 55);
 });
 it("exports four real workbook sheets with report dates, numeric values and explicit current-detail dates", async () => {
   const i18n = createInstance();
