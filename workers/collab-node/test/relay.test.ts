@@ -591,6 +591,10 @@ describe("Node collaboration relay", () => {
     host.send(JSON.stringify({ type: "present", active: true }));
     assert.equal((await guestSawHost).clientId, hostId);
 
+    const released = next(guest, "presenter");
+    host.send(JSON.stringify({ type: "present", active: false }));
+    assert.equal((await released).clientId, null);
+
     // A later claim replaces the previous presenter.
     const hostSawGuest = next(host, "presenter");
     guest.send(JSON.stringify({ type: "present", active: true }));
