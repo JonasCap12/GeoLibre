@@ -170,16 +170,14 @@ it("blocks account workspace restore for project, dataset, service and collabora
   }
 });
 
-it(
-  "checks project deep links in an explicitly supplied search",
-  {
-    todo: "bug: hasCloudWorkspaceBlockingPayload reads project URLs from window.location instead of its search argument",
-  },
-  () => {
-    window.history.replaceState({}, "", "/");
-    assert.equal(
-      hasCloudWorkspaceBlockingPayload("?project=https://example.com/map.geolibre.json"),
-      true,
-    );
-  },
-);
+it("checks project deep links in an explicitly supplied search", () => {
+  window.history.replaceState({}, "", "/");
+  assert.equal(
+    hasCloudWorkspaceBlockingPayload("?project=https://example.com/map.geolibre.json"),
+    true,
+  );
+  assert.equal(
+    hasCloudWorkspaceBlockingPayload("?tool=buffer&url=https://example.com/input.tif"),
+    false,
+  );
+});

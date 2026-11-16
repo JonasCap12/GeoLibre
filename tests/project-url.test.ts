@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fetchProjectFromUrl, parseShareRole } from "../apps/geolibre-desktop/src/lib/project-url";
+import {
+  fetchProjectFromUrl,
+  parseShareRole,
+  projectUrlFromLocation,
+} from "../apps/geolibre-desktop/src/lib/project-url";
 
 const PROJECT_URL = "https://example.com/Test.geolibre.json";
+
+it("keeps project URL parsing safe when window is absent, with or without an explicit search", () => {
+  assert.equal(typeof window, "undefined");
+  assert.equal(projectUrlFromLocation(), null);
+  assert.equal(projectUrlFromLocation(`?project=${PROJECT_URL}`), null);
+});
 
 // A serialized project carrying exactly the fields `parseProject` requires
 // (version, name, mapView). Kept as a string so the fixture stays decoupled

@@ -52,7 +52,7 @@ export interface CloudWorkspaceState {
 export function hasCloudWorkspaceBlockingPayload(search = window.location.search): boolean {
   const params = new URLSearchParams(search);
   return (
-    projectUrlFromLocation() !== null ||
+    projectUrlFromLocation(search) !== null ||
     dataUrlParameters(search) !== null ||
     serviceUrlParameter(search) !== null ||
     params.has("collab")
