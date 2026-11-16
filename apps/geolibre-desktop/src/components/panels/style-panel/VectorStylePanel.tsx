@@ -22,9 +22,10 @@ import { EditorTrackingSection } from "../EditorTrackingSection";
 import { LayerJoinsSection } from "../LayerJoinsSection";
 import { PasteStyleDialog } from "../PasteStyleDialog";
 import { PopupSection } from "../PopupSection";
+import { FloorPickerSection } from "../../floor-picker/FloorPickerSection";
 import { QuickFiltersSection } from "../QuickFiltersSection";
 import { VirtualFieldsSection } from "../VirtualFieldsSection";
-import { STYLE_PANEL_ASIDE_CLASS } from "./constants";
+import { STYLE_PANEL_ASIDE_CLASS, STYLE_PANEL_SCROLL_CLASS } from "./constants";
 import { DiagramSection } from "./DiagramSection";
 import { Elevation3dControls } from "./Elevation3dControls";
 import { ExtrusionControls } from "./ExtrusionControls";
@@ -366,7 +367,7 @@ export function VectorStylePanel({
           </ul>
         </div>
       )}
-      <ScrollArea className="flex-1">
+      <ScrollArea className={STYLE_PANEL_SCROLL_CLASS}>
         {/* Padding lives on the inner content (not the ScrollArea root) with
             extra right clearance so the overlay scrollbar never covers the
             right edge of a control (e.g. the "Transparent" label). */}
@@ -504,6 +505,15 @@ export function VectorStylePanel({
                 mapControllerRef={mapControllerRef}
                 mapReadyGeneration={mapReadyGeneration}
               />
+            </>
+          ) : null}
+          {/* The floor picker reads the floors from the layer's own features, so it
+              needs them in the store. Same gate as Quick filters: a custom or deck.gl
+              layer takes no MapLibre filter, so a floor choice could not narrow it. */}
+          {hasQuickFilterControls && layer.geojson ? (
+            <>
+              <Separator />
+              <FloorPickerSection key={`fp-${layer.id}`} layer={layer} />
             </>
           ) : null}
           {/* Persistent attribute joins need the layer's features in the store

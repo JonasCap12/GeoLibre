@@ -3,9 +3,12 @@ import { describe, it } from "node:test";
 import type { Feature, FeatureCollection } from "geojson";
 import {
   GEO_EDITOR_PLUGIN_ID,
+  getGeoEditorOptions,
   hasMassingFeatures,
+  installGeomanActionPatches,
   isGeomanCommittedDisplayLayer,
   maplibreGeoEditorPlugin as plugin,
+  setGeoEditorFileTools,
   sketchesStyleForMassing,
   withCreatedSketch,
   withoutSupersededSketchCopies,
@@ -253,5 +256,75 @@ describe("maplibreGeoEditorPlugin", () => {
       withoutSupersededSketchCopies(collection(older, callbackCopy), collection(older)).features,
       [older, callbackCopy],
     );
+  });
+});
+
+describe("geo-editor file tools", () => {
+  it("shows the Open/Save buttons by default and drops them when switched off", () => {
+    assert.deepEqual(getGeoEditorOptions(null).fileModes, ["open", "save"]);
+    setGeoEditorFileTools(false);
+    try {
+      assert.deepEqual(getGeoEditorOptions(null).fileModes, []);
+    } finally {
+      setGeoEditorFileTools(true);
+    }
+    assert.deepEqual(getGeoEditorOptions(null).fileModes, ["open", "save"]);
+  });
+});
+
+describe("installGeomanActionPatches: edge-marker placement (#3382)", () => {
+  type Point = { coordinate: number[]; path: (string | number)[] };
+  type Helper = { getSegmentMiddlePosition(segment: { start: Point; end: Point }): Point };
+  // Geoman's own placement: a screen midpoint, which on a zoomed-out globe can
+  // land anywhere. The sentinel makes an unpatched call obvious.
+  const geomanHelper = (): Helper => ({
+    getSegmentMiddlePosition: () => ({ coordinate: [999, 999], path: ["unpatched"] }),
+  });
+  const segment = {
+    start: {
+      coordinate: [107.22092858279524, 10.364483954301832],
+      path: ["geometry", "coordinates", 0, 3],
+    },
+    end: {
+      coordinate: [108.36612999881545, 11.008320624226272],
+      path: ["geometry", "coordinates", 0, 4],
+    },
+  };
+  const assertOnEdge = (helper: Helper) => {
+    const middle = helper.getSegmentMiddlePosition(segment);
+    assert.equal(
+      middle.coordinate[0],
+      (segment.start.coordinate[0] + segment.end.coordinate[0]) / 2,
+    );
+    assert.ok(Math.abs(middle.coordinate[1] - 10.686572948871682) < 1e-9);
+    // Geoman's insertVertex splices at the end's path, so the edge path must
+    // be the start's ring with the last index replaced by -1, as Geoman builds it.
+    assert.deepEqual(middle.path, ["geometry", "coordinates", 0, -1]);
+  };
+
+  it("patches the shape-markers helper as Geoman registers it", () => {
+    const geoman = { actionInstances: {} as Record<string, unknown> };
+    installGeomanActionPatches(geoman as never);
+    const helper = geomanHelper();
+    geoman.actionInstances.helper__shape_markers = helper;
+    assert.equal(geoman.actionInstances.helper__shape_markers, helper);
+    assertOnEdge(helper);
+  });
+
+  it("patches a helper Geoman already registered", () => {
+    const helper = geomanHelper();
+    const geoman = {
+      actionInstances: { helper__shape_markers: helper } as Record<string, unknown>,
+    };
+    installGeomanActionPatches(geoman as never);
+    assertOnEdge(helper);
+  });
+
+  it("leaves other action instances alone", () => {
+    const geoman = { actionInstances: {} as Record<string, unknown> };
+    installGeomanActionPatches(geoman as never);
+    const other = geomanHelper();
+    geoman.actionInstances.helper__snapping = other;
+    assert.deepEqual(other.getSegmentMiddlePosition(segment).path, ["unpatched"]);
   });
 });

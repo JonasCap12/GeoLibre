@@ -21,7 +21,8 @@ import {
   trimHistoryBySize,
 } from "../history";
 import { scrubPrintLayoutForLayers } from "../print-layout-config";
-import type { GeoLibreProject, LayerGroup } from "../types";
+import { getRegionalBasemapByStyleUrl } from "../regional-basemaps";
+import { DEFAULT_BASEMAP, type GeoLibreProject, type LayerGroup } from "../types";
 import { scrubSecondaryPaneLayerVisibility } from "./layer-removal";
 import type { AppState } from "./types";
 
@@ -143,6 +144,29 @@ function pruneHistoryBySize(): void {
   }
 }
 
+/** History copies of layer arrays that carried a transient dashboard, keyed by the store's array. */
+const historyLayersCache = new WeakMap<AppState["layers"], AppState["layers"]>();
+
+/**
+ * The layers as history records them: without the transient
+ * `progressDashboard` view state. The store's own array is returned when no
+ * layer has one, and the same stripped copy for the same array otherwise, so
+ * two calls on one state yield one array (upstream's geoarrow history relies
+ * on that reference staying stable).
+ */
+function historyLayers(layers: AppState["layers"]): AppState["layers"] {
+  if (!layers.some((layer) => "progressDashboard" in layer)) return layers;
+  const cached = historyLayersCache.get(layers);
+  if (cached) return cached;
+  const stripped = layers.map((layer) => {
+    if (!("progressDashboard" in layer)) return layer;
+    const { progressDashboard: _dashboard, ...saved } = layer;
+    return saved;
+  });
+  historyLayersCache.set(layers, stripped);
+  return stripped;
+}
+
 /**
  * Only these fields participate in undo/redo; everything else (selection,
  * ui flags, mapView/camera, pointerCoords, project metadata, isDirty, ...)
@@ -150,11 +174,7 @@ function pruneHistoryBySize(): void {
  */
 export function partializeHistory(s: AppState): HistoryState {
   return {
-    layers: s.layers.map((layer) => {
-      if (!("progressDashboard" in layer)) return layer;
-      const { progressDashboard: _dashboard, ...saved } = layer;
-      return saved;
-    }),
+    layers: historyLayers(s.layers),
     layerGroups: s.layerGroups,
     basemapStyleUrl: s.basemapStyleUrl,
     basemapVisible: s.basemapVisible,
@@ -273,6 +293,12 @@ function finishHistoryStep(previousBasemapStyleUrl: string): void {
           },
         }
       : {};
+  // A step recorded before the deployment disabled regional basemaps must not
+  // bring one back.
+  const basemapPatch: { basemapStyleUrl?: string } =
+    s.regionalBasemapPolicy === "block" && getRegionalBasemapByStyleUrl(s.basemapStyleUrl)
+      ? { basemapStyleUrl: DEFAULT_BASEMAP }
+      : {};
   boundStore().setState(
     selectionDangling
       ? {
@@ -285,6 +311,9 @@ function finishHistoryStep(previousBasemapStyleUrl: string): void {
         }
       : { isDirty: true, ...ellipsoidPatch, ...referencePatch },
   );
+  // The basemap is tracked, so recording this correction as an edit would
+  // clear the redo stack and leave the regional basemap one undo step back.
+  if (basemapPatch.basemapStyleUrl) withoutHistory(() => boundStore().setState(basemapPatch));
   // The setState above must not leave a coalesce window open for the next edit.
   cancelHistoryCoalesce();
 }
@@ -304,6 +333,8 @@ export function undo(): void {
       boundStore().getState().loadProject(entry.before, entry.beforePath, {
         rememberRecent: false,
         presenting: false,
+        // A snapshot of the store, whose basemap already passed the gate.
+        trustBasemap: true,
       });
       projectRestoreUndo = null;
       boundStore().setState({ isDirty: true });
@@ -333,6 +364,8 @@ export function redo(): void {
       boundStore().getState().loadProject(entry.after, entry.afterPath, {
         rememberRecent: false,
         presenting: false,
+        // A snapshot of the store, whose basemap already passed the gate.
+        trustBasemap: true,
       });
       projectRestoreRedo = null;
       boundStore().setState({ isDirty: true });
@@ -368,6 +401,25 @@ export function withoutHistory(change: () => void): void {
   } finally {
     temporal.resume();
   }
+}
+
+/**
+ * Rewrite the basemap recorded in every undo/redo snapshot from `from` to `to`.
+ *
+ * Used when the user accepts a regional basemap a loaded project asked for:
+ * snapshots taken while the confirmation was open recorded the fallback, which
+ * is not a basemap anyone chose, so undo must not bring it back.
+ *
+ * @param from - The basemap style URL to replace (the fallback).
+ * @param to - The basemap style URL to record instead.
+ */
+export function replaceHistoryBasemap(from: string, to: string): void {
+  const temporal = boundStore().temporal;
+  const swap = (states: Partial<HistoryState>[]) =>
+    states.map((s) => (s.basemapStyleUrl === from ? { ...s, basemapStyleUrl: to } : s));
+  const { pastStates, futureStates } = temporal.getState();
+  if (pastStates.length === 0 && futureStates.length === 0) return;
+  temporal.setState({ pastStates: swap(pastStates), futureStates: swap(futureStates) });
 }
 
 /** Empty both the undo and redo stacks (e.g. on new/loaded project). */

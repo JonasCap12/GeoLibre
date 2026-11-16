@@ -19,8 +19,9 @@ import time
 import uuid
 import warnings
 import zlib
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.error import URLError
 from urllib.parse import quote, unquote_plus, urlsplit
 from urllib.request import HTTPRedirectHandler, build_opener
@@ -330,6 +331,9 @@ DEFAULT_LAYER_STYLE: dict[str, Any] = {
     "fillColor": "#3b82f6",
     "strokeColor": "#1e40af",
     "strokeWidth": 2,
+    "strokeOpacity": 1,
+    "strokeDash": [],
+    "strokeBlur": 0,
     "fillOpacity": 0.6,
     "circleRadius": 6,
     "textColor": "#111827",
@@ -342,9 +346,13 @@ DEFAULT_LAYER_STYLE: dict[str, Any] = {
     "extrusionHeightProperty": "height",
     "extrusionHeightScale": 1,
     "extrusionBase": 0,
+    "extrusionBaseProperty": "",
+    "extrusionBaseScale": 1,
+    "extrusionFloorHeight": 0,
     "extrusionAdvancedStyleEnabled": False,
     "extrusionColorExpression": "",
     "extrusionHeightExpression": "",
+    "extrusionBaseExpression": "",
     "vectorStyleMode": "single",
     "vectorStyleProperty": "",
     "vectorStyleClassCount": 5,
@@ -1460,6 +1468,238 @@ def tile_layer(
     return layer
 
 
+PLANETARY_COMPUTER_SOURCE_KIND = "planetary-computer-raster"
+
+# A band of one asset is spelled `<asset>_b<N>` in a band-math expression. An
+# expression without one refers to whole assets (`(B08-B04)/(B08+B04)`), which
+# the Planetary Computer Data API only evaluates with `asset_as_band` set.
+_ASSET_BAND_REFERENCE = re.compile(r"_b\d+\b")
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _planetary_computer_datetime(value: str | tuple[str, str] | list[str]) -> str:
+    """Normalize a date or date range to the RFC 3339 form a STAC search takes.
+
+    Args:
+        value: A single date/datetime, a ``"start/end"`` range, or a
+            ``(start, end)`` pair. A date-only bound is widened to the whole
+            day (start of day for the first bound, end of day for the last).
+            ``".."`` leaves a bound open.
+
+    Returns:
+        The datetime, or ``start/end`` range, with full timestamps.
+
+    Raises:
+        ValueError: If the value is empty or has more than two bounds.
+    """
+    if isinstance(value, (tuple, list)):
+        parts = [str(part) for part in value]
+    else:
+        parts = str(value).split("/")
+    parts = [part.strip() for part in parts]
+    if not 1 <= len(parts) <= 2 or not all(parts):
+        raise ValueError("datetime must be a date, a 'start/end' range, or a (start, end) pair")
+
+    def bound(text: str, end: bool) -> str:
+        if text == ".." or "T" in text.upper():
+            return text
+        # A partial date ("2024-06") would be widened into a timestamp the STAC
+        # search rejects, and only when the app opens the project.
+        if not _DATE_ONLY.fullmatch(text):
+            raise ValueError(
+                f"datetime bound {text!r} must be a YYYY-MM-DD date, an RFC 3339 datetime, or '..'"
+            )
+        return f"{text}T23:59:59Z" if end else f"{text}T00:00:00Z"
+
+    if len(parts) == 1:
+        if parts[0] == "..":
+            raise ValueError("datetime cannot be an open bound on its own")
+        # A date-only value means that whole day.
+        if "T" not in parts[0].upper():
+            return f"{bound(parts[0], False)}/{bound(parts[0], True)}"
+        return parts[0]
+    return f"{bound(parts[0], False)}/{bound(parts[1], True)}"
+
+
+def planetary_computer_layer(
+    collection: str,
+    item: str | None = None,
+    *,
+    name: str | None = None,
+    datetime: str | tuple[str, str] | list[str] | None = None,
+    bbox: list[float] | tuple[float, ...] | None = None,
+    preset: str | None = None,
+    assets: list[str] | None = None,
+    expression: str | None = None,
+    rescale: tuple[float, float] | list[float] | None = None,
+    colormap: str | None = None,
+    max_cloud_cover: float | None = None,
+) -> dict[str, Any]:
+    """Build a Microsoft Planetary Computer raster layer.
+
+    With ``item`` the layer draws that one STAC item. Without it the layer is a
+    mosaic: every item of the collection matching ``datetime`` and
+    ``max_cloud_cover``, composited into one seamless layer.
+
+    The layer holds no tile URL. It carries the collection, the item id or the
+    mosaic's search, and the render options, in the shape the app's Planetary
+    Computer panel saves (see
+    packages/plugins/src/plugins/maplibre-planetary-computer.ts), so opening
+    the project makes the panel rebuild it: the layer is listed in the panel's
+    Layers tab and can be restyled there. Building it needs no network access.
+
+    Args:
+        collection: STAC collection id, e.g. ``"sentinel-2-l2a"``.
+        item: STAC item id to draw. Omit for a mosaic of the collection.
+        name: Layer display name. Defaults to the item id, or to the collection
+            id with the date range for a mosaic.
+        datetime: Mosaic only. The date range to composite: a ``"start/end"``
+            string or a ``(start, end)`` pair. Date-only bounds cover whole days.
+        bbox: ``[west, south, east, north]`` extent of the layer, used by
+            zoom-to-layer and to bound a mosaic's tile requests.
+        preset: Name of one of the panel's render presets for the collection,
+            e.g. ``"true-color"``, ``"false-color"``, ``"ndvi"``. With none of
+            the render options the collection's default preset is used.
+        assets: Asset names to render, e.g. ``["B08", "B04", "B03"]``.
+        expression: Band-math expression over assets, e.g.
+            ``"(B08-B04)/(B08+B04)"``. Mutually exclusive with ``assets``.
+        rescale: ``(min, max)`` value range stretched to the output colors.
+        colormap: Named colormap for a single-band or expression render, e.g.
+            ``"viridis"``.
+        max_cloud_cover: Mosaic only. Keep items at or below this
+            ``eo:cloud_cover`` percentage; the least cloudy are drawn on top.
+
+    Returns:
+        A layer dict for the project's ``layers`` array.
+
+    Raises:
+        ValueError: If the collection is empty, ``assets`` and ``expression``
+            are combined, a mosaic-only option is given with ``item``, or
+            ``bbox``/``rescale``/``max_cloud_cover`` is malformed.
+    """
+    collection = str(collection or "").strip()
+    if not collection:
+        raise ValueError("collection is required")
+    if item is not None:
+        item = str(item).strip()
+        if not item:
+            raise ValueError("item must be a non-empty STAC item id")
+        if datetime is not None or max_cloud_cover is not None:
+            raise ValueError(
+                "datetime and max_cloud_cover select the items of a mosaic; "
+                "omit them when item names a single STAC item"
+            )
+    if assets and expression:
+        raise ValueError("pass either assets or expression, not both")
+
+    render_params: dict[str, Any] = {}
+    if assets:
+        render_params["assets"] = [str(asset) for asset in assets]
+    if expression:
+        render_params["expression"] = expression
+        if not _ASSET_BAND_REFERENCE.search(expression):
+            render_params["asset_as_band"] = True
+    if rescale is not None:
+        if isinstance(rescale, str) or len(rescale) != 2:
+            raise ValueError("rescale must be a (min, max) pair")
+        low, high = (_finite_number(value, "rescale") for value in rescale)
+        render_params["rescale"] = f"{_format_number(low)},{_format_number(high)}"
+    if colormap:
+        render_params["colormap_name"] = colormap
+
+    bounds: list[float] | None = None
+    if bbox is not None:
+        if len(bbox) != 4:
+            raise ValueError("bbox must be [west, south, east, north]")
+        bounds = [_finite_number(value, "bbox") for value in bbox]
+        if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+            raise ValueError("bbox must be [west, south, east, north]")
+
+    search: dict[str, Any] | None = None
+    range_label = ""
+    if item is None:
+        search = {"collections": [collection]}
+        if datetime is not None:
+            search["datetime"] = _planetary_computer_datetime(datetime)
+            range_label = " to ".join(
+                part[:10] for part in search["datetime"].split("/") if part != ".."
+            )
+        if max_cloud_cover is not None:
+            cloud = _finite_number(max_cloud_cover, "max_cloud_cover")
+            if not 0 <= cloud <= 100:
+                raise ValueError("max_cloud_cover must be between 0 and 100")
+            search["query"] = {"eo:cloud_cover": {"lte": cloud}}
+            search["sortby"] = [{"field": "properties.eo:cloud_cover", "direction": "asc"}]
+        else:
+            search["sortby"] = [{"field": "properties.datetime", "direction": "desc"}]
+
+    default_name = item or (f"{collection} ({range_label})" if range_label else collection)
+    layer = _layer_base(name or default_name, "raster")
+    source_id = f"{layer['id']}-source"
+    layer["source"] = {
+        "collectionId": collection,
+        "sourceId": source_id,
+        "type": "raster",
+    }
+    metadata: dict[str, Any] = {
+        "assets": render_params.get("assets", []),
+        "externalNativeLayer": True,
+        "identifiable": True,
+        "nativeLayerIds": [layer["id"]],
+        "planetaryComputerLayerType": "item" if item else "mosaic",
+        "renderParams": render_params,
+        "sourceId": source_id,
+        "sourceIds": [source_id],
+        "sourceKind": PLANETARY_COMPUTER_SOURCE_KIND,
+        "stacCollectionId": collection,
+        "tileType": "raster",
+    }
+    if preset:
+        metadata["presetName"] = preset
+    if item:
+        metadata["stacItemId"] = item
+    if search is not None:
+        metadata["stacSearchParams"] = search
+    if bounds is not None:
+        metadata["bounds"] = bounds
+    layer["metadata"] = metadata
+    layer["sourcePath"] = collection
+    return layer
+
+
+def _finite_number(value: Any, label: str) -> float:
+    """Coerce a value to a finite float.
+
+    Args:
+        value: The value to coerce.
+        label: The argument name, for the error message.
+
+    Returns:
+        The value as a float.
+
+    Raises:
+        ValueError: If the value is not a finite number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} values must be numbers")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{label} values must be finite")
+    return number
+
+
+def _format_number(value: float) -> str:
+    """Format a number without a trailing ``.0`` for whole values.
+
+    Args:
+        value: The number to format.
+
+    Returns:
+        ``"3000"`` for ``3000.0`` and ``"0.8"`` for ``0.8``.
+    """
+    return str(int(value)) if value == int(value) else repr(value)
+
+
 def cog_layer(
     name: str,
     url: str,
@@ -2057,13 +2297,17 @@ def three_d_tiles_layer(
     """Build a 3D Tiles layer from a ``tileset.json`` URL or a Cesium Ion asset.
 
     A URL layer matches what ``restoreThreeDTilesLayers`` replays from a saved
-    project, so the deck.gl 3D-tiles overlay is rebuilt on load. An Ion asset
-    (``ion_asset_id``) renders only on the 3D globe, which loads it with the
-    app's Cesium Ion token; the token itself is never written to the project.
+    project, so the deck.gl 3D-tiles overlay is rebuilt on load. An ArcGIS I3S
+    scene layer URL (``.../SceneServer/layers/<n>``) is filed as a scene layer,
+    the way the app's 3D Tiles panel files it, so it draws on the 2D map and the
+    globe. An Ion asset (``ion_asset_id``) renders only on the 3D globe, which
+    loads it with the app's Cesium Ion token; the token itself is never written
+    to the project.
 
     Args:
         name: Layer display name.
-        url: URL of the 3D Tiles ``tileset.json``. Omit for an Ion asset.
+        url: URL of the 3D Tiles ``tileset.json``, or of an ArcGIS I3S scene
+            layer (``.../SceneServer/layers/<n>``). Omit for an Ion asset.
         ion_asset_id: A Cesium Ion asset id (for example 96188, Cesium OSM
             Buildings). Mutually exclusive with ``url``.
         altitude_offset: Vertical offset applied to the tileset, in meters.
@@ -2089,6 +2333,8 @@ def three_d_tiles_layer(
         )
     layer = _layer_base(name, "3d-tiles", **style)
     source_id = layer["id"]
+    if is_i3s_scene_layer_url(url):
+        return _i3s_scene_layer(layer, url, altitude_offset, request_headers)
     source: dict[str, Any] = {
         "type": "3d-tiles",
         "url": url,
@@ -2108,6 +2354,86 @@ def three_d_tiles_layer(
         "altitudeOffset": altitude_offset,
         "panelCollapsed": True,
         "status": "loading",
+    }
+    layer["sourcePath"] = url
+    return layer
+
+
+ARCGIS_I3S_SOURCE_KIND = "arcgis-i3s"
+"""``source.type`` and ``metadata.sourceKind`` of an ArcGIS I3S scene layer."""
+
+_I3S_SCENE_SERVER_PATH_RE = re.compile(
+    r"/SceneServer(/layers/\d+(/sublayers/\d+)?)?/?$", re.IGNORECASE
+)
+
+
+def is_i3s_scene_layer_url(url: str) -> bool:
+    """Return whether a URL points at an ArcGIS I3S scene service.
+
+    Matches the same URLs as the project migration ``withI3sSceneLayerKind``
+    in ``packages/core/src/project.ts``: the path of the service or one of its
+    layers. That is narrower than the 3D Tiles panel's
+    ``isArcgisI3sSceneLayerUrl`` on purpose, so a ``tileset.json`` stored under
+    a ``SceneServer`` folder stays a tileset.
+
+    Args:
+        url: The tileset or scene layer URL.
+
+    Returns:
+        True for a ``.../SceneServer``, ``.../SceneServer/layers/<n>`` or
+        Building Scene Layer ``.../layers/<n>/sublayers/<m>`` URL. Only the
+        path is matched, so a query such as ``?ref=/SceneServer/x`` does not
+        count, and a URL that does not parse is not a scene layer.
+    """
+    try:
+        path = urlsplit(url.strip()).path
+    except ValueError:
+        return False
+    return bool(_I3S_SCENE_SERVER_PATH_RE.search(path))
+
+
+def _i3s_scene_layer(
+    layer: dict[str, Any],
+    url: str,
+    altitude_offset: float,
+    request_headers: dict[str, str] | None,
+) -> dict[str, Any]:
+    """Turn a 3D Tiles layer base into an ArcGIS I3S scene layer record.
+
+    The record matches ``createArcgisI3sStoreLayer`` in the app: the app draws a
+    scene layer only when its source kind is ``arcgis-i3s``, through its deck.gl
+    overlay on the 2D map and ``I3SDataProvider`` on the globe. Filed as a plain
+    tileset, the URL is loaded as a ``tileset.json`` and nothing draws.
+
+    Args:
+        layer: The layer from ``_layer_base``.
+        url: The ``.../SceneServer/layers/<n>`` URL.
+        altitude_offset: Vertical offset in metres.
+        request_headers: Optional request headers (used by the globe).
+
+    Returns:
+        The completed layer dict.
+    """
+    source_id = layer["id"]
+    url = url.strip()
+    source: dict[str, Any] = {
+        "type": ARCGIS_I3S_SOURCE_KIND,
+        "url": url,
+        "sourceId": source_id,
+        "altitudeOffset": altitude_offset,
+    }
+    if request_headers:
+        source["requestHeaders"] = request_headers
+    layer["source"] = source
+    layer["metadata"] = {
+        "customLayerType": ARCGIS_I3S_SOURCE_KIND,
+        "externalDeckLayer": True,
+        "externalNativeLayer": True,
+        "identifiable": False,
+        "nativeLayerIds": [f"{source_id}-deck"],
+        "sourceId": source_id,
+        "sourceKind": ARCGIS_I3S_SOURCE_KIND,
+        "altitudeOffset": altitude_offset,
     }
     layer["sourcePath"] = url
     return layer
@@ -2935,6 +3261,10 @@ PUBLISHABLE_PLUGIN_SETTINGS: dict[str, tuple[str, ...] | None] = {
     # Point class edits keyed by (node key, index): compressed numbers, no user
     # text. Source URLs are values, so the caller's scrub still covers them.
     "geolibre-point-cloud-annotation": None,
+    # The server URL, the map's publish key and a layer-id-to-dataset-key map.
+    # The sub-keys are listed rather than the blob, so a key a later change
+    # stores here is dropped instead of published.
+    "maplibre-gl-geolens": ("serverUrl", "mapKey", "layerKeys"),
 }
 
 # Plugins the app activates by default (``activeByDefault: true`` in
@@ -3293,6 +3623,188 @@ def filter_expression(expression: Any) -> list[Any]:
             "several with 'all' / 'any'"
         )
     return parsed
+
+
+# -- floor picker ----------------------------------------------------------------
+
+#: Mirror of ``LevelFilterMode`` in ``packages/core/src/types.ts``.
+LEVEL_FILTER_MODES = ("all", "only", "below")
+
+# ASCII digits only, as in the app's JavaScript `\d` (Python's `\d` also
+# matches other scripts' digits, which the app reads as named floors).
+_LEVEL_NUMBER = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
+_LEVEL_RANGE = re.compile(r"^(-?[0-9]+(?:\.[0-9]+)?)\s*-\s*(-?[0-9]+(?:\.[0-9]+)?)$")
+#: A span wider than this is read as its two ends (``MAX_RANGE_STEPS`` in level-filter.ts).
+_LEVEL_MAX_RANGE_STEPS = 200
+
+
+def _level_label(value: float) -> str:
+    """Format a floor number exactly as JavaScript's ``String(number)`` does.
+
+    The app labels floors with ``String(number)``, so a label written here must
+    match it byte for byte, including where the two languages switch to
+    exponent notation (JavaScript: below 1e-6 or from 1e21; Python's ``repr``:
+    below 1e-4 or from 1e16).
+
+    Args:
+        value: A finite floor number.
+
+    Returns:
+        The label JavaScript would produce.
+    """
+    number = float(value)
+    if math.isinf(number):  # a numeric text too long for a double
+        return "Infinity" if number > 0 else "-Infinity"
+    if number == 0:
+        return "0"
+    magnitude = abs(number)
+    if 1e-6 <= magnitude < 1e21:
+        if number.is_integer():
+            return str(int(number))
+        # Shortest round-trip digits, in plain positional notation.
+        return format(Decimal(repr(number)), "f")
+    # repr uses exponent notation below 1e-4 and from 1e16, so both ranges here have one.
+    mantissa, _, exponent = repr(number).partition("e")
+    mantissa = mantissa.removesuffix(".0")
+    exp = int(exponent)
+    return f"{mantissa}e{'+' if exp >= 0 else '-'}{abs(exp)}"
+
+
+def parse_level_value(raw: Any) -> list[tuple[str, float | None]]:
+    """Parse one level attribute into the floors it names.
+
+    Mirrors ``parseLevelValue`` in ``packages/core/src/level-filter.ts``:
+    numbers are taken as they are; text is split on ``;`` (OpenStreetMap's list
+    separator) and each part read as a number, an integer span such as ``0-2``
+    (every floor it covers), or a named floor such as ``G``.
+
+    Args:
+        raw: The attribute value.
+
+    Returns:
+        ``(label, ordinal)`` pairs; ``ordinal`` is ``None`` for a named floor.
+    """
+    if isinstance(raw, bool):
+        return []
+    if isinstance(raw, (int, float)):
+        try:
+            number = float(raw)
+        except OverflowError:  # an integer too large for a double: no floor, as in the app
+            return []
+        return [(_level_label(number), number)] if math.isfinite(number) else []
+    if not isinstance(raw, str):
+        return []
+    tokens: list[tuple[str, float | None]] = []
+    for part in raw.split(";"):
+        text = part.strip()
+        if not text:
+            continue
+        if _LEVEL_NUMBER.match(text):
+            tokens.append((_level_label(float(text)), float(text)))
+            continue
+        span = _LEVEL_RANGE.match(text)
+        if span:
+            lo, hi = sorted((float(span.group(1)), float(span.group(2))))
+            if lo.is_integer() and hi.is_integer() and hi - lo <= _LEVEL_MAX_RANGE_STEPS:
+                tokens.extend((_level_label(v), float(v)) for v in range(int(lo), int(hi) + 1))
+            else:
+                tokens.extend([(_level_label(lo), lo), (_level_label(hi), hi)])
+            continue
+        tokens.append((text, None))
+    return tokens
+
+
+def level_value_matches(raw: Any, level: str, mode: str) -> bool:
+    """Whether a feature's level attribute falls on the chosen floor.
+
+    Args:
+        raw: The feature's level attribute.
+        level: The chosen floor's label, e.g. ``"0"``.
+        mode: ``"only"`` for that floor, ``"below"`` for it and every numbered
+            floor under it, ``"all"`` for everything.
+
+    Returns:
+        True when the feature is drawn.
+    """
+    if mode == "all":
+        return True
+    text = level.strip()
+    target = float(text) if _LEVEL_NUMBER.match(text) else None
+    label = text if target is None else _level_label(target)
+    for token_label, ordinal in parse_level_value(raw):
+        if token_label == label:
+            return True
+        if mode == "below" and target is not None and ordinal is not None and ordinal <= target:
+            return True
+    return False
+
+
+def level_filter(
+    field: str,
+    level: Any = None,
+    *,
+    mode: str | None = None,
+    features: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a layer's floor picker link (``levelFilter``).
+
+    Args:
+        field: The feature property holding the floor, e.g. ``"level"``.
+        level: The floor to show (``"0"``, ``-1``), or ``None`` for every floor.
+        mode: ``"only"`` (the default once a level is given) or ``"below"`` to
+            also show the floors under it.
+        features: The layer's features, used to resolve the raw values that
+            match. Without them the link is saved unresolved and the app
+            resolves it once it has the layer's features (a local file it
+            re-reads); a layer whose features the app never holds (vector
+            tiles) is not narrowed.
+
+    Returns:
+        The ``levelFilter`` record.
+
+    Raises:
+        ValueError: If the field is blank or the mode is unknown.
+    """
+    if not isinstance(field, str) or not field.strip():
+        raise ValueError("the floor field must be a non-empty property name")
+    if level is None or mode == "all":
+        # "all" draws every floor whatever the level, as the app's selectLevel does.
+        if level is None and mode not in (None, "all"):
+            raise ValueError("choose a level for the 'only' and 'below' modes")
+        return {"field": field, "mode": "all", "level": None}
+    if isinstance(level, bool) or not isinstance(level, (str, int, float)):
+        raise ValueError(f"a floor level must be text or a number, got {level!r}")
+    if isinstance(level, (int, float)):
+        try:
+            finite = math.isfinite(float(level))
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError(f"a floor level must be a finite number, got {level!r}")
+    label = level.strip() if isinstance(level, str) else _level_label(level)
+    if not label:
+        raise ValueError("a floor level must not be blank")
+    if _LEVEL_NUMBER.match(label):
+        label = _level_label(float(label))
+    mode = mode or "only"
+    if mode not in ("only", "below"):
+        raise ValueError(f"mode must be one of {LEVEL_FILTER_MODES}, got {mode!r}")
+    link: dict[str, Any] = {"field": field, "mode": mode, "level": label}
+    if features is not None:
+        values: list[Any] = []
+        seen: set[Any] = set()
+        for feature in features:
+            raw = (feature.get("properties") or {}).get(field)
+            if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+                continue
+            key = (type(raw) is str, raw)
+            if key in seen:
+                continue
+            seen.add(key)
+            if level_value_matches(raw, label, mode):
+                values.append(raw)
+        link["values"] = values
+    return link
 
 
 # -- labels --------------------------------------------------------------------

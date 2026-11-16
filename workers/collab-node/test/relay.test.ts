@@ -161,6 +161,14 @@ describe("Node collaboration relay", () => {
         });
         assert.equal(response.status, 403, `${origin} should require explicit configuration`);
       }
+
+      const headerless = await fetch(`${http}/sessions`, { method: "POST" });
+      assert.equal(headerless.status, 403, "no Origin or Referer once an allowlist is set");
+      const referred = await fetch(`${http}/sessions`, {
+        method: "POST",
+        headers: { referer: "https://allowed.example/map" },
+      });
+      assert.equal(referred.status, 200);
     } finally {
       if (previous === undefined) delete process.env.ALLOWED_ORIGINS;
       else process.env.ALLOWED_ORIGINS = previous;
@@ -590,6 +598,10 @@ describe("Node collaboration relay", () => {
     const guestSawHost = next(guest, "presenter");
     host.send(JSON.stringify({ type: "present", active: true }));
     assert.equal((await guestSawHost).clientId, hostId);
+
+    const released = next(guest, "presenter");
+    host.send(JSON.stringify({ type: "present", active: false }));
+    assert.equal((await released).clientId, null);
 
     // A later claim replaces the previous presenter.
     const hostSawGuest = next(host, "presenter");

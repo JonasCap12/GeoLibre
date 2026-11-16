@@ -14,6 +14,10 @@ an iframe. State syncs both ways through a single `.geolibre.json` project, so
 data you add from Python appears in the UI, and edits you make in the UI
 (panning, zooming, adding layers) are readable back from Python.
 
+The [Python API Reference](python-api/index.md) documents the package's main
+modules, generated from their docstrings. The MCP server is covered separately
+in [MCP Server](mcp.md).
+
 ## Install
 
 ```bash
@@ -207,7 +211,7 @@ Map(
     zoom=4,
     basemap="dark",      # a basemap name or a MapLibre style URL
     height="800px",
-    layout="embed",      # "embed" (compact UI), "full" (desktop UI), or "maponly"
+    app_layout="embed",  # "embed" (compact UI), "full" (desktop UI), or "maponly"
     theme="light",       # "light" or "dark"
 )
 ```
@@ -255,7 +259,11 @@ m.on_layer_change(lambda e: print("layers", e["layerIds"]))
 !!! note "Blocking queries"
     Interactive queries block the kernel until the app replies (via
     `jupyter_ui_poll`, installed automatically). Pass `timeout=` for slow calls,
-    e.g. `m.run_algorithm(..., timeout=300)`.
+    e.g. `m.run_algorithm(..., timeout=300)`. Every query method also has an
+    `*_async()` variant (`await m.get_center_async()`, `await m.fly_to_async(...)`,
+    ...) that awaits the reply instead of blocking a thread — the right choice
+    inside `async` code, such as a Shiny for Python app, where the blocking
+    variants can only run on a worker thread.
 
 ## API reference
 
@@ -279,15 +287,16 @@ m.on_layer_change(lambda e: print("layers", e["layerIds"]))
 | `run_model_builder(graph, timeout=)` | Run a serialized Model Builder graph in the displayed app. |
 | `list_whitebox_tools()` / `run_whitebox_tool(tool_id, parameters=None, timeout=)` | List, or run in the browser via WASM, the bundled Whitebox tools; `run_whitebox_tool` returns `{logs, resultLayerIds}`. |
 | `to_image(path=None, timeout=)` | Capture the map as PNG bytes, or write to `path`. |
-| `to_html(path=None, title=, width=, height=, app_url=)` | Export a standalone HTML page that embeds the current project (credentials redacted) in this map's `layout` and `theme`; returns the HTML or writes to `path`. |
+| `to_html(path=None, title=, width=, height=, app_url=)` | Export a standalone HTML page that embeds the current project (credentials redacted) in this map's `app_layout` and `theme`; returns the HTML or writes to `path`. |
 | `on(event, cb)` / `on_click` / `on_selection_change` / `on_layer_change` | Register event callbacks; returns an unsubscribe function. |
 | `request(method, params=None, timeout=)` | Low-level command primitive behind the methods above. |
+| `request_async(method, params=None, timeout=)` | Awaitable counterpart of `request()`; each query/processing method above has an `*_async()` twin. |
 
 ### Data, view & projects
 
 | Method | Description |
 | --- | --- |
-| `Map(center, zoom, basemap=, renderer=, height=, layout=, theme=, server_proxy=)` | Create a map. |
+| `Map(center, zoom, basemap=, renderer=, height=, app_layout=, layout=, theme=, server_proxy=)` | Create a map. `app_layout` picks the app chrome; `layout` takes an `ipywidgets.Layout`, as on any widget, and its `height` also sizes the map. Passing a chrome string as `layout=` still works but is deprecated. |
 | `add_geojson(data, name=, **style)` | Add GeoJSON from a dict, file path, URL, JSON string, or GeoDataFrame. |
 | `add_gdf(gdf, name=, column=None, **style)` | Add a GeoDataFrame, optionally as a choropleth. |
 | `add_csv(data, x="longitude", y="latitude", name=, **style)` / `add_xy_data(...)` | Add points from a CSV path, URL, text, DataFrame, or row mappings. |
@@ -308,6 +317,7 @@ m.on_layer_change(lambda e: print("layers", e["layerIds"]))
 | `add_pmtiles(url, name=, tile_type=, source_layers=, **style)` | Add a PMTiles archive (vector or raster). |
 | `add_tile_layer(url, name=, tile_size=, attribution=, bounds=, **style)` | Add a raster XYZ tile layer. |
 | `add_ee_layer(ee_object, vis_params=, name=, shown=, opacity=)` | Add an authenticated Google Earth Engine object as raster tiles (needs `earthengine-api`). |
+| `add_planetary_computer(collection, item=, name=, datetime=, bbox=, preset=, assets=, expression=, rescale=, colormap=, max_cloud_cover=, visible=, opacity=)` | Add Microsoft Planetary Computer imagery by collection id: one STAC `item`, or without it a mosaic of every item matching `datetime` and `max_cloud_cover`. No credentials and no network access while authoring; the app's Planetary Computer panel builds and can restyle the layer (MapLibre renderer). |
 | `add_wms(endpoint, layers, name=, styles=, image_format=, transparent=, tile_size=, version=, crs=, bounds=, **style)` | Add a WMS layer (GetMap, tiled raster). `bounds` is `[west, south, east, north]`, needed for zoom-to-layer. `crs` defaults to `EPSG:3857`; for a server without Web Mercator pass a CRS it lists: preferably a geographic one (`EPSG:4326`, `EPSG:4258`, `EPSG:6706`, or `CRS:84` with `version="1.3.0"`), otherwise a projected `EPSG:<code>` such as `EPSG:25832`, which the desktop app warps from its EPSG tables. Only the desktop app redraws those tiles into Web Mercator: the web build and `to_html` pages still send the Web Mercator BBOX, so such a layer stays blank there. |
 | `add_wmts(url, name=, tile_size=, bounds=, **style)` | Add a WMTS layer from a tile URL template. |
 | `add_wfs(endpoint, type_name, name=, version=, output_format=, srs_name=, max_features=, **style)` | Add a WFS layer (GetFeature GeoJSON, fetched and inlined). |
@@ -320,7 +330,7 @@ m.on_layer_change(lambda e: print("layers", e["layerIds"]))
 | `prelabel_point_cloud(url, input_file, tool="ground", only_unclassified=True)` | Run the annotator's Whitebox pre-label on a local copy of a LiDAR layer and save the changed classes as its labels (`ground` or `ground-vegetation`; needs `geolibre[pointcloud]`). |
 | `write_labeled_point_cloud(url, input_file, output_file)` | Write a local copy of a LiDAR layer's LAS/LAZ/COPC file with the saved labels and instance ids applied, streaming files larger than memory (needs `geolibre[pointcloud]`). |
 | `set_point_cloud_classes(classes)` | Define the annotator's custom classes, e.g. `[{"code": 64, "name": "Car", "color": "#e11d48"}]` (codes 19-255); the LiDAR layer draws them in their colour and names them in its legend. |
-| `add_3d_tiles(url=None, name=, ion_asset_id=, altitude_offset=, request_headers=, **style)` | Add a 3D Tiles `tileset.json` URL, or a Cesium Ion tileset by asset id (3D globe only). |
+| `add_3d_tiles(url=None, name=, ion_asset_id=, altitude_offset=, request_headers=, **style)` | Add a 3D Tiles `tileset.json` URL, an ArcGIS I3S scene layer (`.../SceneServer/layers/<n>`), or a Cesium Ion tileset by asset id (3D globe only). |
 | `add_cesium_ion(asset_id, name=, kind="3d-tiles", altitude_offset=, **style)` | Add a Cesium Ion asset by id: a 3D Tiles tileset or (`kind="imagery"`) an imagery layer. Renders on the 3D globe, with the app's Ion token. |
 | `add_czml(url=None, name=, data=, source_path=, **style)` | Add a CZML (Cesium Language) dynamic 3D scene by URL or inline packets: orbits, vehicle tracks, moving models. Renders on the 3D globe, which follows the document's clock. |
 | `add_cesium_kml(url=None, name=, data=, source_path=, **style)` | Native KML/KMZ on the globe with document styles and overlays. Supply a URL, inline XML, or a KMZ data URL; use `add_kml` for vector conversion. |
@@ -342,6 +352,7 @@ m.on_layer_change(lambda e: print("layers", e["layerIds"]))
 | `set_tooltip(layer, fields=True)` / `clear_popup(layer)` | Turn a hover tooltip on (or off), or drop the popup config and restore the default popup. |
 | `set_layer_metadata(layer, merge=False, title=, abstract=, keywords=, license=, attribution=, contact=, lineage=, temporal_extent=, links=)` / `clear_layer_metadata(layer)` | Describe a layer for catalogs (the app's Metadata dialog, its STAC Item export and GeoParquet export metadata). Emails, dates (ISO 8601) and link URLs are validated. `Layer.descriptive_metadata` reads it back. |
 | `set_layer_filter(layer, expression)` | Hide a layer's features that do not match a boolean MapLibre expression, e.g. `[">=", ["get", "pop"], 100000]` (the filter Select by Expression → Filter layer saves). `None` clears it. |
+| `set_floor_picker(layer, field="level", level=None, mode=None)` | Link a multi-floor layer to the app's on-map [floor picker](user-guide/styling.md#floor-picker) and choose the floor shown (`"0"`, `-1`), with `mode="only"` (the default) or `"below"` for that floor and the ones under it. `level=None` keeps the floor already shown, and `mode="all"` shows every floor. The floor's values are resolved from the layer's inline GeoJSON; without it the app resolves them once it loads the layer's features, and tile-backed layers are not narrowed. Reads OpenStreetMap `level` values such as `"0;1"`. The floor is shared by every linked layer; `field=None` unlinks. |
 | `set_labels(layer, field=None, expression=None, enabled=None, **options)` | Label features from a property or a text expression. Options: `placement`, `size`, `color`, `halo_color`, `halo_width`, `min_zoom`, `max_zoom`, `allow_overlap`, `anchor`, `offset_x`, `offset_y`, `rotation`, `max_width`, `transform`, `number_format`, `number_decimals`, `number_locale`, `dedupe`, and the data-defined `size_expression`, `color_expression`, `opacity_expression`, `visibility_expression`, `priority_expression`. Settings left out keep their values. |
 | `set_plugin_state(plugin_id, state=None, position=, activate=True, allow_unknown=False, clear=False)` | Store a plugin's saved project state (the blob it restores on open) for a built-in id in `geolibre.project.PLUGIN_STATE_IDS`, or an external plugin's id with `allow_unknown=True`. `state` must be plain JSON; omit it to change only `position`/`activate`. `clear=True` removes the stored state and leaves activation alone. |
 | `set_story_map(**settings)` | Set the [story map](project-format.md#story-map)'s `title`, `subtitle`, `byline`, `footer`, `theme`, `show_markers`, `marker_color`, `inset`, `inset_position`, `hide_chapter_nav`, `start_slide`, `end_slide`. |
@@ -350,7 +361,7 @@ m.on_layer_change(lambda e: print("layers", e["layerIds"]))
 | `add_bookmark(name, center=, zoom=, pitch=, bearing=, folder=, visible_layers=)` | Save a view to the Bookmarks panel; camera values left out come from the saved view. `folder` is a folder id or name (a new name creates it); `visible_layers` lists the layers (ids, names, or handles) to show when it is opened. |
 | `remove_bookmark(bookmark)` | Drop a bookmark by id, name, or 0-based index. |
 | `set_identify(layer="all")` | Arm the Identify tool so a click opens the popup: on one layer (id, name, or handle), on a list of layers, on every visible layer (`"all"`), or off (`None`). |
-| `show_control(name, visible=True)` / `hide_control(name)` | Show or hide a toolbar panel (`bookmark`, `search`, `measure`, `minimap`, `print`) or a built-in map control (`navigation`, `fullscreen`, `compass`, `geolocate`, `globe`, `scale`, `attribution`, `logo`). |
+| `show_control(name, visible=True, *, collapsed=None, distance_unit=None, area_unit=None)` / `hide_control(name)` | Show or hide a toolbar panel (`bookmark`, `search`, `measure`, `minimap`, `print`) or a built-in map control (`navigation`, `fullscreen`, `compass`, `geolocate`, `globe`, `scale`, `attribution`, `logo`). `collapsed=True` opens `measure` or `minimap` as just its on-map button; `distance_unit` and `area_unit` set Measure's starting units. |
 | `set_projection(projection)` / `projection` | Draw the map as a `"globe"` (the default) or flat `"mercator"` map; saved in the project. |
 | `to_project(keep_credentials=False)` | Return the current project as a dict, credentials redacted unless `keep_credentials=True`. |
 | `load_project(src)` | Replace the project from a dict, JSON string, or `.geolibre.json` path. |
@@ -433,6 +444,9 @@ m.show_control("bookmark")       # open the Bookmarks panel
 m.show_control("search")         # open the place search box
 m.hide_control("globe")          # hide the globe/flat toggle button
 m.set_projection("mercator")     # draw a flat map instead of a globe
+
+# Measure as just its ruler button, in US units, until a viewer clicks it.
+m.show_control("measure", collapsed=True, distance_unit="feet", area_unit="acres")
 ```
 
 `save_project`, `to_project` and `to_html` save the Identify target and the

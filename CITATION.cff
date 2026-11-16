@@ -9,8 +9,11 @@ authors:
     email: giswqs@gmail.com
     affiliation: "University of Tennessee, Knoxville, USA"
     orcid: "https://orcid.org/0000-0001-5437-4073"
-version: 3.4.0
-date-released: 2026-10-11
+  - given-names: Daniel
+    family-names: Hofbauer
+    affiliation: "Independent Researcher, Vienna, Austria"
+version: 3.8.0
+date-released: 2026-11-14
 doi: "10.5281/zenodo.20785400"
 repository-code: "https://github.com/opengeos/GeoLibre"
 url: "https://geolibre.app"

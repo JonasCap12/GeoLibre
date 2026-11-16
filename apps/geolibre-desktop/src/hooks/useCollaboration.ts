@@ -1,6 +1,8 @@
 import {
   applyProjectToStore,
   clearHistory,
+  DEFAULT_BASEMAP,
+  gateRegionalBasemap,
   serializeProject,
   useAppStore,
   type CollaborationMode,
@@ -28,9 +30,11 @@ import {
 import { collaborationSnapshotMeasure } from "../lib/collaboration-snapshot-measure";
 import {
   applyCollaborationPromotions,
-  heldSnapshotMessage,
   uploadCollaborationCandidate,
 } from "../lib/collaboration-snapshot-shrink";
+import { prepareCollaborationSnapshot } from "../lib/collaboration-snapshot-send";
+import { createBasemapEgressTracker } from "../lib/basemap-egress";
+import { notify } from "../lib/notify";
 import { projectChanged } from "../lib/project-broadcast-changed";
 import {
   CollabConnection,
@@ -38,11 +42,8 @@ import {
   resolveCollabBaseUrl,
   sessionWsUrl,
 } from "../lib/collab-client";
-import {
-  type CommentMutationAction,
-  type ServerMessage,
-  participantCanEditLayer,
-} from "../lib/collab-protocol";
+import type { CommentMutationAction, ServerMessage } from "../lib/collab-protocol";
+import { collaborationCanEdit, collaborationCanEditLayer } from "../lib/collaboration-permissions";
 import {
   applyFollowedCamera,
   bindCameraPresence,
@@ -57,11 +58,7 @@ import { recallHostToken, rememberHostToken } from "../lib/collab-host-tokens";
 import { fetchCollabIdentity } from "../lib/collab-sessions";
 import { resolveShareBaseUrl } from "../lib/share-geolibre";
 import { mergeInboundCollaborationProject } from "../lib/collaboration-project";
-import {
-  learnedSnapshotLimit,
-  snapshotSyncAction,
-  snapshotSyncLimit,
-} from "../lib/collaboration-sync";
+import { learnedSnapshotLimit } from "../lib/collaboration-sync";
 import { rehydrateSharedLayersInStore } from "../lib/collaboration-shared-load";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
 
@@ -128,6 +125,9 @@ export function useCollaboration(
   const teardownRef = useRef<(() => void) | null>(null);
   const presenceTeardownRef = useRef<(() => void) | null>(null);
   const lastContentRef = useRef<string | null>(null);
+  // Carries a session regional basemap this deployment blocks back out
+  // unchanged, so this client's edits do not reset it for every other peer.
+  const basemapEgressRef = useRef(createBasemapEgressTracker());
   const revRef = useRef(0);
   const snapshotRequestRef = useRef(0);
   const selfIdRef = useRef<string | null>(null);
@@ -209,76 +209,51 @@ export function useCollaboration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collaborationActive, primaryRenderer, mapReadyGeneration, mapControllerRef]);
 
-  const canEdit = (): boolean => {
-    const c = useAppStore.getState().collaboration;
-    if (!c.isActive) return false;
-    if (c.role === "host") return true;
-    const self = c.participants.find((p) => p.clientId === c.clientId);
-    return self?.editOverride ?? c.mode === "co-edit";
-  };
+  const canEdit = (): boolean => collaborationCanEdit(useAppStore.getState().collaboration);
 
-  const canEditLayer = useCallback((layerId: string): boolean => {
-    const c = useAppStore.getState().collaboration;
-    if (!c.isActive) return true;
-    if (c.role === "host") return true;
-    const self = c.participants.find((p) => p.clientId === c.clientId);
-    if (!self) {
-      return c.mode === "co-edit" && !(c.lockedLayerIds ?? []).includes(layerId);
-    }
-    return participantCanEditLayer(self, c.mode, layerId, c.lockedLayerIds ?? []);
-  }, []);
+  const canEditLayer = useCallback(
+    (layerId: string): boolean =>
+      collaborationCanEditLayer(useAppStore.getState().collaboration, layerId),
+    [],
+  );
 
   const sendSnapshot = async (): Promise<void> => {
-    // A pause does not skip the build. The size is measured locally so an
-    // oversized project is never put back on the wire just to learn that it
-    // still does not fit. The request id still advances first: a slower build
-    // must not send after a newer one has already been decided.
+    // The request id advances first: a slower build must not send after a
+    // newer one was decided. See prepareCollaborationSnapshot for the rest.
     if (!canEdit()) return;
     const request = ++snapshotRequestRef.current;
-    let project: GeoLibreProject;
-    try {
-      project = await buildCollaborationSnapshot(mapControllerRef);
-    } catch {
-      if (request === snapshotRequestRef.current && canEdit()) {
+    const isCurrent = () => request === snapshotRequestRef.current && canEdit();
+    const outcome = await prepareCollaborationSnapshot({
+      // The basemap egress keeps a withheld regional basemap in what goes out.
+      build: async () =>
+        basemapEgressRef.current.apply(await buildCollaborationSnapshot(mapControllerRef)),
+      isCurrent,
+      learnedLimit: () => learnedLimitRef.current,
+      shrink: (layers, limit) =>
+        shrinkCollaborationLayers({
+          layers,
+          limit,
+          token: useDesktopSettingsStore.getState().desktopSettings.shareToken.trim(),
+          cache: promotionCacheRef.current,
+          measure: collaborationSnapshotMeasure(mapControllerRef),
+          upload: uploadCollaborationCandidate,
+        }),
+      applyPromotions: applyCollaborationPromotions,
+      t: i18n.t,
+    });
+    if (outcome.kind === "superseded") return;
+    if (outcome.kind === "build-failed") {
+      if (isCurrent()) {
         useAppStore.getState().setCollaboration({ error: i18n.t("collaborate.shareFailed") });
       }
       return;
     }
-    if (request !== snapshotRequestRef.current || !canEdit()) return;
-    let content = serializeProject(project);
-    let bytes = new TextEncoder().encode(content).length;
-    if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
-      const limit = snapshotSyncLimit(learnedLimitRef.current);
-      const shrunk = await shrinkCollaborationLayers({
-        layers: project.layers,
-        limit,
-        token: useDesktopSettingsStore.getState().desktopSettings.shareToken.trim(),
-        cache: promotionCacheRef.current,
-        measure: collaborationSnapshotMeasure(mapControllerRef),
-        upload: uploadCollaborationCandidate,
-      });
-      if (request !== snapshotRequestRef.current || !canEdit()) return;
-      applyCollaborationPromotions(shrunk.promotions);
-      if (request !== snapshotRequestRef.current || !canEdit()) return;
-      try {
-        project = await buildCollaborationSnapshot(mapControllerRef);
-      } catch {
-        if (request === snapshotRequestRef.current && canEdit()) {
-          useAppStore.getState().setCollaboration({ error: i18n.t("collaborate.shareFailed") });
-        }
-        return;
-      }
-      if (request !== snapshotRequestRef.current || !canEdit()) return;
-      content = serializeProject(project);
-      bytes = new TextEncoder().encode(content).length;
-      if (snapshotSyncAction(bytes, learnedLimitRef.current) === "hold") {
-        syncPausedRef.current = true;
-        useAppStore.getState().setCollaboration({
-          error: heldSnapshotMessage(shrunk.failure, bytes, limit, i18n.t),
-        });
-        return;
-      }
+    if (outcome.kind === "held") {
+      syncPausedRef.current = true;
+      useAppStore.getState().setCollaboration({ error: outcome.message });
+      return;
     }
+    const { project, content } = outcome;
     if (syncPausedRef.current) syncPausedRef.current = false;
     if (content === lastContentRef.current) {
       useAppStore.getState().setCollaboration({ error: null });
@@ -304,18 +279,46 @@ export function useCollaboration(
     const state = useAppStore.getState();
     const localView = mapControllerRef.current?.readView() ?? state.mapView;
     const merged = mergeInboundCollaborationProject(project, localView, state.projectPlugins);
+    // A deliberate exception to the regional-basemap prompt: the basemap is
+    // shared state of a session the user chose to join, so it applies without
+    // asking. A deployment block still applies, on the join and on every later
+    // snapshot (see docs/deployment-policy.md#regional-basemaps).
     if (initial) {
       useAppStore.getState().loadProject(merged, null, {
         rememberRecent: false,
         presenting: false,
+        trustBasemap: true,
       });
     } else {
       const applied = applyProjectToStore(merged);
+      const gated = gateRegionalBasemap(
+        applied.basemapStyleUrl,
+        state.regionalBasemapPolicy,
+        DEFAULT_BASEMAP,
+        true,
+      );
+      applied.basemapStyleUrl = gated.styleUrl;
+      // A peer switched the session to a basemap this deployment blocks: say
+      // why this map differs, once per basemap rather than on every snapshot.
+      if (
+        gated.held === "blocked" &&
+        basemapEgressRef.current.withheldStyleUrl() !== merged.basemapStyleUrl
+      ) {
+        notify.info(i18n.t("regionalBasemap.blockedNotice"), {
+          dedupeKey: "regional-basemap-blocked",
+        });
+      }
+      // Keep the layers update and the (deferred) generation bump separate:
+      // bindNetcdfProfileSamplesToProject treats a bump that lands together
+      // with new layers as a project switch and clears the inspected samples.
       useAppStore.setState({ ...applied });
       clearHistory();
       scheduleRestore();
     }
-    lastContentRef.current = serializeProject(buildProjectEgressSnapshot(mapControllerRef));
+    basemapEgressRef.current.noteInbound(merged.basemapStyleUrl);
+    lastContentRef.current = serializeProject(
+      basemapEgressRef.current.apply(buildProjectEgressSnapshot(mapControllerRef)),
+    );
     const token = useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
     void rehydrateSharedLayersInStore(token, merged.layers);
   };
@@ -595,6 +598,7 @@ export function useCollaboration(
     selfIdRef.current = crypto.randomUUID();
     autoFollowHostRef.current = !hostToken;
     lastContentRef.current = null;
+    basemapEgressRef.current.reset();
     revRef.current = 0;
 
     const normalizedCode = sessionId.trim().toUpperCase();

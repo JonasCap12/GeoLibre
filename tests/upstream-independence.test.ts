@@ -65,8 +65,10 @@ const DOCUMENTATION_LINKS = new Set([
   // The command palette's search keywords, which name the home page without
   // fetching it. Upstream moved them out of TopToolbar.tsx into this file.
   "apps/geolibre-desktop/src/components/layout/toolbar/toolbar-commands.ts",
-  "apps/geolibre-desktop/src/components/processing/model-builder/ModelBuilderPanel.tsx",
   "apps/geolibre-desktop/src/lib/geolens-fetch.ts",
+  // The model graph's `$schema` identifier, never fetched. Upstream moved it
+  // out of ModelBuilderPanel.tsx into this file in v3.8.
+  "apps/geolibre-desktop/src/lib/model-file.ts",
   "apps/geolibre-desktop/src/lib/updates.ts",
 ]);
 
@@ -249,5 +251,16 @@ describe("upstream independence", () => {
         `${file} hardcodes the upstream tiles host again`,
       );
     }
+  });
+
+  it("loads the USGS planetary basemaps from the browser, not through any tiles Worker", () => {
+    // USGS answers requests from Cloudflare Workers with a bot-check 403, so a
+    // proxy through this fork's tiles Worker would fail the same way upstream's
+    // did. The browser fetches the WMS directly (usgs-wms-protocol.ts).
+    const source = stripComments(
+      readFileSync(join(REPO_ROOT, "packages/core/src/ellipsoids.ts"), "utf8"),
+    );
+    assert.ok(source.includes("usgsWmsTiles("), "ellipsoids.ts no longer uses usgs-wms://");
+    assert.ok(!source.includes('tilesUrl("/wms")'), "ellipsoids.ts proxies USGS through a Worker");
   });
 });

@@ -27,18 +27,18 @@ export function shareRoleFromLocation(): ShareRole | null {
 }
 
 /**
- * Reads a `.geolibre.json` project URL from the current `window.location` query
- * string, if one is present.
+ * Reads a `.geolibre.json` project URL from a query string, defaulting to the
+ * current `window.location` query string, if one is present.
  *
  * Accepts any of {@link PROJECT_URL_PARAMS} or a bare `?https://...` query, and
  * normalizes the value via `normalizeProjectUrl` (absolute http/https only).
  *
  * @returns The normalized project URL, or `null` when none is present or valid.
  */
-export function projectUrlFromLocation(): string | null {
+export function projectUrlFromLocation(search?: string): string | null {
   if (typeof window === "undefined") return null;
 
-  const search = window.location.search;
+  search ??= window.location.search;
   const params = new URLSearchParams(search);
   // A `?tool=` deep link puts the app in Whitebox tool mode, where `url` names a
   // tool input (e.g. a COG to subset), not a project to load (see

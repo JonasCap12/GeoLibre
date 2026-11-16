@@ -1,8 +1,10 @@
 import { newProjectBasemapStyleUrl } from "./basemap-policy";
 import { normalizeArcgisWkid } from "./arcgis-projection";
+import { normalizeMapCrs } from "./map-crs";
 import { normalizeCesiumBasemap } from "./cesium-imagery";
 import { parseCesiumIonAssetId } from "./cesium-ion";
 import { redactUrlCredentials } from "./credentials";
+import { normalizeStoryChapterDurationSeconds } from "./storymap-duration";
 import { v4 as uuidv4 } from "uuid";
 import {
   DEFAULT_BASEMAP,
@@ -62,11 +64,13 @@ import {
   type CommentAuthor,
   type CommentReply,
   type ProjectComment,
+  type ProjectControlSetting,
   type ProjectInteraction,
 } from "./types";
 import { DEFAULT_LAYER_GROUP_OPACITY, normalizeGroupContiguity } from "./layer-groups";
 import { normalizeStyleLibraryEntries } from "./style-library";
 import { normalizeLayerCapabilities } from "./capabilities";
+import { withRasterSourceDefaults } from "./raster-source-defaults";
 import { validateMapExpression } from "./expressions";
 import { normalizeLayerDescriptiveMetadata } from "./layer-descriptive-metadata";
 import {
@@ -77,6 +81,7 @@ import {
   type PrintLayoutConfig,
 } from "./print-layout-config";
 import { getEllipsoid } from "./ellipsoids";
+import { normalizeGeocodingLocator } from "./geocoding";
 import {
   scrubWidgetsForRemovedLayers,
   scrubCommentsForRemovedLayers,
@@ -772,6 +777,10 @@ function normalizeStoryChapter(chapter: unknown): StoryChapter | null {
       ? (candidate.mapAnimation as StoryChapterAnimation)
       : "flyTo",
     rotateAnimation: normalizeBoolean(candidate.rotateAnimation, false),
+    // Leave old files unchanged; absent/invalid timings use the playback default.
+    ...(typeof candidate.durationSeconds === "number" && Number.isFinite(candidate.durationSeconds)
+      ? { durationSeconds: normalizeStoryChapterDurationSeconds(candidate.durationSeconds) }
+      : {}),
     onChapterEnter: normalizeOpacityChanges(candidate.onChapterEnter),
     onChapterExit: normalizeOpacityChanges(candidate.onChapterExit),
   };
@@ -855,8 +864,20 @@ export function normalizeModels(value: unknown): ProcessingModel[] | null {
   return models.length > 0 ? models : null;
 }
 
-const MODEL_NODE_KINDS = new Set<ModelGraphNodeKind>(["input", "tool", "output"]);
+const MODEL_NODE_KINDS = new Set<ModelGraphNodeKind>([
+  "input",
+  "tool",
+  "output",
+  "iterate-features",
+  "iterate-rasters",
+  "collect-results",
+  "conditional-switch",
+  "conditional-merge",
+]);
 const MODEL_TOOL_PROVIDERS = new Set<ModelToolProvider>(["vector", "whitebox"]);
+
+/** Deepest loop-body nesting a loaded model keeps; anything deeper is dropped. */
+const MAX_MODEL_BODY_DEPTH = 16;
 
 /** Coerce an untrusted number to a finite canvas coordinate. */
 function normalizeCoordinate(value: unknown): number {
@@ -874,9 +895,10 @@ function normalizeCoordinate(value: unknown): number {
  * project layer deliberately does not import.
  *
  * @param value Raw `graph` value from the project JSON.
+ * @param depth How many loop bodies deep this graph sits (internal).
  * @returns The normalized graph, or `null` when it has no usable nodes.
  */
-export function normalizeModelGraph(value: unknown): ProcessingModelGraph | null {
+export function normalizeModelGraph(value: unknown, depth = 0): ProcessingModelGraph | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<ProcessingModelGraph>;
   const nodes: ModelGraphNode[] = [];
@@ -892,6 +914,10 @@ export function normalizeModelGraph(value: unknown): ProcessingModelGraph | null
     const toolId = normalizeString(node.toolId).trim();
     const name = normalizeString(node.name).trim();
     const provider = node.provider as ModelToolProvider;
+    // Loop bodies nest; cap the depth so a crafted project cannot overflow the
+    // stack here or in runModelGraph, which recurses the same way.
+    const body =
+      node.body && depth < MAX_MODEL_BODY_DEPTH ? normalizeModelGraph(node.body, depth + 1) : null;
     nodes.push({
       id: nodeId,
       kind,
@@ -904,6 +930,7 @@ export function normalizeModelGraph(value: unknown): ProcessingModelGraph | null
         ? { parameters: node.parameters as Record<string, unknown> }
         : {}),
       ...(name ? { name } : {}),
+      ...(body ? { body } : {}),
     });
   }
   if (nodes.length === 0) return null;
@@ -1484,9 +1511,29 @@ export function normalizeProjectInteraction(value: unknown): ProjectInteraction 
     if (ids.length > 0) result.identify = ids;
   }
   if (raw.controls && typeof raw.controls === "object" && !Array.isArray(raw.controls)) {
-    const controls: Record<string, boolean> = {};
+    const controls: Record<string, boolean | ProjectControlSetting> = {};
     for (const [name, shown] of Object.entries(raw.controls)) {
-      if (name && typeof shown === "boolean") controls[name] = shown;
+      if (!name) continue;
+      if (typeof shown === "boolean") {
+        controls[name] = shown;
+        continue;
+      }
+      // `{ visible, ...options }` (issue #3241). Options are kept as written,
+      // like the names: the app validates them when it applies them.
+      if (!shown || typeof shown !== "object" || Array.isArray(shown)) continue;
+      const setting = shown as Record<string, unknown>;
+      if (typeof setting.visible !== "boolean") continue;
+      const kept: ProjectControlSetting = { visible: setting.visible };
+      for (const [option, value] of Object.entries(setting)) {
+        if (
+          typeof value === "string" ||
+          typeof value === "boolean" ||
+          (typeof value === "number" && Number.isFinite(value))
+        ) {
+          kept[option] = value;
+        }
+      }
+      controls[name] = kept;
     }
     if (Object.keys(controls).length > 0) result.controls = controls;
   }
@@ -1545,6 +1592,8 @@ function normalizeProjectPreferences(preferences: unknown): ProjectPreferences {
         normalizeString((map as Partial<ProjectPreferences["map"]>).arcgisBasemap) || undefined,
       // Missing (every project before #2708) or Web Mercator is the default map.
       arcgisWkid: normalizeArcgisWkid((map as Partial<ProjectPreferences["map"]>).arcgisWkid),
+      // Missing (every project before #1128) or Web Mercator is the default map.
+      mapCrs: normalizeMapCrs((map as Partial<ProjectPreferences["map"]>).mapCrs),
       // Missing means follow the saved project basemap, as it does for
       // `mapboxStyleUrl` above: a project written before this field existed
       // chose nothing, and reapplying the new-project default would repaint
@@ -1561,6 +1610,14 @@ function normalizeProjectPreferences(preferences: unknown): ProjectPreferences {
       terrainIonAssetId:
         parseCesiumIonAssetId((map as Partial<ProjectPreferences["map"]>).terrainIonAssetId) ??
         undefined,
+      // Absent in projects written before the terrain look was saved; they
+      // keep opening with the default exaggeration and global terrain.
+      terrainExaggeration: normalizeTerrainExaggeration(
+        (map as Partial<ProjectPreferences["map"]>).terrainExaggeration,
+      ),
+      terrainSource: normalizeTerrainSource(
+        (map as Partial<ProjectPreferences["map"]>).terrainSource,
+      ),
       // Kept as a free string here; the app coerces an unknown notation to
       // decimal degrees when it renders, so a hand-edited project cannot break
       // the readout.
@@ -1633,7 +1690,32 @@ function normalizeGeocodingPreferences(geocoding: unknown): ProjectPreferences["
       typeof candidate.email === "string" && candidate.email.trim()
         ? candidate.email.trim()
         : undefined,
+    ...normalizeGeocodingLocators(candidate.locators, candidate.locatorId),
   };
+}
+
+/**
+ * The project's ArcGIS GeocodeServer locators, dropping malformed entries and
+ * duplicate ids, plus the selected locator id when it still names one. Both are
+ * omitted when there are none, so older projects round-trip unchanged.
+ */
+function normalizeGeocodingLocators(
+  locators: unknown,
+  locatorId: unknown,
+): Pick<ProjectPreferences["geocoding"], "locators" | "locatorId"> {
+  if (!Array.isArray(locators)) return {};
+  const seen = new Set<string>();
+  const result = locators
+    .map(normalizeGeocodingLocator)
+    .filter((locator): locator is NonNullable<typeof locator> => {
+      if (!locator || seen.has(locator.id)) return false;
+      seen.add(locator.id);
+      return true;
+    });
+  if (!result.length) return {};
+  return typeof locatorId === "string" && seen.has(locatorId)
+    ? { locators: result, locatorId }
+    : { locators: result };
 }
 
 /** Coerce an unknown value to a supported scale unit, defaulting to metric. */
@@ -1660,6 +1742,36 @@ function normalizeBounds(bounds: unknown): ProjectPreferences["map"]["bounds"] {
   }
 
   return DEFAULT_PROJECT_PREFERENCES.map.bounds;
+}
+
+/**
+ * Keep a saved terrain exaggeration only when it is a finite, non-negative
+ * number; anything else falls back to the renderer default.
+ *
+ * Args:
+ *   value: The raw `terrainExaggeration` from a project file.
+ *
+ * Returns:
+ *   The exaggeration, or `undefined` for the default.
+ */
+function normalizeTerrainExaggeration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Keep a saved terrain DEM only when it is an HTTP(S) URL, the one kind of
+ * source a project can reopen on another device.
+ *
+ * Args:
+ *   value: The raw `terrainSource` from a project file.
+ *
+ * Returns:
+ *   The trimmed URL, or `undefined` for the built-in global terrain.
+ */
+function normalizeTerrainSource(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : undefined;
 }
 
 function normalizeNumber(value: unknown, fallback: number): number {
@@ -1820,6 +1932,12 @@ function withoutZarrHeaders(layer: GeoLibreLayer): GeoLibreLayer {
   return { ...layer, source };
 }
 
+function withoutRuntimeGeoArrow(layer: GeoLibreLayer): GeoLibreLayer {
+  if (layer.geoarrow === undefined) return layer;
+  const { geoarrow: _geoarrow, ...rest } = layer;
+  return rest;
+}
+
 /**
  * Strip the session-only state every serializer must leave out, whether or not
  * the project came through `projectFromStore`.
@@ -1832,11 +1950,73 @@ function portableLayer(layer: GeoLibreLayer): GeoLibreLayer {
     const { progressDashboard: _dashboard, ...rest } = layer;
     layer = rest;
   }
-  return withoutZarrHeaders(withoutLocalRasterBytes(layer));
+  return withoutRuntimeGeoArrow(withoutZarrHeaders(withoutLocalRasterBytes(layer)));
+}
+
+/**
+ * The path of a URL, or `""` when it does not parse (not a loadable URL). A
+ * protocol-relative URL (`//host/...`) is read against https.
+ */
+function urlPath(url: string): string {
+  try {
+    return new URL(url.trim(), "https://geolibre.invalid").pathname;
+  } catch {
+    return "";
+  }
+}
+
+/** Source kind of an ArcGIS I3S scene layer (`arcgis-i3s-tiles.ts` in the plugins). */
+const ARCGIS_I3S_SOURCE_KIND = "arcgis-i3s";
+/**
+ * The path of an ArcGIS scene service or one of its layers:
+ * `.../SceneServer`, `.../SceneServer/layers/<n>`, or a Building Scene Layer's
+ * `.../layers/<n>/sublayers/<m>`. Narrower than the 3D Tiles
+ * panel's `isArcgisI3sSceneLayerUrl` on purpose: a `tileset.json` stored under
+ * a `SceneServer` folder, or a query that mentions one, stays a tileset.
+ */
+const I3S_SCENE_SERVER_PATH_RE = /\/SceneServer(\/layers\/\d+(\/sublayers\/\d+)?)?\/?$/i;
+
+/**
+ * Re-file a 3D Tiles record whose URL is an ArcGIS scene service as an I3S
+ * scene layer (issue #3377).
+ *
+ * The app draws a scene layer only when its source kind is `arcgis-i3s`. The
+ * Python `add_3d_tiles()` used to write a SceneServer URL as a plain tileset
+ * (`3d-tiles-url`), which the 3D Tiles control then loads as a `tileset.json`,
+ * so nothing drew. This gives such a record the shape the app's 3D Tiles panel
+ * writes (`createArcgisI3sStoreLayer`), keeping its id, name and settings.
+ *
+ * @param layer - A layer from a project file.
+ * @returns The layer, re-filed as an I3S scene layer when it is a misfiled one.
+ */
+export function withI3sSceneLayerKind(layer: GeoLibreLayer): GeoLibreLayer {
+  const url = layer.source?.url;
+  if (
+    layer.type !== "3d-tiles" ||
+    layer.metadata?.sourceKind !== "3d-tiles-url" ||
+    typeof url !== "string" ||
+    !I3S_SCENE_SERVER_PATH_RE.test(urlPath(url))
+  ) {
+    return layer;
+  }
+  const { status: _status, panelCollapsed: _panelCollapsed, ...metadata } = layer.metadata;
+  return {
+    ...layer,
+    source: { ...layer.source, type: ARCGIS_I3S_SOURCE_KIND },
+    metadata: {
+      ...metadata,
+      customLayerType: ARCGIS_I3S_SOURCE_KIND,
+      externalDeckLayer: true,
+      externalNativeLayer: true,
+      identifiable: false,
+      nativeLayerIds: [`${layer.id}-deck`],
+      sourceKind: ARCGIS_I3S_SOURCE_KIND,
+    },
+  };
 }
 
 function normalizeLayer(layer: GeoLibreLayer): GeoLibreLayer {
-  layer = withoutLocalRasterBytes(layer);
+  layer = withI3sSceneLayerKind(withRasterSourceDefaults(withoutLocalRasterBytes(layer)));
   // `capabilities` is split off the spread rather than overwritten: a raw value
   // that normalizes to nothing (`{}`, an array, a string, an object with no
   // boolean flag) must not survive into the normalized layer and be written
@@ -1846,6 +2026,7 @@ function normalizeLayer(layer: GeoLibreLayer): GeoLibreLayer {
     capabilities: rawCapabilities,
     filterExpression: rawFilterExpression,
     descriptiveMetadata: rawDescriptiveMetadata,
+    geoarrow: _rawGeoarrow,
     ...rest
   } = layer;
   const capabilities = normalizeLayerCapabilities(rawCapabilities);
@@ -1858,6 +2039,8 @@ function normalizeLayer(layer: GeoLibreLayer): GeoLibreLayer {
     validateMapExpression(JSON.stringify(rawFilterExpression), { expectedType: "boolean" }).ok
       ? rawFilterExpression
       : undefined;
+  // Batches are runtime caches. A hydrated batch cannot be verified against
+  // the saved GeoJSON, so always discard it to avoid rendering stale data.
   return {
     ...rest,
     style: { ...DEFAULT_LAYER_STYLE, ...layer.style },
@@ -2371,6 +2554,7 @@ export function hydrateProjectLayer(
   project: Pick<GeoLibreProject, "styles">,
   layer: GeoLibreLayer,
 ): GeoLibreLayer {
+  layer = withRasterSourceDefaults(layer);
   const topLevel = project.styles?.[layer.id];
   return {
     ...layer,

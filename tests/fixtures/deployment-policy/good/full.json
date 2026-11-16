@@ -22,7 +22,11 @@
     "allowed": ["acme-tools"],
     "blocked": ["bad-plugin"],
     "sideload": false,
-    "defaultActive": ["acme-tools"]
+    "defaultActive": ["acme-tools"],
+    "openPanel": "acme-tools",
+    "fileAccess": {
+      "acme-tools": ["/etc/geolibre/acme.cfg", "/var/data/profiles/default.json"]
+    }
   },
   "services": {
     "builtins": true,
@@ -50,6 +54,9 @@
       }
     ]
   },
+  "basemaps": {
+    "regional": true
+  },
   "sharing": {
     "shareUrl": "https://projects.example.com",
     "collabUrl": "wss://relay.example.com",
@@ -57,6 +64,9 @@
   },
   "geolens": {
     "url": "same-origin"
+  },
+  "osm": {
+    "overpassUrl": "https://overpass.example.com/api/interpreter"
   },
   "ai": {
     "enabled": true,

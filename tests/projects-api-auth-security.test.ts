@@ -330,6 +330,17 @@ describe("Turnstile siteverify", () => {
     );
   });
 
+  it("does not accept Turnstile tokens from the desktop webview origins", () => {
+    assert.deepEqual(
+      turnstileHostnames([
+        "https://app.example.test",
+        "http://tauri.localhost",
+        "tauri://localhost",
+      ]),
+      ["app.example.test"],
+    );
+  });
+
   it("posts secret, response, remoteip and an idempotency key", async () => {
     let seen: FormData | null = null;
     let seenUrl = "";

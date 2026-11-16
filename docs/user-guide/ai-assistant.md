@@ -31,13 +31,17 @@ providers in **Settings → AI Providers**:
 | OpenAI | `OPENAI_API_KEY` | `gpt-5.6` |
 | **OpenRouter** | `OPENROUTER_API_KEY` (+ optional `OPENROUTER_MODEL`) | `openai/gpt-5.6-luna` |
 | **Vercel AI Gateway** | `AI_GATEWAY_API_KEY` (+ optional `AI_GATEWAY_MODEL`) | `openai/gpt-5.6-luna` |
+| **TrustedRouter** | `TRUSTEDROUTER_API_KEY` (+ optional `TRUSTEDROUTER_MODEL`) | `trustedrouter/auto` |
 | **Ollama** (local) | `OLLAMA_BASE_URL` (e.g. `http://localhost:11434`) | `gemma4` |
 | **Amazon Bedrock** | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_REGION`, optional `AWS_SESSION_TOKEN`) | `global.anthropic.claude-opus-5` |
 | **Custom** (OpenAI-compatible) | `OPENAI_COMPATIBLE_BASE_URL` (+ optional `OPENAI_COMPATIBLE_API_KEY`) and `OPENAI_COMPATIBLE_MODEL` | — |
 
 - **Ollama** runs models on your own machine — no API key and nothing leaves your
   computer. Point `OLLAMA_BASE_URL` at your Ollama host (the `/v1` suffix is added
-  automatically); set `OLLAMA_MODEL` to pick which pulled model to use.
+  automatically). In an Ollama profile, type any pulled model into the **Model**
+  box, tag included (for example `qwen3:8b`), or pick one of the suggestions;
+  **Refresh model list** suggests the models your server actually has. An
+  `OLLAMA_MODEL` set in the OS environment pre-fills the model of a new profile.
 - **Bedrock** calls AWS from the browser using your credentials (and the model
   id is an inference-profile id such as `global.anthropic.claude-sonnet-4-6`; set
   `BEDROCK_MODEL` to choose another).
@@ -52,6 +56,12 @@ providers in **Settings → AI Providers**:
   Set `AI_GATEWAY_MODEL` to a `provider/model` id to choose a different default.
   Provider credentials you bring yourself (BYOK) stay in the Vercel dashboard;
   they do not replace the gateway key.
+- **TrustedRouter** calls `https://api.trustedrouter.com/v1` with Chat
+  Completions from your browser, using one `TRUSTEDROUTER_API_KEY` for every
+  model it routes to. Model ids are prefixed, such as `trustedrouter/auto` or
+  `anthropic/claude-sonnet-4.5`. The model picker fetches the public catalog
+  without sending your key and keeps models that accept tools and return text.
+  Set `TRUSTEDROUTER_MODEL` to choose a different default.
 - **Custom** covers any OpenAI-compatible endpoint — LiteLLM, vLLM, Groq, Together, a local server, etc. — via its chat-completions API.
 
 Hosted keys (and AWS credentials) are used **directly from your browser** to call
@@ -170,7 +180,7 @@ Optional variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `GEOLIBRE_ASSISTANT_PROVIDER` | Force a provider (`google` / `anthropic` / `openai` / `openrouter` / `vercel`) when several keys are set. |
+| `GEOLIBRE_ASSISTANT_PROVIDER` | Force a provider (`google` / `anthropic` / `openai` / `openrouter` / `vercel` / `trustedrouter`) when several keys are set. |
 | `GEOLIBRE_ASSISTANT_MODEL` | Pin a specific model id, overriding the default and the picker. |
 
 When more than one provider key is configured, a **provider** dropdown appears in
@@ -201,6 +211,7 @@ the UI:
 | OpenAI | `OPENAI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_MODEL` |
+| TrustedRouter | `TRUSTEDROUTER_API_KEY`, `TRUSTEDROUTER_MODEL` |
 | Ollama | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` |
 | Custom (OpenAI-compatible) | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` |
 | Web search | `TAVILY_API_KEY` |
@@ -439,9 +450,10 @@ operations, so its actions stay within GeoLibre's validated surface.
 | **Model Builder** | Creates a validated, editable Model Builder workflow from a description, saves it with the project, and opens it for review before you run it. It draws on the same palette as the canvas — client-side vector tools plus the full Whitebox catalog — so a raster chain such as fill depressions → flow accumulation → extract streams is a valid model. If the canvas holds unsaved work or a run is still in flight, Model Builder asks before replacing it. |
 | **Symbology** | Applies a **graduated** (numeric) or **categorized** (text) color ramp to a layer. |
 | **Add data** | Adds a layer from a public GeoJSON URL, or an XYZ tile basemap by name (`osm`, `opentopomap`, `carto-dark`) or a custom `{z}/{x}/{y}` URL. |
-| **Earth observation** | Searches the Microsoft [Planetary Computer](https://planetarycomputer.microsoft.com) STAC catalog (Sentinel-2, Landsat, NAIP, DEMs, …) and adds an item over the current view as a raster layer — tiles are signed server-side, so no credentials are needed. |
+| **Earth observation** | Searches the Microsoft [Planetary Computer](https://planetarycomputer.microsoft.com) STAC catalog (Sentinel-2, Landsat, NAIP, DEMs, …) and adds a scene over the current view as a raster layer, or a mosaic of every scene matching a date range and cloud-cover limit ("a cloud-free Sentinel-2 composite for last summer"). It can pick a render preset such as NDVI or false color. The layer is listed in the [Planetary Computer panel](data-integrations.md#planetary-computer), where it can be restyled, and no credentials are needed. |
 | **Map control** | Moves the camera (fit a layer or a bounding box), switches the basemap, toggles layer visibility/opacity, and removes layers. |
 | **Web search** | Looks up current information online (best with `TAVILY_API_KEY`). |
+| **Plugin tools** | Calls the tools an installed plugin registers while it is on. It can also turn on an installed plugin that is off when the plugin declares assistant tools: ask for the plugin by name ("open the RNDT plugin and search for…"), or describe the task and the assistant picks the plugin. The plugin turns on as it would from the Plugins menu, and its tools are usable in the same reply. |
 | **Code fallback** | For tasks with no dedicated tool, runs a small **JavaScript** snippet against the live map (e.g. globe projection) or a **Python** snippet in the [Pyodide runtime](python-console.md). |
 
 ## Sample prompts
@@ -551,3 +563,19 @@ The assistant runs **inside** GeoLibre and edits the map you are looking at. To
 have an AI agent *outside* GeoLibre — in a terminal, an editor, or a notebook —
 build a project file for you, see the [agent skill](../agent-skill.md) and the
 [MCP server](../mcp.md).
+
+### Keyless Parallel web search
+
+On an instance using GeoLibre's same-origin managed AI proxy, add an enabled
+`GEOLIBRE_WEB_SEARCH_PROVIDER` variable with value `parallel` in **Settings →
+Environment variables**. The ordinary assistant's **Web search** tool then uses
+anonymous [Parallel Search](https://parallel.ai) through the Worker's `/parallel`
+route. No search API key is needed. Queries leave the instance for Parallel;
+results include source URLs and excerpts. This does not change the chat model.
+
+Remove or disable that setting to restore the existing Tavily (when
+`TAVILY_API_KEY` is set), then DuckDuckGo Instant Answer order. Selecting Parallel
+requires the managed proxy; an unavailable proxy or failed search is reported to
+the assistant without silently switching providers. The instance's authentication
+and shared per-client rate limit still apply. A standalone browser build without
+that proxy cannot use this option.

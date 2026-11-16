@@ -1,6 +1,6 @@
 {
   "name": "geolibre",
-  "version": "3.4.0",
+  "version": "3.8.0",
   "private": true,
   "description": "GeoLibre: a free and open-source, lightweight, cloud-native GIS platform for visualizing, exploring, and analyzing geospatial data. It runs in the web browser, on the desktop, on mobile, and inside Jupyter notebooks, all while keeping your data local and private",
   "workspaces": [
@@ -19,14 +19,14 @@
     "build:chrome-extension": "node scripts/package-chrome-extension.mjs",
     "bundle:report": "node scripts/bundle-report.mjs",
     "typecheck": "npm run build",
-    "lint": "eslint apps packages workers tests --max-warnings 242",
+    "lint": "eslint apps packages workers tests --max-warnings 241",
     "test": "npm run test:frontend",
     "test:frontend": "node --import tsx --test tests/*.test.ts",
     "test:frontend:coverage": "node scripts/coverage-check.mjs",
     "test:backend": "python -m pytest backend/geolibre_server/tests",
     "test:backend:coverage": "python -m pytest backend/geolibre_server/tests --cov=geolibre_server --cov-report=term-missing --cov-fail-under=55",
     "test:docker": "python -m pytest docker/tests",
-    "test:worker": "npm run typecheck -w geolibre-viewer-worker && npm run typecheck -w geolibre-collab-worker && npm run typecheck -w geolibre-collab-node && npm test -w geolibre-collab-node && npm run typecheck -w geolibre-tiles-worker && npm run typecheck -w geolibre-ai-proxy-worker",
+    "test:worker": "npm run typecheck -w geolibre-viewer-worker && npm run typecheck -w geolibre-collab-worker && npm run typecheck -w geolibre-collab-node && npm test -w geolibre-collab-node && npm run typecheck -w geolibre-tiles-worker && npm run typecheck -w geolibre-ai-proxy-worker && npm run typecheck -w geolibre-projects-api-worker && tsc -p workers/web/tsconfig.json --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:core": "playwright test --project=core --project=core-engines",
     "test:e2e:features": "playwright test --project=features",
@@ -37,6 +37,7 @@
     "check:untested-modules": "node scripts/check-untested-modules.mjs",
     "check:gis-portals": "node --import tsx scripts/check-gis-portals.mjs",
     "audit:ci": "node scripts/audit-check.mjs",
+    "gen:planetary-computer-collections": "node scripts/gen-planetary-computer-collections.mjs",
     "i18n:tools": "node --import tsx scripts/gen-processing-i18n-catalog.mjs",
     "i18n:tools:check": "node --import tsx scripts/gen-processing-i18n-catalog.mjs --check",
     "gallery": "node scripts/gen-demo-gallery.mjs",
@@ -61,43 +62,61 @@
     "patch-package": "^8.0.1"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.13.0",
-    "@playwright/test": "^1.63.0",
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.65.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.6",
     "ajv": "^8.20.0",
     "esbuild": "^0.28.2",
-    "eslint": "^10.12.0",
+    "eslint": "^10.14.0",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "fflate": "^0.8.3",
-    "happy-dom": "^20.14.5",
-    "linkedom": "^0.18.13",
+    "happy-dom": "^21.0.4",
+    "linkedom": "^0.18.15",
     "tsx": "^4.23.15",
-    "typescript-eslint": "^8.71.0"
+    "typescript-eslint": "^8.72.1"
   },
   "overrides": {
+    "@deck.gl/geo-layers": {
+      "a5-js": "^1.0.0"
+    },
+    "@eslint/config-array": {
+      "minimatch": "^11.0.5"
+    },
     "@loaders.gl/compression": {
       "fflate": "^0.8.3"
     },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.5"
+    },
     "brace-expansion": "^5.0.9",
+    "eslint": {
+      "minimatch": "^11.0.5"
+    },
     "eslint-plugin-jsx-a11y": {
       "eslint": "$eslint"
     },
     "fast-uri": "^3.1.7",
-    "proxy-addr": "^2.0.8",
-    "filelist": "^2.0.2",
-    "maplibre-gl": "^6.3.0",
+    "filelist": {
+      ".": "^2.0.2",
+      "minimatch": "^11.0.5"
+    },
+    "maplibre-gl": "^6.16.0",
     "miniflare": {
       "undici": "^7.29.0"
     },
+    "proxy-addr": "^2.0.8",
     "sweepline-intersections": "^1.5.0",
     "texture-compressor": {
       "image-size": "^2.0.4"
     },
-    "three": "^0.186.1",
-    "uuid": "^14.0.0"
+    "three": "^0.187.0",
+    "uuid": "^14.0.0",
+    "workbox-build": {
+      "glob": "^14.0.4"
+    }
   },
   "engines": {
     "node": "^22.23.4 || ^24.22.1 || >=26.12.1"

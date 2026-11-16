@@ -212,8 +212,12 @@ open the invite link in a browser.
 A `429` carries `Retry-After`. Cloudflare's rate-limit binding does not report
 when its window resets, so the value is the window length (60 seconds).
 
-When `TURNSTILE_SECRET_KEY` is not set the check is skipped with a warning,
-like the other optional bindings, so local development works without it.
+Without `TURNSTILE_SECRET_KEY` these three routes also **fail closed**
+(`503`), so a secret deleted after a deploy cannot silently switch the bot
+check off. Set it together with the web build's
+`VITE_GEOLIBRE_TURNSTILE_SITE_KEY`. Local `wrangler dev` opts out explicitly
+with `GEOLIBRE_TURNSTILE_DISABLED=1` in `.dev.vars`; the opt-out only applies
+while no secret is set, so a configured secret is always verified.
 
 ## Email
 

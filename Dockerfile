@@ -54,6 +54,9 @@ ARG VITE_WELCOME_DISABLED=
 # postMessage API. Usually set at RUN time instead (-e GEOLIBRE_EMBED_ORIGINS=…),
 # which the entrypoint writes into the runtime config without a rebuild.
 ARG VITE_GEOLIBRE_EMBED_ORIGINS=
+# Default project storage backend ("local" or "server"). Unset defaults to "local".
+# Also settable at RUN time (-e GEOLIBRE_PROJECT_STORAGE=…).
+ARG VITE_GEOLIBRE_PROJECT_STORAGE=
 # Self-hosted project sharing server (https://…, or "off" to remove Share and the
 # Project Gallery). Unset uses the public hosted service. Like the embed origins,
 # normally set at RUN time instead (-e GEOLIBRE_SHARE_URL=…) so a prebuilt image
@@ -65,6 +68,11 @@ ARG VITE_GEOLIBRE_COLLAB_URL=
 # Name shown at the start of the toolbar and in the browser tab, replacing
 # "GeoLibre". Also settable at RUN time (-e GEOLIBRE_APP_NAME=…).
 ARG VITE_GEOLIBRE_APP_NAME=
+# Set to 1 to disable the regional basemaps (Amap, Tencent), whose tiles are
+# served from mainland China: the basemap pickers hide them and a project that
+# names one opens on the default basemap. Also settable at RUN time
+# (-e GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=1).
+ARG VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=
 # GeoLens catalog default. Also settable at RUN time
 # (-e GEOLIBRE_GEOLENS_URL=...).
 ARG VITE_GEOLENS_DEFAULT_URL=same-origin
@@ -87,9 +95,11 @@ ENV VITE_GEE_OAUTH_CLIENT_ID=${VITE_GEE_OAUTH_CLIENT_ID}
 ENV VITE_MAPILLARY_ACCESS_TOKEN=${VITE_MAPILLARY_ACCESS_TOKEN}
 ENV VITE_WELCOME_DISABLED=${VITE_WELCOME_DISABLED}
 ENV VITE_GEOLIBRE_EMBED_ORIGINS=${VITE_GEOLIBRE_EMBED_ORIGINS}
+ENV VITE_GEOLIBRE_PROJECT_STORAGE=${VITE_GEOLIBRE_PROJECT_STORAGE}
 ENV VITE_GEOLIBRE_SHARE_URL=${VITE_GEOLIBRE_SHARE_URL}
 ENV VITE_GEOLIBRE_COLLAB_URL=${VITE_GEOLIBRE_COLLAB_URL}
 ENV VITE_GEOLIBRE_APP_NAME=${VITE_GEOLIBRE_APP_NAME}
+ENV VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=${VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS}
 ENV VITE_GEOLENS_DEFAULT_URL=${VITE_GEOLENS_DEFAULT_URL}
 ENV GEOLIBRE_NO_EXTERNAL_CDN=${GEOLIBRE_NO_EXTERNAL_CDN}
 ENV VITE_GEOLIBRE_CAPABILITIES=${VITE_GEOLIBRE_CAPABILITIES}

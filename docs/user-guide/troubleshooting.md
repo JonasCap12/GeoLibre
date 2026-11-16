@@ -119,6 +119,19 @@ large to convert safely; convert those yourself with
 `gdal_translate -of COG` or `rio cogeo create`, then load the result. See
 [Supported Data Formats](../data-formats.md).
 
+### Dropped files do not load in the Flatpak app
+
+The Flatpak package runs in a sandbox without access to your files. The Add data
+menu's file dialogs go through the desktop portal and always work, but a file
+dragged from a file manager that does not use the portal arrives as a path the
+sandbox cannot read. GeoLibre then reports that the sandbox cannot read the
+dropped file. Open the file from the Add data menu instead, or give the app
+read-only access to the folder that holds your data, then restart GeoLibre:
+
+```bash
+flatpak override --user --filesystem=/path/to/your/data:ro app.geolibre.GeoLibre
+```
+
 ### "This project is too large to save"
 
 A project that embeds a lot of vector data can outgrow what can be saved.
@@ -221,8 +234,8 @@ explains which is which and when to use each.
 ## Desktop-only features in the browser
 
 Some capabilities require the desktop app and are unavailable in the browser
-build: local filesystem dialogs, local MBTiles, local raster file reads, and
-project save/open. If one of these is missing, you are likely running GeoLibre
+build: local filesystem dialogs, local raster file reads, and project
+save/open. If one of these is missing, you are likely running GeoLibre
 Web rather than the desktop app. See [Getting Started](../getting-started.md)
 for how the web, desktop, and Jupyter builds differ.
 

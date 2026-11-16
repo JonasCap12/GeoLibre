@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { apiScope, signedInRow, worker } from "./helpers/projects-api";
 
 /**
  * `GET /api/datasets/:id/content` is the cheapest way to spend someone else's
@@ -18,7 +19,6 @@ import { fileURLToPath } from "node:url";
 
 // fileURLToPath, not .pathname: the latter keeps %20 for a space in the path.
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const source = readFileSync(`${ROOT}workers/projects-api/src/index.ts`, "utf8");
 const config = readFileSync(`${ROOT}workers/projects-api/wrangler.jsonc`, "utf8");
 
 /** Strip `//` comments so a binding named in prose is not read as a binding. */
@@ -80,22 +80,42 @@ describe("dataset download rate limit", () => {
     );
   });
 
-  it("applies the limiter on the content route, before any R2 read", () => {
-    const route = source.indexOf('path[2] === "content" && method === "GET"');
-    assert.notEqual(route, -1, "the download route moved; update this test");
-    const body = source.slice(route, route + 900);
-    const guard = body.indexOf("rateLimitDownload");
-    const read = body.indexOf("objects.get");
-    assert.notEqual(guard, -1, "the download route is no longer rate-limited");
-    assert.ok(guard < read, "the limiter must run before the object is fetched, not after");
-  });
-
-  it("does not spend the auth limiter's budget on downloads", () => {
-    const helper = source.slice(source.indexOf("async function rateLimitDownload"));
-    assert.ok(helper.includes("env.DOWNLOAD_RATE_LIMITER"), "downloads must use their own binding");
-    assert.ok(
-      !helper.slice(0, 400).includes("AUTH_RATE_LIMITER"),
-      "downloads must not fall back to the auth binding",
+  it("refuses exhausted downloads before R2 access and uses only the download budget", async () => {
+    const h = apiScope({ path: "/api/datasets/ds-1/content" });
+    h.db.on("first", /FROM accounts a JOIN tokens/, signedInRow());
+    h.scope.request.headers.set("Authorization", "Bearer session-token");
+    h.scope.request.headers.set("CF-Connecting-IP", "192.0.2.42");
+    const keys: string[] = [];
+    let r2Reads = 0;
+    let authLimits = 0;
+    h.scope.env.DOWNLOAD_RATE_LIMITER = {
+      async limit({ key }) {
+        keys.push(key);
+        return { success: false };
+      },
+    };
+    h.scope.env.AUTH_RATE_LIMITER = {
+      async limit() {
+        authLimits++;
+        return { success: false };
+      },
+    };
+    h.scope.env.OBJECTS = {
+      async get() {
+        r2Reads++;
+        throw new Error("R2 must not be read");
+      },
+    } as unknown as typeof h.scope.env.OBJECTS;
+    const response = await worker.fetch(h.scope.request, h.scope.env, h.scope.ctx);
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), { error: "too many downloads; retry later" });
+    assert.deepEqual(keys, ["download:192.0.2.42"]);
+    assert.equal(r2Reads, 0);
+    assert.equal(authLimits, 0);
+    assert.equal(
+      h.db.calls.some((c) => c.sql.startsWith("UPDATE datasets")),
+      false,
     );
+    await h.drain();
   });
 });

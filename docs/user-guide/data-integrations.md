@@ -8,13 +8,51 @@ Beyond the [Add Data](adding-data.md) menu, GeoLibre connects to several hosted 
 
 | Integration | Where | What it does |
 | --- | --- | --- |
-| **Planetary Computer** | Processing menu | Browse and load STAC data from Microsoft Planetary Computer (Sentinel, Landsat, and more). |
+| **Planetary Computer** | Processing menu | Search Microsoft Planetary Computer (Sentinel, Landsat, NAIP, DEMs, and more) and add scenes or date-range mosaics. See [Planetary Computer](#planetary-computer). |
 | **Earth Engine** | Processing menu | Browse and load Google Earth Engine datasets after authenticating. |
 | **Overture Maps** | Plugins menu | Load Overture Maps data themes (such as buildings, places, and transportation). |
 | **STAC** | Add Data menu | Search any STAC catalog and add matching raster items. See [Adding Data](adding-data.md#web-services). |
 
 !!! note "Credentials"
     Earth Engine requires authentication, and some providers expect an API key or token. Set these in **Settings → Environment Variables**. See [Settings & Preferences](settings.md).
+
+## Planetary Computer
+
+**Processing → Planetary Computer** opens a panel on the map for the
+[Microsoft Planetary Computer](https://planetarycomputer.microsoft.com) catalog.
+No account or key is needed. The panel draws through the MapLibre renderer, so
+the menu item is disabled on the Mapbox, ArcGIS, and Cesium engines.
+
+1. Pick a collection (the search box filters by title, id, and keyword).
+2. Set the search area (draw a box, or use the map view), a date range, and for
+   optical collections a maximum cloud cover.
+3. Choose **Search Items** to list individual scenes, or **Add Mosaic** to
+   composite every matching scene into one seamless layer, for example a
+   low-cloud Sentinel-2 summer composite.
+
+Each layer is drawn with a **visualization preset**. Sentinel-2 and Landsat ship
+true color, false color, and spectral indices (NDVI, NDWI, NBR, and for
+Sentinel-2 NDBI); NAIP has RGB, color infrared, and NDVI; the Copernicus DEMs
+have elevation and hillshade. On the panel's **Layers** tab, the sliders button
+on a layer opens its style: switch preset, or set a colormap, a rescale range,
+and a band-math expression such as `(B08-B04)/(B08+B04)`, then **Apply Style**.
+
+What else you can do with a result:
+
+| Action | Where | What it does |
+| --- | --- | --- |
+| **Identify** | The Identify tool, or the crosshair on a panel layer | Reads the layer's band values (or the value of its expression) at the click, and names the scene they came from. Works on mosaics. |
+| **Show colorbar** | Panel → Layers → a layer's style | Adds a colorbar for the layer's colormap and rescale range through [Controls → Colorbar](interface.md). |
+| **Animate in Time slider** | Search results | Turns the results into a dated stack in the Time slider, one scene per date, drawn with the preset chosen in the search form. With the stack loaded, **Pixel time series** charts a clicked pixel through every date. |
+| **Clip GeoTIFF** / **Add clip to map** | A scene's detail view | Clips the scene to the drawn box (or the map view) as a GeoTIFF of raw band values. **Clip GeoTIFF** downloads the file; **Add clip to map** loads it as a raster layer, ready for Identify, restyling, and the [raster tools](processing.md). |
+| **Browse in STAC catalogs** | Search form | Opens the collection in the [STAC catalogs](adding-data.md#web-services) panel, which adds the assets a raster tiler cannot draw: COPC point clouds (3DEP LiDAR), GeoParquet (building footprints), and Zarr (ERA5, Daymet). |
+
+Layers are saved with the project and rebuilt when it is reopened, including
+mosaics and the Time slider stack. The [AI Assistant](ai-assistant.md) adds the
+same kind of layer, so a scene it loads appears in the panel and can be restyled
+there. From Python, `Map.add_planetary_computer` writes one into a project
+([Python API](../python.md)); so does the MCP server's
+`add_planetary_computer_layer` tool ([MCP server](../mcp.md)).
 
 ## Self-hosted catalogs
 
@@ -99,10 +137,30 @@ Choose a backend in **Settings → Geocoding**. The selection, per-provider API 
 | **CartoCiudad (IGN España)** | No | Official Spanish national geocoder (IGN/CNIG). Free public API, no key required. |
 | **Pelias** | Optional | Hosted [geocode.earth](https://geocode.earth/) needs a key; a self-hosted Pelias does not. |
 | **ArcGIS World Geocoder** | Yes | Esri token / API key. |
+| **ArcGIS GeocodeServer (organization)** | No | Your organization's own locators. See [Organization locators](#organization-locators). |
 | **Mapbox** | Yes | Mapbox access token (`pk.…`). |
 | **Google** | Yes | Google Maps Geocoding API key. Google does not officially allow browser cross-origin requests to this API, so a same-origin proxy may be required. |
 
 API keys are stored in plain text in the `.geolibre.json` project file, so avoid sharing a project that carries them (the Project → Share flow can strip environment variables, but provider keys live under Geocoding settings).
+
+### Organization locators
+
+Cities, counties and utilities often publish their own ArcGIS GeocodeServer locators: address locators built from local address points, parcel locators that find a parcel or folio number, asset locators that find a hydrant or valve ID. Choose **ArcGIS GeocodeServer (organization)** in **Settings → Geocoding** to use them with the same search box, Geocode Addresses, address import and Reverse Geocode as any other provider.
+
+- **Add** a locator for each service, give it a name, and paste its GeocodeServer URL (`https://gis.example.org/server/rest/services/Locators/Parcels/GeocodeServer`). An operation URL (`.../GeocodeServer/findAddressCandidates`) works too; GeoLibre keeps the base URL and drops any query string, so a token pasted with the URL is never saved. With more than one locator, **Active locator** picks the one in use.
+- **Check service** reads the locator's metadata and shows its published input and whether it supports reverse geocoding and suggestions. Searches go to the locator's single-line field, or to its only input field when it publishes just one (an asset ID locator, for example). The locator decides how a search is matched and ranked.
+- **Search field.** When a locator publishes several inputs, pick the one the search box, Geocode Addresses and address import fill. A parcel or asset locator with structured inputs can then be searched by its parcel number or asset ID field, for example. The choice is saved with the locator and falls back to the default if the service stops publishing that field.
+- **Suggestions.** A locator that advertises `suggest` offers completions in the search box as you type, through its single-line field. Picking one looks up exactly that place (with the suggestion's `magicKey`). A locator without suggestions, or searched through a structured field, searches as before.
+- **Result fields.** The locator's own result fields (parcel or asset identifiers, address type and so on) are kept with each match. In **Geocode Addresses**, check **Add the locator's result fields** to add them to each geocoded row as `geocode_attr_*` columns; it is off by default because a locator can return dozens of fields.
+- A locator without reverse geocoding still searches; Reverse Geocode then says the locator does not support it instead of showing an address.
+- Results are requested in WGS 84 (`outSR=4326`). Many organization locators work in a projected system such as State Plane; if a service returns coordinates in a system GeoLibre cannot convert (anything other than WGS 84 or Web Mercator), the search reports an error rather than placing the result in the wrong spot.
+- Errors the service reports, such as an invalid token or missing permission, are shown as errors rather than as "no results".
+
+**Secured locators.** A public locator needs no key. For a secured locator on ArcGIS Enterprise, enter the **Portal URL** it is federated with and sign in to that portal (Add Data → ArcGIS Layer with **Sign in with ArcGIS**, or Plugins → Web Services → ArcGIS Portal). GeoLibre then sends that portal's access token with the locator's requests, renewing it the same way as for ArcGIS layers; signing out stops it. The token is only sent when the locator is on the portal's own host, or on an ArcGIS Server whose `rest/info` names that portal as its owner (a federated server) **and** that you have checked with **Check service** while signed in to the portal, then saved Settings, on this device. That is your approval to send that portal's sign-in to that server; cancelling Settings grants nothing, and a server's own claim to be federated is not enough, so a shared project cannot route your token to a new server on its own. Requests that carry the token always go to the locator's own URL (endpoint overrides do not apply to this provider) and do not follow redirects. A standalone ArcGIS Server, or one federated with another portal, never receives it, and **Check service** says so.
+
+**Reviewing approvals.** Settings → Geocoding lists, under **Servers allowed to receive a portal sign-in**, every server this device has approved. **Revoke** removes an approval at once: the portal's sign-in is no longer sent to that server until a locator on it is checked while signed in and Settings is saved again.
+
+Locator names, URLs, portal URLs, chosen search fields and capabilities are saved with the project. Tokens never are. In the web build the locator's server must allow browser requests from GeoLibre's origin (CORS); most ArcGIS Server sites do. The desktop app also sends organization locator requests through the webview, so the same applies there: its native HTTP client is limited to a fixed list of built-in provider hosts, and opening it to any organization's host would remove that safeguard.
 
 ### Usage policy and limits
 
@@ -118,8 +176,9 @@ The Geocoding settings panel is the easiest way to configure a provider, but the
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VITE_GEOCODER_PROVIDER` | `nominatim` | Provider id: `nominatim`, `cartociudad`, `pelias`, `arcgis`, `mapbox`, or `google`. |
+| `VITE_GEOCODER_PROVIDER` | `nominatim` | Provider id: `nominatim`, `cartociudad`, `pelias`, `arcgis`, `arcgis-locator`, `mapbox`, or `google`. |
 | `VITE_GEOCODER_API_KEY` | unset | API key / access token for the selected provider. |
 | `VITE_GEOCODER_ENDPOINT` | provider default | Forward (address to point) search endpoint override. |
 | `VITE_GEOCODER_REVERSE_ENDPOINT` | provider default | Reverse (point to address) endpoint override. |
 | `VITE_GEOCODER_EMAIL` | unset | Contact email sent as the `email` query parameter to identify your client to Nominatim. |
+| `VITE_GEOCODER_LOCATOR` | set from Settings | The selected organization locator as JSON (`id`, `name`, `url`, optional `portalUrl` and capabilities), for `arcgis-locator`. |

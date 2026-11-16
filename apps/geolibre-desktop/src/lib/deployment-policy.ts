@@ -39,6 +39,8 @@ export interface PluginsPolicy {
   blocked?: string[];
   sideload?: boolean;
   defaultActive?: string[];
+  openPanel?: string;
+  fileAccess?: Record<string, string[]>;
 }
 
 /** One curated web-service library entry. */
@@ -56,6 +58,15 @@ export interface ServicesPolicy {
   catalog?: DeploymentServiceEntry[];
 }
 
+/** Basemap availability. */
+export interface BasemapsPolicy {
+  /**
+   * `false` disables the regional basemaps (served from mainland China): the
+   * picker hides them and a project that names one opens on the default basemap.
+   */
+  regional?: boolean;
+}
+
 /** Sharing and collaboration endpoints. */
 export interface SharingPolicy {
   shareUrl?: string;
@@ -66,6 +77,11 @@ export interface SharingPolicy {
 /** GeoLens integration. */
 export interface GeoLensPolicy {
   url?: string;
+}
+
+/** OpenStreetMap data access. */
+export interface OsmPolicy {
+  overpassUrl?: string;
 }
 
 /** AI assistant settings. */
@@ -87,8 +103,16 @@ export interface DeploymentPolicy {
   interface?: InterfacePolicy;
   plugins?: PluginsPolicy;
   services?: ServicesPolicy;
+  basemaps?: BasemapsPolicy;
   sharing?: SharingPolicy;
   geolens?: GeoLensPolicy;
+  osm?: OsmPolicy;
+  /**
+   * Set (never read from the file) when the `osm` section was present but
+   * invalid. The section is still dropped, but OSM downloads fail closed instead
+   * of falling back to the public Overpass relay the operator meant to avoid.
+   */
+  osmInvalid?: true;
   ai?: AiPolicy;
   branding?: BrandingPolicy;
 }
@@ -99,6 +123,14 @@ const SHARE_URL = /^(off|https?:\/\/\S+)$/;
 const COLLAB_URL = /^wss?:\/\/\S+$/;
 const EMBED_ORIGIN = /^(\*|https?:\/\/[^/\s]+)$/;
 const GEOLENS_URL = /^(off|same-origin|https?:\/\/\S+)$/;
+/**
+ * Same source as OVERPASS_URL_PATTERN in osm-downloader-api.ts and the schema.
+ * Copied, not imported, so this parser does not pull @geolibre/plugins into
+ * the startup path; tests/deployment-policy.test.ts fails when they drift.
+ */
+export const OVERPASS_URL_PATTERN = new RegExp(
+  "^(?:https://(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)*(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\]))(?::(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[0-9]{1,4}))?(?:/[^\\s?#]*)?$",
+);
 const APP_NAME_MAX = 60;
 
 const TOP_LEVEL_KEYS = new Set([
@@ -108,8 +140,10 @@ const TOP_LEVEL_KEYS = new Set([
   "interface",
   "plugins",
   "services",
+  "basemaps",
   "sharing",
   "geolens",
+  "osm",
   "ai",
   "branding",
 ]);
@@ -218,8 +252,39 @@ function readInterface(v: unknown): Result<InterfacePolicy> {
   return "error" in r ? r : { value: r.value as InterfacePolicy };
 }
 
+function readFileAccess(v: unknown): Result<Record<string, string[]>> {
+  if (!isPlainObject(v)) return err("'fileAccess' must be an object");
+  const result: Record<string, string[]> = {};
+  for (const [key, val] of Object.entries(v)) {
+    const trimmedKey = key.trim();
+    if (!trimmedKey) return err("'fileAccess' keys must be non-blank strings");
+    if (Object.hasOwn(result, trimmedKey)) {
+      return err(`'fileAccess.${trimmedKey}' is a duplicate key after trimming`);
+    }
+    const listRes = readIdList(val, `fileAccess.${trimmedKey}`);
+    if ("error" in listRes) return listRes;
+    // defineProperty, not assignment: a `__proto__` key must become an own
+    // entry rather than replace the result's prototype.
+    Object.defineProperty(result, trimmedKey, {
+      value: listRes.value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return { value: result };
+}
+
 function readPlugins(v: unknown): Result<PluginsPolicy> {
-  const obj = readObject(v, ["registryUrl", "allowed", "blocked", "sideload", "defaultActive"]);
+  const obj = readObject(v, [
+    "registryUrl",
+    "allowed",
+    "blocked",
+    "sideload",
+    "defaultActive",
+    "openPanel",
+    "fileAccess",
+  ]);
   if ("error" in obj) return obj;
   const r = readFields(obj.value, {
     registryUrl: (x) => readNonBlank(x, "registryUrl"),
@@ -227,6 +292,11 @@ function readPlugins(v: unknown): Result<PluginsPolicy> {
     blocked: (x) => readIdList(x, "blocked"),
     sideload: (x) => readBoolean(x, "sideload"),
     defaultActive: (x) => readIdList(x, "defaultActive"),
+    openPanel: (x) => {
+      const p = readNonBlank(x, "openPanel");
+      return "error" in p ? p : { value: p.value.trim() };
+    },
+    fileAccess: (x) => readFileAccess(x),
   });
   return "error" in r ? r : { value: r.value as PluginsPolicy };
 }
@@ -295,6 +365,13 @@ function readServices(v: unknown): Result<ServicesPolicy> {
   return { value: out };
 }
 
+function readBasemaps(v: unknown): Result<BasemapsPolicy> {
+  const obj = readObject(v, ["regional"]);
+  if ("error" in obj) return obj;
+  const r = readFields(obj.value, { regional: (x) => readBoolean(x, "regional") });
+  return "error" in r ? r : { value: r.value as BasemapsPolicy };
+}
+
 function readSharing(v: unknown): Result<SharingPolicy> {
   const obj = readObject(v, ["shareUrl", "collabUrl", "embedOrigins"]);
   if ("error" in obj) return obj;
@@ -311,6 +388,15 @@ function readGeoLens(v: unknown): Result<GeoLensPolicy> {
   if ("error" in obj) return obj;
   const r = readFields(obj.value, { url: (x) => readPattern(x, "url", GEOLENS_URL) });
   return "error" in r ? r : { value: r.value as GeoLensPolicy };
+}
+
+function readOsm(v: unknown): Result<OsmPolicy> {
+  const obj = readObject(v, ["overpassUrl"]);
+  if ("error" in obj) return obj;
+  const r = readFields(obj.value, {
+    overpassUrl: (x) => readPattern(x, "overpassUrl", OVERPASS_URL_PATTERN),
+  });
+  return "error" in r ? r : { value: r.value as OsmPolicy };
 }
 
 function readAi(v: unknown): Result<AiPolicy> {
@@ -344,8 +430,10 @@ const SECTION_READERS: Record<string, (v: unknown) => Result<unknown>> = {
   interface: readInterface,
   plugins: readPlugins,
   services: readServices,
+  basemaps: readBasemaps,
   sharing: readSharing,
   geolens: readGeoLens,
+  osm: readOsm,
   ai: readAi,
   branding: readBranding,
 };
@@ -377,6 +465,7 @@ export function resolveDeploymentPolicy(raw: unknown): DeploymentPolicy | null {
     const r = read(raw[section]);
     if ("error" in r) {
       console.warn(`[deployment-policy] ignoring invalid '${section}': ${r.error}`);
+      if (section === "osm") policy.osmInvalid = true;
       continue;
     }
     policy[section] = r.value;
@@ -453,12 +542,33 @@ async function readDeploymentPolicy(): Promise<DeploymentPolicy | null> {
       const contents = await invoke<string | null>("read_deployment_policy");
       // An existing config-dir file owns the whole policy, even when invalid.
       // Only absence or a failed read permits the bundled web-file fallback.
-      if (contents !== null) return parseDeploymentPolicy(contents);
+      if (contents !== null) {
+        const policy = parseDeploymentPolicy(contents);
+        if (policy?.plugins?.fileAccess) {
+          const isMachine = await invoke<boolean>("is_machine_deployment_policy").catch(
+            () => false,
+          );
+          if (!isMachine) {
+            console.warn(
+              "[deployment-policy] ignoring 'plugins.fileAccess' in per-user deployment policy; only machine-wide deployment.json is honoured",
+            );
+            delete policy.plugins.fileAccess;
+          }
+        }
+        return policy;
+      }
     } catch (error) {
       console.warn("[deployment-policy] read_deployment_policy failed:", error);
     }
   }
-  return fetchDeploymentPolicy();
+  const policy = await fetchDeploymentPolicy();
+  if (policy?.plugins?.fileAccess) {
+    console.warn(
+      "[deployment-policy] ignoring 'plugins.fileAccess' in web deployment policy; only machine-wide deployment.json is honoured",
+    );
+    delete policy.plugins.fileAccess;
+  }
+  return policy;
 }
 
 let loading: Promise<DeploymentPolicy | null> | null = null;

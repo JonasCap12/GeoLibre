@@ -26,15 +26,17 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 | `loading`    | `loading=true` | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below. |
 | `data`       | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                           |
 | `style`      | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                            |
-| `dataType`   | `dataType=lidar`                                           | Marks a `data` URL whose path has no file extension as a LiDAR point cloud; pairs with `data` by position. See [Open remote data](#open-remote-data). |
+| `dataType`   | `dataType=lidar`                                           | Names the format of a `data` URL whose path has no file extension: `lidar` for a point cloud, or a name an installed plugin declares; pairs with `data` by position. See [Open remote data](#open-remote-data). |
 | `stac`       | `stac=https://earth-search.aws.element84.com/v1/collections/naip` | Opens the STAC Catalogs browser connected to a STAC catalog, API, or API collection. A collection URL is searched on load, so its item footprints appear as a layer. See [Open a STAC catalog](#open-a-stac-catalog). |
 | `layout`     | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
+| `draw`       | `layout=viewer&draw`                                       | Lets the geometry editor run in `layout=viewer`, so a host page can offer drawing without the rest of the authoring chrome. The bare flag or `true`, `1`, `yes`, `on` enable it. It has no effect in other layouts and needs the `project:edit` [deployment capability](../deployment-capabilities.md). See [Drawing in a viewer embed](#drawing-in-a-viewer-embed). |
 | `toolbar`    | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`. |
 | `panels`     | `panels=collapsed`                                         | Starts Layers and Style collapsed to their icon rails. Use `none` to hide all panels; `hidden`, `hide`, and `off` are aliases.         |
 | `hidePanels` | `hidePanels=true`                                          | Alternative way to hide those panels.                                                                                                 |
 | `maponly`    | `maponly`                                                  | Hides all chrome (toolbar, panels, and status bar), leaving only the map. The bare flag or `true`, `1`, `yes`, `on` enable it.        |
 | `welcome`    | `welcome=0`                                                | Hides the first-launch welcome wizard. Accepts `0`, `false`, `off`, or `no`. A `url=` or `data=` deep link already suppresses it automatically. |
 | `theme`      | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.       |
+| `crs`        | `crs=EPSG:32632`                                           | Draws the map in another CRS, as **Settings → Map** does: an `EPSG:<code>` or a preset id such as `earth-arctic`. Overrides a project's saved CRS for this visit, and the address keeps following the CRS of the map. Without `lat`/`lon` the map frames the CRS's area, unless a project brings its saved view. An unknown code is ignored with a warning and stays in the address until the map changes CRS. See [Other coordinate reference systems](../maplibre-renderer.md#other-coordinate-reference-systems). |
 | `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`   | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. A file exported from **Settings → Interface → Export...** works as-is. `settingUrl` is accepted as an alias. |
 | `tool`       | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool. |
 | `plugin`     | `plugin=swipe`                                             | Activates one or more built-in plugins, as if picked from the Plugins menu. See [Activate a plugin](#deep-linking-a-plugin). |
@@ -126,7 +128,8 @@ distinct from project manifest URL trust, whose prompt is suppressed when
 Unknown names are ignored. A plugin that does not support the current renderer
 does not activate. Directions and reverse geocoding send what you click to a
 public server, so they only open from the menu, after their one-time notice. The
-drawing and editing plugins stay off in `layout=viewer`.
+drawing and editing plugins stay off in `layout=viewer`, except the
+geometry editor when the link adds [`draw`](#drawing-in-a-viewer-embed).
 
 ## Waiting for a screenshot
 
@@ -217,6 +220,44 @@ project file. Display plugins (layer control, basemaps, time slider, legend and
 colorbar components) keep working, so the project still looks as it was saved. Use `layout=compact` for the complete authoring
 toolbar in a smaller space, or `maponly` for a pure map.
 
+### Drawing in a viewer embed
+
+By default the geometry editor cannot run in `layout=viewer`. Add `draw` and the
+viewer lets it through, while everything else stays read-only: no menus, no
+Style panel, no drag-and-drop import, and Annotations and GeoAgent remain
+blocked. Combine it with `plugin=geo-editor` to open the drawing toolbar on
+load:
+
+```text
+https://geolibre.example.org/?url=https://share.geolibre.app/you/project.geolibre.json&layout=viewer&draw&plugin=geo-editor
+```
+
+What the user draws lands in a Sketches layer. A host page reads it back with
+`getDrawnFeatures()` and is told about changes by the `featuresChanged` event
+(see [Reading features back](#reading-features-back)), so the host decides what
+to do with the geometry.
+
+Drawing itself needs only the `project:edit` capability, but reading the
+drawings back goes through the embed API, so it needs two more things. Your
+page's origin must be on the deployment's embed allowlist (see
+[Talking to the map at runtime](#talking-to-the-map-at-runtime)), and the
+deployment must grant the `export:data`
+[capability](../deployment-capabilities.md), which `getDrawnFeatures()` and
+`featuresChanged` require. The public `web.geolibre.app` has no allowlist, so
+the example above uses a placeholder for a deployment you host yourself; on
+the public site the toolbar draws, but a host page cannot read the result.
+
+A project saved with the geometry editor active opens its toolbar on load, with
+or without `plugin=geo-editor`, as it does in the full app. The toolbar's
+Open and Save file buttons are hidden in the viewer, and Identify offers no Edit
+geometry or Edit attributes action, so the toolbar only draws and edits what
+was drawn in the session.
+
+`draw` grants nothing that the same deployment would not give without
+`layout=viewer`: a deployment that withholds the `project:edit`
+[capability](../deployment-capabilities.md) ignores it, and the viewer then
+stays fully read-only.
+
 ## Open remote data
 
 Use `data` to open public GeoJSON, GeoParquet, PMTiles, Cloud-Optimized GeoTIFF (COG), a LiDAR point cloud (LAS, LAZ, COPC, or an EPT `ept.json`), or a ZIP archive containing one or more `.geojson`/`.json` FeatureCollections. Each GeoJSON file in a ZIP becomes a separate layer. An optional `style` URL applies Mapbox/MapLibre style JSON to vector data:
@@ -279,6 +320,8 @@ GeoLibre recognizes a point cloud from its URL path. An API endpoint whose path 
 ```text
 https://web.geolibre.app/?data=https%3A%2F%2Fapi.example.com%2Fdownload%2F42%3Ftoken%3Dabc%26expires%3D3600&dataType=lidar
 ```
+
+A plugin that reads another format can declare its own `dataType` name, such as `isoxml`, and then receives a file loaded this way: `?data=…&dataType=isoxml` hands the downloaded file straight to that plugin, which has to be active (external plugins are not active by default; add `&plugin=<name>` for a built-in or registry plugin, or open a `?url=` project that lists it; a plugin installed from a file needs the project). Without a hint, an active plugin's file handler is still offered a downloaded file by its extension and content, as it is for a dropped file. This works where dropping files works: not in `layout=viewer`, and only with `data:add`. A hint that a plugin declares cannot be combined with `style`; a hint is matched case-insensitively and a malformed one is ignored with a console warning, here and in the `addData` option. A file loaded this way is untrusted input for the plugin, so a plugin must validate what it receives (see the plugin API). See [Files loaded by URL](../plugin-api.md#files-loaded-by-url).
 
 A plain `https://…` URL can be passed as-is, as above: `:` and `/` are legal in a query value and need no escaping. Encode the nested data and style URLs with `encodeURIComponent` only when they contain a character that would be read as GeoLibre's own query syntax — `&`, `+`, `%`, or `#`. A bare `=` inside the value is fine, since only the first `=` in each `&`-delimited pair separates the name from the value. Remote servers must permit browser cross-origin requests (CORS). COG, GeoParquet, PMTiles, and COPC servers should also support HTTP byte-range requests.
 
@@ -491,7 +534,7 @@ other frame or origin is ignored. Pass the *app's* origin, not your own.
 | `getRenderer()`                        | the active renderer     | `"maplibre"`, `"mapbox"`, `"cesium"`, or `"arcgis"`.                  |
 | `getViewport()`                        | `Viewport`              | `{ bbox, center, zoom, bearing, pitch }`.                               |
 | `addLayer(spec)`                       | the new layer's `id`    | Takes a project-format layer specification.                             |
-| `addData(url, options?)`               | the new layer `id`s     | Loads remote data like `?data=`; options are `{ styleUrl, fit }`.        |
+| `addData(url, options?)`               | the new layer `id`s     | Loads remote data like `?data=`; options are `{ styleUrl, dataType, fit }`. |
 | `exportImage()`                        | a PNG `data:` URL       | The map as currently rendered.                                          |
 | `getLayerFeatures(layerId)`            | `Feature[]`             | A layer's features. See [Reading features back](#reading-features-back). |
 | `getDrawnFeatures()`                   | `Feature[]`             | The user's drawings (all Sketches layers). See [Reading features back](#reading-features-back). |
@@ -500,7 +543,7 @@ other frame or origin is ignored. Pass the *app's* origin, not your own.
 
 Every command rejects rather than resolving falsely: an `ack` carrying
 `ok: false` rejects with the app's own error message, and a command with no
-answer inside `requestTimeoutMs` rejects with a timeout. `connect` itself
+answer inside `requestTimeoutMs` rejects with a timeout. The `ready` event does not wait for plugins, and a download is held back until plugin activation has settled (at most 15 seconds, counted from the first load), so the first `addData` sent right after `ready` can take that long: raise `requestTimeoutMs` or wait for your plugin before sending it. `connect` itself
 rejects if `ready` does not arrive inside `timeoutMs` — most often because the
 deployment has not allowlisted your origin, or because `origin` does not match
 the iframe.

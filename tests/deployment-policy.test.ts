@@ -15,8 +15,10 @@ import {
   fetchDeploymentPolicy,
   loadDeploymentPolicy,
   parseDeploymentPolicy,
+  OVERPASS_URL_PATTERN as POLICY_OVERPASS_URL_PATTERN,
   resolveDeploymentPolicy,
 } from "../apps/geolibre-desktop/src/lib/deployment-policy";
+import { OVERPASS_URL_PATTERN } from "../packages/plugins/src/plugins/osm-downloader-api";
 import { loadAdminProfile } from "../apps/geolibre-desktop/src/lib/admin-profile";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/deployment-policy/", import.meta.url));
@@ -34,8 +36,10 @@ const SECTIONS = [
   "interface",
   "plugins",
   "services",
+  "basemaps",
   "sharing",
   "geolens",
+  "osm",
   "ai",
   "branding",
 ];
@@ -70,6 +74,7 @@ const GOOD_DOCUMENTS: Record<string, string> = {
     sharing: { shareUrl: "off", embedOrigins: ["*"] },
     geolens: { url: "off" },
     services: { builtins: false },
+    basemaps: { regional: false },
     branding: { welcome: false },
   }),
   "with $schema": JSON.stringify({
@@ -118,11 +123,13 @@ test("bad cases match expected schema and parser results", (t) => {
     const kept = SECTIONS.filter((s) => json[s] !== undefined && !dropped.includes(s));
     assert.deepEqual(
       Object.keys(result ?? {})
-        .filter((k) => k !== "version")
+        .filter((k) => k !== "version" && k !== "osmInvalid")
         .sort(),
       kept.sort(),
       name,
     );
+    // A dropped osm section is remembered so OSM downloads fail closed.
+    assert.equal(result?.osmInvalid, dropped.includes("osm") ? true : undefined, name);
     const unknownKeyWarning = name === "unknown-top-level-key" ? 1 : 0;
     assert.equal(warnings.length, expected.parser.dropped.length + unknownKeyWarning, name);
   }
@@ -180,6 +187,39 @@ test("id lists are trimmed", () => {
     plugins: { blocked: [" a "] },
   });
   assert.deepEqual(policy?.plugins?.blocked, ["a"]);
+});
+
+test("plugins.fileAccess is parsed, trimmed, and drops invalid entries", () => {
+  const policy = resolveDeploymentPolicy({
+    version: 1,
+    plugins: {
+      fileAccess: {
+        " my-plugin ": [" /etc/geolibre/app.cfg "],
+      },
+    },
+  });
+  assert.deepEqual(policy?.plugins?.fileAccess, {
+    "my-plugin": ["/etc/geolibre/app.cfg"],
+  });
+
+  const bad = resolveDeploymentPolicy({
+    version: 1,
+    capabilities: ["data:add"],
+    plugins: {
+      fileAccess: "not-an-object",
+    },
+  });
+  assert.deepEqual(bad, { version: 1, capabilities: ["data:add"] });
+});
+
+test("plugins.fileAccess keeps a __proto__ plugin id as an own entry", () => {
+  const policy = resolveDeploymentPolicy(
+    JSON.parse('{"version":1,"plugins":{"fileAccess":{"__proto__":["/etc/a.cfg"]}}}'),
+  );
+  const fileAccess = policy?.plugins?.fileAccess;
+  assert.ok(fileAccess && Object.hasOwn(fileAccess, "__proto__"));
+  assert.deepEqual(Object.getOwnPropertyDescriptor(fileAccess, "__proto__")?.value, ["/etc/a.cfg"]);
+  assert.equal(Object.getPrototypeOf(fileAccess), Object.prototype);
 });
 
 test("schema enums stay in sync with code", () => {
@@ -409,4 +449,165 @@ test("catalog id and name are stored trimmed", () => {
   });
   assert.equal(policy?.services?.catalog?.[0].id, "city");
   assert.equal(policy?.services?.catalog?.[0].name, "City WMS");
+});
+
+test("plugins.openPanel parses trimmed and drops invalid values", () => {
+  const good = resolveDeploymentPolicy({
+    version: 1,
+    plugins: { sideload: true, openPanel: "  custom-panel  " },
+  });
+  assert.equal(good?.plugins?.openPanel, "custom-panel");
+  assert.equal(good?.plugins?.sideload, true);
+
+  const blank = resolveDeploymentPolicy({
+    version: 1,
+    capabilities: ["data:add"],
+    plugins: { sideload: true, openPanel: "   " },
+  });
+  assert.equal(blank?.version, 1);
+  assert.deepEqual(blank?.capabilities, ["data:add"]);
+  assert.equal(blank?.plugins, undefined);
+
+  const nonString = resolveDeploymentPolicy({
+    version: 1,
+    capabilities: ["data:add"],
+    plugins: { sideload: true, openPanel: 42 as unknown as string },
+  });
+  assert.equal(nonString?.version, 1);
+  assert.deepEqual(nonString?.capabilities, ["data:add"]);
+  assert.equal(nonString?.plugins, undefined);
+});
+
+test("plugins.fileAccess is ignored with warning from per-user or web policy", async (t) => {
+  const globals = globalThis as unknown as { window?: unknown };
+  const previousWindow = globals.window;
+  try {
+    const warnings = captureWarnings(t);
+    // 1. Web runtime: fetchDeploymentPolicy ignores fileAccess
+    delete globals.window;
+    t.mock.method(globalThis, "fetch", async () => {
+      return new Response(
+        JSON.stringify({
+          version: 1,
+          plugins: {
+            fileAccess: {
+              "my-plugin": ["/etc/data.json"],
+            },
+          },
+        }),
+      );
+    });
+    const importFreshPolicy = async (tag: string) => {
+      const modulePath = `../apps/geolibre-desktop/src/lib/deployment-policy.ts?test=${tag}`;
+      const mod = (await import(
+        modulePath
+      )) as typeof import("../apps/geolibre-desktop/src/lib/deployment-policy");
+      return mod.loadDeploymentPolicy;
+    };
+
+    const loadWeb = await importFreshPolicy("web-file-access");
+    const webPolicy = await loadWeb();
+    assert.equal(webPolicy?.plugins?.fileAccess, undefined);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /ignoring 'plugins.fileAccess'/);
+
+    // 2. Desktop runtime with per-user policy: is_machine_deployment_policy returns false
+    const warningsDesktop = captureWarnings(t);
+    globals.window = {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command === "read_deployment_policy") {
+            return JSON.stringify({
+              version: 1,
+              plugins: {
+                fileAccess: {
+                  "my-plugin": ["/etc/data.json"],
+                },
+              },
+            });
+          }
+          if (command === "is_machine_deployment_policy") {
+            return false;
+          }
+          throw new Error(`Unexpected command: ${command}`);
+        },
+      },
+    };
+    const loadPerUser = await importFreshPolicy("desktop-peruser-file-access");
+    const perUserPolicy = await loadPerUser();
+    assert.equal(perUserPolicy?.plugins?.fileAccess, undefined);
+    assert.equal(warningsDesktop.length, 1);
+    assert.match(warningsDesktop[0], /ignoring 'plugins.fileAccess' in per-user/);
+
+    // 3. Desktop runtime with machine policy: is_machine_deployment_policy returns true
+    const warningsMachine = captureWarnings(t);
+    globals.window = {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command === "read_deployment_policy") {
+            return JSON.stringify({
+              version: 1,
+              plugins: {
+                fileAccess: {
+                  "my-plugin": ["/etc/data.json"],
+                },
+              },
+            });
+          }
+          if (command === "is_machine_deployment_policy") {
+            return true;
+          }
+          throw new Error(`Unexpected command: ${command}`);
+        },
+      },
+    };
+    const loadMachine = await importFreshPolicy("desktop-machine-file-access");
+    const machinePolicy = await loadMachine();
+    assert.deepEqual(machinePolicy?.plugins?.fileAccess, {
+      "my-plugin": ["/etc/data.json"],
+    });
+    assert.equal(warningsMachine.length, 0);
+  } finally {
+    if (previousWindow === undefined) delete globals.window;
+    else globals.window = previousWindow;
+    setDeploymentPolicy(null);
+  }
+});
+
+test("the Overpass URL pattern is identical in the schema and both client parsers", () => {
+  const schemaPattern = schema.properties.osm.properties.overpassUrl.pattern;
+  // RegExp#source escapes "/", so compare against a RegExp built from the schema string.
+  const schemaSource = new RegExp(schemaPattern).source;
+  assert.equal(POLICY_OVERPASS_URL_PATTERN.source, schemaSource);
+  assert.equal(OVERPASS_URL_PATTERN.source, schemaSource);
+  for (const ok of [
+    "https://overpass.example.com/api/interpreter",
+    "https://overpass.example.com:8443",
+    "https://203.0.113.7:65535/api/interpreter",
+    "https://overpass-1.example.co.uk/api/interpreter",
+    "https://op.1example/api/interpreter",
+    "http://localhost:12345/api/interpreter",
+    "http://127.0.0.1/api/interpreter",
+    "http://[::1]:8080/api/interpreter",
+  ]) {
+    assert.equal(POLICY_OVERPASS_URL_PATTERN.test(ok), true, ok);
+  }
+  for (const bad of [
+    "http://overpass.example.com/api/interpreter",
+    "http://localhost.example.com/api/interpreter",
+    "https://user:pw@overpass.example.com/api/interpreter",
+    "https://[invalid]/api/interpreter",
+    "https://[abcd]/api/interpreter",
+    "https://overpass.example.com:99999/api/interpreter",
+    "https://../api/interpreter",
+    "https://999.999.999.999/api/interpreter",
+    "https://1.2.3/api/interpreter",
+    "https://overpass.123/api/interpreter",
+    "https://overpass.example.com/api/interpreter?key=x",
+    "https://overpass.example.com/api interpreter",
+    "https://overpass.example.com/api/interpreter\n",
+    "/overpass",
+  ]) {
+    assert.equal(POLICY_OVERPASS_URL_PATTERN.test(bad), false, bad);
+  }
 });

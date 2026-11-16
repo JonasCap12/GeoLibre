@@ -19,7 +19,9 @@ import { tilesUrl } from "@geolibre/core";
  */
 export const OVERPASS_DEFAULT_ENDPOINT = tilesUrl("/overpass");
 export const OVERPASS_DEV_ENDPOINT = "/overpass";
-export const OVERPASS_REQUEST_TIMEOUT_MS = 75_000;
+export const OVERPASS_REQUEST_TIMEOUT_MS = 90_000;
+export const OSM_MAP_API_ENDPOINT = "https://api.openstreetmap.org/api/0.6/map.json";
+export const MAX_OSM_MAP_API_AREA_SQUARE_DEGREES = 0.25;
 export const OSM_CUSTOM_TAG_MAX_LENGTH = 255;
 // Keep these mirrored limits aligned with isAllowedOverpassQuery in workers/tiles/src/overpass-query.ts.
 export const MAX_ALL_QUERY_AREA_SQUARE_DEGREES = 0.25;
@@ -38,6 +40,38 @@ export interface OsmDownloadFilter {
   preset: OsmDownloadPreset;
   key?: string;
   value?: string;
+}
+
+/** Maximum query area for a filter preset, in unprojected square degrees. */
+export function osmDownloadAreaLimit(preset: OsmDownloadPreset): number {
+  return preset === "all" ? MAX_ALL_QUERY_AREA_SQUARE_DEGREES : MAX_QUERY_AREA_SQUARE_DEGREES;
+}
+
+/** Validated bbox area, or null when the WGS84 bounds cannot be queried. */
+export function osmDownloadBoundsArea(bbox: [number, number, number, number]): number | null {
+  const [west, south, east, north] = bbox;
+  if (
+    !bbox.every(Number.isFinite) ||
+    west < -180 ||
+    west > 180 ||
+    east > west + 360 ||
+    south < -90 ||
+    north > 90 ||
+    west >= east ||
+    south >= north
+  ) {
+    return null;
+  }
+  return (east - west) * (north - south);
+}
+
+/** Whether the bbox is valid and small enough for the selected OSM preset. */
+export function canDownloadOsmBounds(
+  bbox: [number, number, number, number],
+  preset: OsmDownloadPreset,
+): boolean {
+  const area = osmDownloadBoundsArea(bbox);
+  return area !== null && area <= osmDownloadAreaLimit(preset);
 }
 
 export interface OverpassElement {
@@ -62,15 +96,97 @@ export interface OverpassResponse {
   remark?: string;
 }
 
+interface OsmApiElement {
+  type: "node" | "way" | "relation";
+  id: number;
+  lat?: number;
+  lon?: number;
+  tags?: Record<string, string>;
+  nodes?: number[];
+  members?: Array<{
+    type: "node" | "way" | "relation";
+    ref: number;
+    role?: string;
+  }>;
+}
+
+interface OsmApiResponse {
+  elements?: OsmApiElement[];
+}
+
 export type OverpassFetch = (
   url: string,
   init: RequestInit,
 ) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
 
-/** Use Vite's same-origin relay in development, including LAN/Tailscale URLs. */
+/**
+ * Accepted Overpass endpoint URLs: `https://` on a DNS name (whose last label has
+ * a letter, as browsers parse an all-numeric one as IPv4) or a valid IPv4 address, or
+ * plain `http://` on loopback, with an optional port (up to 65535) and path and
+ * no credentials, whitespace, query, or fragment. The same source string is the
+ * `osm.overpassUrl` pattern in schema/deployment.schema.json, the client policy
+ * parser, and docker/deployment_policy.py; tests fail when they drift.
+ */
+export const OVERPASS_URL_PATTERN = new RegExp(
+  "^(?:https://(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)*(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\]))(?::(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[0-9]{1,4}))?(?:/[^\\s?#]*)?$",
+);
+
+let configuredOverpassEndpoint: string | undefined;
+let configuredOverpassEndpointInvalid = false;
+
+/** Thrown instead of querying any endpoint while the configured one is invalid. */
+export const INVALID_OVERPASS_ENDPOINT_MESSAGE =
+  "The deployment's Overpass endpoint (osm.overpassUrl) is invalid, so OSM downloads are " +
+  "disabled until it is fixed.";
+
+/**
+ * Set the deployment's Overpass API endpoint, used in place of the public relay.
+ *
+ * Called once at startup with the `osm.overpassUrl` deployment setting
+ * (`VITE_GEOLIBRE_OVERPASS_URL`). A blank or undefined value clears it. A value
+ * that does not match {@link OVERPASS_URL_PATTERN} fails closed: it is reported
+ * with a warning and {@link downloadOsmGeoJson} refuses default-endpoint queries
+ * rather than sending the area of interest to the public relay the deployment
+ * meant to avoid.
+ *
+ * @param value - The configured Overpass interpreter URL, or undefined.
+ */
+export function setOverpassEndpoint(value: string | undefined): void {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed && !OVERPASS_URL_PATTERN.test(trimmed)) {
+    console.warn(
+      "[osm] invalid Overpass endpoint; expected https:// (or http:// on loopback). " +
+        "OSM downloads are disabled until it is fixed.",
+    );
+    configuredOverpassEndpoint = undefined;
+    configuredOverpassEndpointInvalid = true;
+    return;
+  }
+  configuredOverpassEndpoint = trimmed || undefined;
+  configuredOverpassEndpointInvalid = false;
+}
+
+/**
+ * Resolve the Overpass endpoint used when a caller does not pass one.
+ *
+ * A deployment-configured endpoint wins; otherwise Vite development uses its
+ * same-origin relay (including LAN/Tailscale URLs) and production uses the
+ * public GeoLibre relay.
+ *
+ * @param dev - Whether this is a Vite development build.
+ * @param configured - The deployment endpoint; defaults to the value set by
+ *   {@link setOverpassEndpoint}.
+ * @returns The endpoint URL to POST Overpass QL to.
+ * @throws Error with {@link INVALID_OVERPASS_ENDPOINT_MESSAGE} when no endpoint
+ *   is passed and the configured one is invalid, so no caller silently gets
+ *   the public relay.
+ */
 export function defaultOverpassEndpoint(
   dev = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV),
+  configured: string | undefined = configuredOverpassEndpoint,
 ): string {
+  if (configured) return configured;
+  if (configuredOverpassEndpointInvalid) throw new Error(INVALID_OVERPASS_ENDPOINT_MESSAGE);
   return dev ? OVERPASS_DEV_ENDPOINT : OVERPASS_DEFAULT_ENDPOINT;
 }
 
@@ -81,6 +197,30 @@ const PRESET_TAGS: Record<Exclude<OsmDownloadPreset, "all" | "custom">, string> 
   waterways: '"waterway"',
   landuse: '"landuse"',
 };
+
+const PRESET_TAG_KEYS: Record<Exclude<OsmDownloadPreset, "all" | "custom">, string> = {
+  buildings: "building",
+  roads: "highway",
+  amenities: "amenity",
+  waterways: "waterway",
+  landuse: "landuse",
+};
+
+function matchesOsmDownloadFilter(
+  tags: Record<string, string> | undefined,
+  filter: OsmDownloadFilter,
+): boolean {
+  if (!tags) return false;
+  if (filter.preset === "all") return Object.keys(tags).length > 0;
+  if (filter.preset === "custom") {
+    const key = filter.key?.trim() ?? "";
+    const value = filter.value?.trim() ?? "";
+    return Boolean(
+      key && Object.prototype.hasOwnProperty.call(tags, key) && (!value || tags[key] === value),
+    );
+  }
+  return PRESET_TAG_KEYS[filter.preset] in tags;
+}
 
 /** Escape a user-entered tag key/value for an Overpass quoted string. */
 export function escapeOverpassString(value: string): string {
@@ -111,21 +251,9 @@ export function buildOsmDownloadQuery(
   filter: OsmDownloadFilter,
 ): string {
   const [west, south, east, north] = bbox;
-  if (
-    !bbox.every(Number.isFinite) ||
-    west < -180 ||
-    west > 180 ||
-    east > west + 360 ||
-    south < -90 ||
-    north > 90 ||
-    west >= east ||
-    south >= north
-  ) {
-    throw new Error("Invalid bounding box");
-  }
-  const area = (east - west) * (north - south);
-  const areaLimit =
-    filter.preset === "all" ? MAX_ALL_QUERY_AREA_SQUARE_DEGREES : MAX_QUERY_AREA_SQUARE_DEGREES;
+  const area = osmDownloadBoundsArea(bbox);
+  if (area === null) throw new Error("Invalid bounding box");
+  const areaLimit = osmDownloadAreaLimit(filter.preset);
   if (area > areaLimit) {
     const scope = filter.preset === "all" ? "All-features downloads" : "OSM downloads";
     throw new Error(`${scope} are limited to ${areaLimit} square degrees`);
@@ -165,7 +293,16 @@ export function buildOsmDownloadQuery(
   }out geom;`;
 }
 
-/** Run a bounded Overpass query and convert its JSON response to GeoJSON. */
+/**
+ * Run a bounded Overpass query and convert its JSON response to GeoJSON.
+ *
+ * Without `options.endpoint` the query goes to {@link defaultOverpassEndpoint}.
+ * On the built-in endpoints, a small area that hits a 429, 502, 503, or 504
+ * response falls back to the OSM editing API's `map.json`, which serves the same
+ * OSM data. A deployment-configured endpoint or an explicit `options.endpoint`
+ * never falls back, so the area of interest stays on that endpoint, and an
+ * invalid configured endpoint rejects with {@link INVALID_OVERPASS_ENDPOINT_MESSAGE}.
+ */
 export async function downloadOsmGeoJson(
   bbox: [number, number, number, number],
   filter: OsmDownloadFilter,
@@ -177,6 +314,12 @@ export async function downloadOsmGeoJson(
   } = {},
 ): Promise<FeatureCollection> {
   const query = buildOsmDownloadQuery(bbox, filter);
+  // Only the built-in endpoints may fall back to the OSM map API. Resolving the
+  // default throws while the configured endpoint is invalid (fail closed).
+  const builtInEndpoint =
+    options.endpoint === undefined &&
+    !configuredOverpassEndpoint &&
+    !configuredOverpassEndpointInvalid;
   const endpoint = options.endpoint ?? defaultOverpassEndpoint();
   const fetchImpl = options.fetchImpl ?? (fetch as unknown as OverpassFetch);
   const requestController = new AbortController();
@@ -195,6 +338,7 @@ export async function downloadOsmGeoJson(
       signal: requestController.signal,
     });
     if (!response.ok) {
+      // Read the failed body before any fallback so its connection is released on every path.
       let detail = "";
       try {
         detail = (await response.text())
@@ -203,6 +347,28 @@ export async function downloadOsmGeoJson(
           .trim();
       } catch {
         // The status is still useful when a proxy supplies no readable body.
+      }
+      if (
+        builtInEndpoint &&
+        [429, 502, 503, 504].includes(response.status) &&
+        (osmDownloadBoundsArea(bbox) ?? Infinity) <= MAX_OSM_MAP_API_AREA_SQUARE_DEGREES
+      ) {
+        const [west, south, east, north] = bbox;
+        const mapUrl = new URL(OSM_MAP_API_ENDPOINT);
+        mapUrl.searchParams.set("bbox", [west, south, east, north].join(","));
+        try {
+          const mapResponse = await fetchImpl(mapUrl.toString(), {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            signal: requestController.signal,
+          });
+          if (mapResponse.ok) {
+            return osmApiJsonToGeoJson((await mapResponse.json()) as OsmApiResponse, filter);
+          }
+        } catch (fallbackError) {
+          // Preserve the original Overpass response unless the caller cancelled or timed out.
+          if (requestController.signal.aborted) throw fallbackError;
+        }
       }
       throw new Error(`Overpass request failed (${response.status})${detail ? `: ${detail}` : ""}`);
     }
@@ -213,6 +379,50 @@ export async function downloadOsmGeoJson(
     clearTimeout(timeout);
     options.signal?.removeEventListener("abort", abortFromCaller);
   }
+}
+
+/** Convert OSM map API JSON to filtered GeoJSON, resolving way-node references locally. */
+export function osmApiJsonToGeoJson(
+  payload: OsmApiResponse,
+  filter: OsmDownloadFilter,
+): FeatureCollection {
+  const elements = payload.elements ?? [];
+  const nodes = new Map(
+    elements
+      .filter((element): element is OsmApiElement & { type: "node" } => element.type === "node")
+      .map((node) => [node.id, node]),
+  );
+  const ways = new Map(
+    elements
+      .filter((element): element is OsmApiElement & { type: "way" } => element.type === "way")
+      .map((way) => [way.id, way]),
+  );
+  const wayGeometry = (way: OsmApiElement | undefined) =>
+    way?.nodes?.map((nodeId) => {
+      const node = nodes.get(nodeId);
+      return node && isValidPosition(node) ? { lat: node.lat, lon: node.lon } : null;
+    });
+
+  const selected: OverpassElement[] = elements
+    .filter((element) => matchesOsmDownloadFilter(element.tags, filter))
+    .map((element) => {
+      if (element.type === "node") return element;
+      if (element.type === "way") {
+        return { ...element, geometry: wayGeometry(element) };
+      }
+      return {
+        ...element,
+        members: element.members?.map((member) => {
+          const node = member.type === "node" ? nodes.get(member.ref) : undefined;
+          return {
+            ...member,
+            ...(node && isValidPosition(node) ? { lat: node.lat, lon: node.lon } : {}),
+            ...(member.type === "way" ? { geometry: wayGeometry(ways.get(member.ref)) } : {}),
+          };
+        }),
+      };
+    });
+  return overpassJsonToGeoJson({ elements: selected });
 }
 
 function isValidPosition(point: { lat?: number; lon?: number } | null | undefined): point is {

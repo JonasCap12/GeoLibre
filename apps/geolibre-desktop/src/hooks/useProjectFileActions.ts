@@ -64,7 +64,9 @@ import {
   shareHostLabel,
   ShareUploadError,
   updateSharedProjectContent,
+  uploadProjectToShare,
 } from "../lib/share-geolibre";
+import { resolveProjectStorage } from "../lib/project-storage";
 import {
   resolveShareRequestToken,
   ShareOAuthError,
@@ -88,9 +90,13 @@ import { startupSettingsAfterForcedSaveAs } from "../lib/startup-project";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
 import {
   importQgisProject,
+  materializeQgisFormRelations,
   materializeQgisRemoteLayers,
+  type QgisFormImportNote,
   type QgisProjectImportWarning,
+  type QgisStyleImportNote,
 } from "../lib/qgis-project-import";
+import { readQgisSnapshotTable } from "../lib/qgis-form-tables";
 import { importArcgisProject, type ArcgisProjectImportWarning } from "../lib/arcgis-project-import";
 import type { MapControllerRef } from "../components/layout/toolbar/constants";
 import { IS_MAS_BUILD } from "../lib/build-flags";
@@ -190,6 +196,13 @@ export interface SaveNamePrompt {
   label: string;
   /** Placeholder for the file-name input. */
   placeholder: string;
+}
+
+export interface RemoteSignInPrompt {
+  projectGeneration: number;
+  shareHost: string;
+  oauthSupported: boolean;
+  resolve: (signedIn: boolean) => void;
 }
 
 export interface RemoteSharedProjectTarget {
@@ -338,6 +351,10 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
   const [qgisImportWarnings, setQgisImportWarnings] = useState<QgisProjectImportWarning[] | null>(
     null,
   );
+  const [qgisImportFormNotes, setQgisImportFormNotes] = useState<QgisFormImportNote[] | null>(null);
+  const [qgisImportStyleNotes, setQgisImportStyleNotes] = useState<QgisStyleImportNote[] | null>(
+    null,
+  );
   const [arcgisImportWarnings, setArcgisImportWarnings] = useState<
     ArcgisProjectImportWarning[] | null
   >(null);
@@ -355,6 +372,7 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
   );
   const [saveNamePrompt, setSaveNamePrompt] = useState<SaveNamePrompt | null>(null);
   const [saveNameInput, setSaveNameInput] = useState("");
+  const [remoteSignInPrompt, setRemoteSignInPrompt] = useState<RemoteSignInPrompt | null>(null);
   const [remoteSaveWarning, setRemoteSaveWarning] = useState<RemoteSharedProjectTarget | null>(
     null,
   );
@@ -416,6 +434,13 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     setSaveNamePrompt(null);
     setSaveNameInput("");
   }, []);
+  const settleRemoteSignInPrompt = useCallback(
+    (prompt: RemoteSignInPrompt | null, signedIn: boolean) => {
+      prompt?.resolve(signedIn);
+      setRemoteSignInPrompt((current) => (current === prompt ? null : current));
+    },
+    [],
+  );
 
   // A project can be replaced by an external open action while a modal save
   // prompt is visible. Cancel the stale promise immediately so its dialog does
@@ -439,6 +464,9 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     if (saveNamePrompt && saveNamePrompt.projectGeneration !== projectGeneration) {
       settleSaveNamePrompt(saveNamePrompt, null);
     }
+    if (remoteSignInPrompt && remoteSignInPrompt.projectGeneration !== projectGeneration) {
+      settleRemoteSignInPrompt(remoteSignInPrompt, false);
+    }
     if (droppedProjectPrompt && droppedProjectPrompt.projectGeneration !== projectGeneration) {
       droppedProjectPromptRef.current = null;
       setDroppedProjectPrompt(null);
@@ -449,9 +477,11 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     droppedProjectPrompt,
     embedVectorDataPrompt,
     projectGeneration,
+    remoteSignInPrompt,
     saveNamePrompt,
     settleCredentialStripPrompt,
     settleEmbedVectorDataPrompt,
+    settleRemoteSignInPrompt,
     settleSaveNamePrompt,
   ]);
 
@@ -605,6 +635,10 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
   const handleImportQgisProject = async () => {
     const result = await openQgisProjectFile();
     if (!result) return;
+    // The reads below can outlast the user opening something else; loading
+    // the import then would replace the project they just opened.
+    const generation = useAppStore.getState().projectGeneration;
+    const superseded = () => useAppStore.getState().projectGeneration !== generation;
     try {
       const imported = await materializeQgisRemoteLayers(
         importQgisProject(result.data, result.path),
@@ -635,7 +669,24 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
             reason: "browser-local-raster",
           });
         }
+        // Those layers are gone, and so is any way to read a lookup table off
+        // disk; a note about a form nobody can open would only be noise.
+        const keptNames = new Set(imported.project.layers.map((layer) => layer.name));
+        imported.formNotes = imported.formNotes.filter((note) => keptNames.has(note.layerName));
+        imported.styleNotes = imported.styleNotes.filter((note) => keptNames.has(note.layerName));
+        imported.formRelations = imported.formRelations.filter((relation) =>
+          imported.project.layers.some((layer) => layer.id === relation.layerId),
+        );
       }
+      // Dropdowns that list another table's rows are filled in before the
+      // project loads, so the form is complete the first time it opens.
+      // A remote layer that failed to load is gone from the project by now;
+      // notes about it would describe a layer the user cannot see.
+      const loadedNames = new Set(imported.project.layers.map((layer) => layer.name));
+      imported.formNotes = imported.formNotes.filter((note) => loadedNames.has(note.layerName));
+      imported.styleNotes = imported.styleNotes.filter((note) => loadedNames.has(note.layerName));
+      await materializeQgisFormRelations(imported, readQgisSnapshotTable);
+      if (superseded()) return;
       const mapReady = importedProjectMapReady(
         mapControllerRef,
         useAppStore.getState().basemapStyleUrl !== imported.project.basemapStyleUrl,
@@ -682,6 +733,8 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
       }
       useAppStore.setState({ isDirty: true });
       setQgisImportWarnings(imported.warnings.length > 0 ? imported.warnings : null);
+      setQgisImportFormNotes(imported.formNotes.length > 0 ? imported.formNotes : null);
+      setQgisImportStyleNotes(imported.styleNotes.length > 0 ? imported.styleNotes : null);
     } catch (error) {
       console.error("Failed to import QGIS project", error);
       setActionError(
@@ -1006,6 +1059,12 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
       const project = await resolveProjectXyzLayers(result.project, controller.signal);
       if (controller.signal.aborted) return null;
       loadProject(project, result.path);
+      if (result.fromStoredCopy) {
+        notify.warning(t("settings.startup.storedCopyWarning"), {
+          dedupeKey: "stored-project-copy",
+          durationMs: null,
+        });
+      }
       // `loadProject` moves this path to the front of the recent list, so in
       // "last" mode it is now the project the next launch will reopen. Without
       // this, reopening an older project from the recent list would leave the
@@ -1409,6 +1468,36 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
 
   const cancelSaveNamePrompt = () => settleSaveNamePrompt(saveNamePrompt, null);
 
+  const askRemoteSignIn = (shareHost: string, promptProjectGeneration: number) =>
+    new Promise<boolean>((resolve) => {
+      setRemoteSignInPrompt({
+        projectGeneration: promptProjectGeneration,
+        shareHost,
+        oauthSupported: supportsShareOAuth(),
+        resolve,
+      });
+    });
+
+  /**
+   * The message shown when saving a project to the share server fails.
+   *
+   * @param error - The error the save threw.
+   * @param shareHost - The share host label named in the unauthorized message.
+   * @returns A translated, user-facing error message.
+   */
+  const shareSaveErrorMessage = (error: unknown, shareHost: string): string =>
+    error instanceof ShareOAuthError
+      ? t(shareOAuthErrorKey(error.code))
+      : error instanceof ShareUploadError && error.code === "unauthorized"
+        ? t(supportsShareOAuth() ? "gallery.errorUnauthorizedOAuth" : "gallery.errorUnauthorized", {
+            shareHost,
+          })
+        : isSerializationTooLargeError(error)
+          ? t("toolbar.error.projectTooLargeToSave")
+          : error instanceof Error
+            ? error.message
+            : t("toolbar.error.couldNotSaveProject");
+
   // Saving back to an editable shared project writes the version every group
   // member opens, so it is built like Share: local vector data is embedded (never
   // file references) and credentials are redacted. The local-save prompts do not
@@ -1479,22 +1568,166 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
       return true;
     } catch (error) {
       console.error("Failed to update shared project", error);
+      setActionError(shareSaveErrorMessage(error, shareHostLabel()));
+      return false;
+    }
+  };
+
+  const createProjectOnShare = async (saveProjectGeneration: number): Promise<boolean> => {
+    const shareBaseUrl = resolveShareBaseUrl();
+    if (!shareBaseUrl) return false;
+    const hostLabel = shareHostLabel();
+
+    // 1. Resolve token
+    let oauthSessionRevision = supportsShareOAuth()
+      ? useShareOAuthStore.getState().sessionRevision
+      : undefined;
+    let personalToken = (
+      useDesktopSettingsStore.getState().desktopSettings.shareToken ?? ""
+    ).trim();
+    let token = "";
+    try {
+      token = await resolveShareRequestToken(personalToken, shareBaseUrl);
+    } catch {
+      token = "";
+    }
+    if (useAppStore.getState().projectGeneration !== saveProjectGeneration) return false;
+
+    // 2. Sign-in prompt if needed
+    if (!token) {
+      const signedIn = await askRemoteSignIn(hostLabel, saveProjectGeneration);
+      if (!signedIn || useAppStore.getState().projectGeneration !== saveProjectGeneration) {
+        return false;
+      }
+      oauthSessionRevision = supportsShareOAuth()
+        ? useShareOAuthStore.getState().sessionRevision
+        : undefined;
+      personalToken = (useDesktopSettingsStore.getState().desktopSettings.shareToken ?? "").trim();
+      try {
+        token = await resolveShareRequestToken(personalToken, shareBaseUrl);
+      } catch {
+        token = "";
+      }
+      if (!token || useAppStore.getState().projectGeneration !== saveProjectGeneration) {
+        if (!token) setActionError(t("share.oauthFailed"));
+        return false;
+      }
+    }
+
+    // 3. Name prompt
+    const { defaultProjectName } = buildCurrentProject();
+    const currentName = useAppStore.getState().projectName.trim();
+    const promptDefaultName =
+      currentName && currentName !== DEFAULT_PROJECT_NAME ? currentName : defaultProjectName;
+    const chosen = await askSaveName(
+      promptDefaultName,
+      {
+        title: t("toolbar.remoteSave.saveTitle"),
+        description: t("toolbar.remoteSave.saveDesc", { shareHost: hostLabel }),
+        label: t("toolbar.item.saveProjectFileName"),
+        placeholder: t("toolbar.item.saveProjectFileNamePlaceholder"),
+      },
+      saveProjectGeneration,
+    );
+    if (chosen === null || useAppStore.getState().projectGeneration !== saveProjectGeneration) {
+      return false;
+    }
+    const chosenTitle = chosen.trim().replace(/\.(geolibre\.json|geolibre|json)$/i, "");
+    if (!chosenTitle) return false;
+
+    // Unembedded snapshot, compared after the upload to tell whether the user
+    // changed the project while the save was in flight.
+    const startContent = serializeForSave(
+      excludeHiddenFieldsFromProject(buildCurrentProject(chosenTitle).project),
+    );
+
+    // 4. Build
+    let projectContent: string | null = null;
+    let builtLayers: GeoLibreLayer[] = [];
+    try {
+      const built = await buildEmbeddedProject(chosenTitle);
+      if (useAppStore.getState().projectGeneration !== saveProjectGeneration) return false;
+      builtLayers = built.project.layers;
+      const redacted = redactProjectCredentials(excludeHiddenFieldsFromProject(built.project));
+      projectContent = serializeForSave(redacted.project);
+    } catch (error) {
+      console.error("Failed to prepare project for server save", error);
       setActionError(
-        error instanceof ShareOAuthError
-          ? t(shareOAuthErrorKey(error.code))
-          : error instanceof ShareUploadError && error.code === "unauthorized"
-            ? t(
-                supportsShareOAuth()
-                  ? "gallery.errorUnauthorizedOAuth"
-                  : "gallery.errorUnauthorized",
-                { shareHost: shareHostLabel() },
-              )
-            : isSerializationTooLargeError(error)
-              ? t("toolbar.error.projectTooLargeToSave")
-              : error instanceof Error
-                ? error.message
-                : t("toolbar.error.couldNotSaveProject"),
+        isSerializationTooLargeError(error)
+          ? t("toolbar.error.projectTooLargeToSave")
+          : t("toolbar.error.couldNotSaveProject"),
       );
+      return false;
+    }
+    if (
+      projectContent === null ||
+      useAppStore.getState().projectGeneration !== saveProjectGeneration
+    ) {
+      return false;
+    }
+
+    // 5. POST to server
+    try {
+      const uploaded = await uploadProjectToShare({
+        token,
+        filename: ensureProjectFileName(chosenTitle),
+        content: projectContent,
+        visibility: "private",
+        baseUrl: shareBaseUrl,
+      });
+      if (!uploaded.id) {
+        throw new Error(t("toolbar.remoteSave.noProjectId"));
+      }
+      // The upload succeeded, but linking it to a project that was switched
+      // away or to a changed sign-in would be wrong. Say where it went, so the
+      // next Save is not a silent duplicate.
+      if (
+        useAppStore.getState().projectGeneration !== saveProjectGeneration ||
+        (oauthSessionRevision !== undefined &&
+          oauthSessionRevision !== useShareOAuthStore.getState().sessionRevision)
+      ) {
+        setActionError(
+          t("toolbar.remoteSave.uploadedNotLinked", { name: chosenTitle, shareHost: hostLabel }),
+        );
+        return false;
+      }
+      const liveProjectName = useAppStore.getState().projectName;
+      if (
+        liveProjectName.trim() === currentName ||
+        !liveProjectName.trim() ||
+        liveProjectName === DEFAULT_PROJECT_NAME
+      ) {
+        useAppStore.getState().setProjectName(chosenTitle);
+      }
+      setProjectPath(null);
+      remoteProjectRef.current = {
+        id: uploaded.id,
+        versionCount: uploaded.versionCount,
+        canEdit: true,
+        token: personalToken,
+        baseUrl: shareBaseUrl,
+        oauthSessionRevision,
+        projectGeneration: useAppStore.getState().projectGeneration,
+      };
+      setRemoteSaveWarning(null);
+
+      let liveContent: string | null = null;
+      try {
+        liveContent = serializeProject(
+          excludeHiddenFieldsFromProject(buildCurrentProject().project),
+        );
+      } catch (error) {
+        console.error("Failed to compare the saved shared project", error);
+      }
+      if (startContent && liveContent && sharedProjectContentMatches(startContent, liveContent)) {
+        markSaved();
+        recordExplicitProjectSave();
+      }
+      notifyUnsavedLocalRasters(builtLayers);
+      return true;
+    } catch (error) {
+      console.error("Failed to create project on share server", error);
+      setActionError(shareSaveErrorMessage(error, hostLabel));
       return false;
     }
   };
@@ -1541,6 +1774,9 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
       remoteProject.projectGeneration === saveProjectGeneration
     ) {
       return saveBackToShare(remoteProject, saveProjectGeneration);
+    }
+    if (resolveProjectStorage() === "server") {
+      return createProjectOnShare(saveProjectGeneration);
     }
     // Offer to embed local vector data (or, on desktop, save file references)
     // first, so the serialized content below reflects the user's choice.
@@ -1994,7 +2230,8 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
   const handleDuplicate = () => {
     const { project } = buildCurrentProject();
     const duplicated = detachProjectCopy(project, { nameSuffix: "(copy)" });
-    loadProject(duplicated, null);
+    // A copy of what is already on screen, so its basemap needs no confirmation.
+    loadProject(duplicated, null, { trustBasemap: true });
     useAppStore.setState({ isDirty: true });
   };
 
@@ -2007,6 +2244,10 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     ...windowCloseGuard,
     qgisImportWarnings,
     setQgisImportWarnings,
+    qgisImportFormNotes,
+    setQgisImportFormNotes,
+    qgisImportStyleNotes,
+    setQgisImportStyleNotes,
     arcgisImportWarnings,
     setArcgisImportWarnings,
     remoteSaveWarning,
@@ -2032,6 +2273,8 @@ export function useProjectFileActions(mapControllerRef: MapControllerRef) {
     setSaveNameInput,
     submitSaveNamePrompt,
     cancelSaveNamePrompt,
+    remoteSignInPrompt,
+    settleRemoteSignInPrompt,
     handleOpenFromFile,
     handleDroppedProject,
     handleNativeProjectOpen,

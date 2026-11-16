@@ -67,7 +67,7 @@ wrangler d1 execute geolibre-projects --remote --file=schema.sql
 #    Losing or changing it disables every enrolled authenticator.
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
   | wrangler secret put MFA_ENCRYPTION_KEY
-wrangler secret put TURNSTILE_SECRET_KEY   # optional; see docs/selfhost-auth.md
+wrangler secret put TURNSTILE_SECRET_KEY   # required: without it register/reset answer 503
 # COLLAB_IDENTITY_SECRET must be the SAME value on this Worker and on
 # workers/collab (wrangler.selfhost.jsonc), and it must be set before the
 # deploy that sets COLLAB_REQUIRE_IDENTITY=1. See docs/selfhost-auth.md.
@@ -119,6 +119,7 @@ npx wrangler d1 execute geolibre-projects --local --file=workers/projects-api/sc
 #   GEOLIBRE_VIEWER_URL=http://localhost:5173/
 #   GEOLIBRE_CORS_ORIGINS=http://localhost:5173
 #   MFA_ENCRYPTION_KEY=<32 random bytes, base64; same command as step 3 above>
+#   GEOLIBRE_TURNSTILE_DISABLED=1   # no bot check locally; never set in production
 npx wrangler dev -c workers/projects-api/wrangler.jsonc --local
 ```
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { before, describe, it } from "node:test";
-import { GeoTiffReader } from "geolibre-wasm";
+import { CogBuilder, GeoTiffReader } from "geolibre-wasm";
 import {
   COG_WASM_COMPRESSIONS,
   convertGeoTiffToCog,
@@ -94,6 +94,138 @@ describe("convertGeoTiffToCog", () => {
     }
   });
 
+  it("keeps NoData out of the overviews of a processing result (#3255)", async () => {
+    // An NDVI-like result (values in -1..1) with a 3-pixel -9999 NoData border:
+    // big enough for overviews, and a border that does not line up with the
+    // 2x2 / 4x4 overview blocks, so a block straddles NoData and valid pixels.
+    // Such a block averages its valid pixels, so only the 64-pixel NoData corner
+    // is wide enough to cover whole blocks and stay masked at every level.
+    const size = 1100;
+    const border = 3;
+    const corner = 64;
+    const nodata = -9999;
+    const band = new Float32Array(size * size);
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        const edge =
+          row < border ||
+          col < border ||
+          row >= size - border ||
+          col >= size - border ||
+          (row < corner && col < corner);
+        band[row * size + col] = edge ? nodata : ((row + col) % 100) / 100 - 0.5;
+      }
+    }
+    const raster = {
+      bands: [band],
+      width: size,
+      height: size,
+      originX: 432262.5,
+      originY: 4605367.5,
+      resX: 15,
+      resY: 15,
+      nodata,
+      geoKeys: { GTModelTypeGeoKey: 1, ProjectedCSTypeGeoKey: 32617 },
+    };
+    const { fromArrayBuffer } = await import("geotiff");
+    const assertNoBlends = async (cog: Uint8Array, keepsSentinel: boolean) => {
+      const tiff = await fromArrayBuffer(
+        cog.buffer.slice(cog.byteOffset, cog.byteOffset + cog.byteLength) as ArrayBuffer,
+      );
+      const count = await tiff.getImageCount();
+      assert.ok(count > 1, "expected an overview pyramid");
+      // Whatever sentinel the COG declares, every pixel is either NoData or a
+      // valid value: no blend of the two.
+      const declared = (await tiff.getImage(0)).getGDALNoData();
+      assert.ok(declared !== null, "the COG declares NoData");
+      const isNoData = (value: number) => Number.isNaN(value) || value === declared;
+
+      for (let index = 0; index < count; index += 1) {
+        const image = await tiff.getImage(index);
+        const [values] = (await image.readRasters()) as unknown as Float32Array[];
+        let masked = 0;
+        let valid = 0;
+        for (const value of values) {
+          // A COG that feeds tools must hold the sentinel it declares, not NaN.
+          if (keepsSentinel) assert.ok(!Number.isNaN(value), `level ${index} holds NaN`);
+          if (isNoData(value)) {
+            masked += 1;
+            continue;
+          }
+          valid += 1;
+          // Before the fix the coarsest level held blends such as -9374 and
+          // -624, and the renderer's auto stretch read them as data.
+          assert.ok(value >= -0.5 && value <= 0.5, `level ${index} holds ${value}`);
+        }
+        assert.ok(masked > 0, `level ${index} keeps its NoData corner`);
+        assert.ok(valid > 0, `level ${index} keeps valid data`);
+        // A block straddling the left border averages its valid pixels instead
+        // of going blank: level 1's blocks are wider than the 3-pixel border.
+        if (index === 1) {
+          const edge = values[Math.floor(image.getHeight() / 2) * image.getWidth()];
+          assert.ok(!isNoData(edge), `the mixed block at level 1 holds ${edge}`);
+        }
+      }
+    };
+
+    // The default keeps the raster's own sentinel for COGs that feed tools.
+    const plain = await convertRasterDataToCog(raster);
+    assert.equal((await readGeoTiffInfo(plain)).nodata, nodata);
+    await assertNoBlends(plain, true);
+
+    await assertNoBlends(await convertRasterDataToCog(raster, { nanNodata: true }), false);
+  });
+
+  it("matches a fractional NoData sentinel in Float32 precision under nanNodata", async () => {
+    const cog = await convertRasterDataToCog(
+      {
+        bands: [Float32Array.from([-9999.9, 0.5])],
+        width: 2,
+        height: 1,
+        originX: 0,
+        originY: 1,
+        resX: 1,
+        resY: 1,
+        nodata: -9999.9,
+        geoKeys: { GTModelTypeGeoKey: 2, GeographicTypeGeoKey: 4326 },
+      },
+      { nanNodata: true },
+    );
+    const reader = new GeoTiffReader(cog);
+    try {
+      const band = reader.read_band_f32(0);
+      assert.ok(Number.isNaN(band[0]));
+      assert.equal(band[1], 0.5);
+    } finally {
+      reader.free();
+    }
+  });
+
+  it("writes non-finite samples as NaN under nanNodata even without declared NoData", async () => {
+    const cog = await convertRasterDataToCog(
+      {
+        bands: [Float32Array.from([0.25, Number.POSITIVE_INFINITY, -0.5, 0.75])],
+        width: 4,
+        height: 1,
+        originX: 0,
+        originY: 1,
+        resX: 1,
+        resY: 1,
+        nodata: null,
+        geoKeys: { GTModelTypeGeoKey: 2, GeographicTypeGeoKey: 4326 },
+      },
+      { nanNodata: true },
+    );
+    const reader = new GeoTiffReader(cog);
+    try {
+      const band = Array.from(reader.read_band_f32(0));
+      assert.deepEqual([band[0], band[2], band[3]], [0.25, -0.5, 0.75]);
+      assert.ok(Number.isNaN(band[1]));
+    } finally {
+      reader.free();
+    }
+  });
+
   for (const crsCode of [32767, 32768, 65535]) {
     it(`rejects user-defined or private CRS code ${crsCode}`, async () => {
       await assert.rejects(
@@ -159,6 +291,35 @@ describe("convertGeoTiffToCog", () => {
     const flat = await convertGeoTiffToCog(tiff, { overviews: false });
     assert.equal(await imageCount(flat), 1);
     assert.equal(await isTiledGeoTiff(flat), true);
+  });
+
+  it("keeps a user-defined projection that has no EPSG code (#3130)", async () => {
+    // South Africa's Lo29 (ESRI:102567): GDAL tags it ProjectedCSType 32767 with
+    // the datum's GeographicType 4148, which used to read back as EPSG:4148.
+    const lo29 =
+      "+proj=tmerc +lat_0=0 +lon_0=29 +k_0=1 +x_0=0 +y_0=0 +a=6378137 +rf=298.257223563 +units=m +no_defs";
+    const builder = new CogBuilder(16, 16, 1);
+    builder.set_proj_string(lo29);
+    builder.set_origin(20000, -2800000, 10);
+    builder.set_overview_levels(new Uint32Array());
+    const source = builder.write_f32(new Float32Array(16 * 16).fill(1));
+    builder.free();
+    // CogBuilder writes the datum as user-defined (32767). Retag it as GDAL
+    // does, GeographicTypeGeoKey (2048) = 4148, the case that was misread.
+    const words = new Uint16Array(source.buffer, source.byteOffset, source.byteLength >> 1);
+    const entry = words.findIndex(
+      (w, i) => w === 2048 && words[i + 1] === 0 && words[i + 2] === 1 && words[i + 3] === 32767,
+    );
+    assert.ok(entry >= 0, "GeographicTypeGeoKey entry not found");
+    words[entry + 3] = 4148;
+
+    const reader = new GeoTiffReader(await convertGeoTiffToCog(source));
+    try {
+      assert.equal(reader.epsg, undefined);
+      assert.equal(reader.proj_string, lo29);
+    } finally {
+      reader.free();
+    }
   });
 
   it("defaults to deflate, which compresses better than storing raw", async () => {

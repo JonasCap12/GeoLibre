@@ -62,6 +62,10 @@ mod native_duckdb {
 compile_error!("the `mas` (Mac App Store) build must not enable `native-duckdb`: DuckDB loads its spatial extension as unsigned native code at runtime, which App Sandbox and App Store guideline 2.5.2 forbid.");
 
 mod http_body;
+// In-process PostGIS vector tiles (ST_AsMVT) for Android/iOS, which cannot run
+// the Martin tile server (GeoLibre#2091). Outbound connections only: no
+// listening socket and no spawned process, so every build target can carry it.
+mod postgis_tiles;
 // OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret
 // Service) for tokens and API keys saved in Settings (issue #1667). Mobile has
 // no keyring backend, and the keyring crate silently falls back to an
@@ -138,6 +142,42 @@ struct PersistedScopeState {
 
 #[derive(Default)]
 struct SelectedImagePaths(Mutex<HashSet<PathBuf>>);
+
+/// Canonical paths of the plugin bundles (zip archives or directories) that
+/// the most recent `load_external_plugin_bundles` scan loaded. The asset read
+/// accepts only these sources, so the webview cannot widen the readable set by
+/// naming its own roots: a scan registers only bundles that carry a valid
+/// `plugin.json`, never an arbitrary directory such as `$HOME`.
+#[cfg(not(feature = "mas"))]
+#[derive(Default)]
+struct LoadedPluginBundles(Mutex<HashSet<PathBuf>>);
+
+#[cfg(not(feature = "mas"))]
+impl LoadedPluginBundles {
+    /// Replace the recorded set with the canonical form of `sources`. Sources
+    /// that no longer resolve are dropped.
+    fn replace<I, S>(&self, sources: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<Path>,
+    {
+        let canonical = sources
+            .into_iter()
+            .filter_map(|source| source.as_ref().canonicalize().ok())
+            .collect::<HashSet<_>>();
+        *self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = canonical;
+    }
+
+    /// The canonical path of `source` when it is a recorded bundle, else None.
+    fn canonical_known_source(&self, source: &Path) -> Option<PathBuf> {
+        let canonical = source.canonicalize().ok()?;
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&canonical)
+            .then_some(canonical)
+    }
+}
 
 fn is_persisted_image_file(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
@@ -458,6 +498,7 @@ pub fn run() {
         // revisit if a narrower per-source scope or a revoke path is wanted.
         .plugin(tauri_plugin_persisted_scope::init())
         .plugin(tauri_plugin_geolocation::init())
+        .plugin(tauri_plugin_gnss_bluetooth::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init());
@@ -471,6 +512,14 @@ pub fn run() {
     // The AWS SSO device sign-in is HTTPS plus a cache file, so it runs in
     // every build, the App Store one included (which has no AWS CLI fallback).
     let builder = builder.manage(aws_credentials::AwsSsoLoginState::default());
+
+    // Pools for the in-process PostGIS tile renderer, created on first connect.
+    let builder = builder.manage(postgis_tiles::PostgisTilesState::default());
+
+    // The plugin bundles the asset read may serve from; external plugins are
+    // compiled out of the MAS build, so the state goes with them.
+    #[cfg(not(feature = "mas"))]
+    let builder = builder.manage(LoadedPluginBundles::default());
 
     // The Martin/sidecar/Jupyter process managers exist only where the commands
     // that spawn those processes do; the MAS build compiles both out together.
@@ -503,6 +552,7 @@ pub fn run() {
             remote_download::download_remote_file,
             remote_download::cancel_remote_download,
             remote_download::pick_download_folder,
+            remote_download::write_file_to_folder,
             remote_download::take_cached_download,
             aws_credentials::aws_list_profiles,
             aws_credentials::aws_resolve_credentials,
@@ -511,13 +561,17 @@ pub fn run() {
             install_external_plugin_archive,
             native_duckdb::load_native_vector_file,
             load_external_plugin_bundles,
+            read_external_plugin_asset,
             pick_image_paths,
             read_selected_image,
             read_admin_profile,
             read_deployment_policy,
+            is_machine_deployment_policy,
+            read_allowed_file,
             read_env_vars,
             take_pending_project_paths,
             allow_raster_asset,
+            sandbox_hidden_drop_paths,
             read_local_file,
             write_local_geojson_file,
             read_project_file,
@@ -536,7 +590,11 @@ pub fn run() {
             secure_store::secure_store_get_many,
             secure_store::secure_store_seal,
             secure_store::secure_store_set,
-            secure_store::secure_store_delete
+            secure_store::secure_store_delete,
+            postgis_tiles::postgis_tiles_list_sources,
+            postgis_tiles::postgis_tiles_source_info,
+            postgis_tiles::postgis_tiles_tile,
+            postgis_tiles::postgis_tiles_disconnect
         ])
         // A new document in a webview hydrates credentials again, so give it
         // back its one startup read (secure_store.rs, issue #2858).
@@ -1203,6 +1261,50 @@ fn allow_raster_asset(
         .map_err(|error| format!("Could not authorize local raster: {error}"))
 }
 
+/// Whether the app runs inside a Flatpak sandbox.
+fn running_in_flatpak() -> bool {
+    env::var_os("FLATPAK_ID").is_some() || Path::new("/.flatpak-info").exists()
+}
+
+/// Pick out the dropped paths a Flatpak sandbox cannot see.
+///
+/// A host file manager that does not route drags through the document portal
+/// hands the sandboxed app the file's host path (issue #3393). Without a
+/// `--filesystem` grant that path does not exist inside the sandbox, so every
+/// later read fails with an opaque error. Only paths already in the fs scope
+/// (which the fs plugin grants for every native drop) are checked, so this is
+/// not a general existence oracle.
+///
+/// # Arguments
+///
+/// * `paths` - The paths reported by the native drop event.
+/// * `in_flatpak` - Whether the app runs inside a Flatpak sandbox.
+/// * `is_allowed` - Whether a path is in the fs scope.
+fn hidden_drop_paths(
+    paths: Vec<String>,
+    in_flatpak: bool,
+    is_allowed: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    if !in_flatpak {
+        return Vec::new();
+    }
+    paths
+        .into_iter()
+        // Only a confirmed miss counts: a permission or other metadata error
+        // is a different problem than the sandbox hiding the path.
+        .filter(|path| is_allowed(path) && matches!(Path::new(path).try_exists(), Ok(false)))
+        .collect()
+}
+
+/// Return the dropped paths the Flatpak sandbox cannot read, so the drop
+/// handler can explain the sandbox instead of failing on each file. Always
+/// empty outside Flatpak.
+#[tauri::command]
+fn sandbox_hidden_drop_paths(app: tauri::AppHandle, paths: Vec<String>) -> Vec<String> {
+    let scope = app.fs_scope();
+    hidden_drop_paths(paths, running_in_flatpak(), |path| scope.is_allowed(path))
+}
+
 /// Shapefile sidecar extensions read alongside a `.shp` (lowercased, no dot).
 const SHAPEFILE_SIDECAR_EXTENSIONS: [&str; 16] = [
     "shx", "dbf", "prj", "cpg", "sbn", "sbx", "qix", "qpj", "cst", "aih", "ain", "atx", "ixs",
@@ -1325,16 +1427,214 @@ fn read_admin_profile(app: tauri::AppHandle) -> Result<Option<String>, String> {
     read_admin_profile_file(&path)
 }
 
-/// Read the optional deployment policy (`<app_config_dir>/deployment.json`).
-/// Returns its raw UTF-8 text, or `None` only when the file is absent.
+const MAX_PLUGIN_ENTRY_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Returns the platform-specific machine-wide deployment policy path, if any.
+/// Windows: `%ProgramData%\GeoLibre\deployment.json`
+/// Linux: `/etc/geolibre/deployment.json`
+/// macOS: `/Library/Application Support/GeoLibre/deployment.json`
+fn machine_deployment_policy_path() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    {
+        if let Ok(path) = std::env::var("GEOLIBRE_TEST_MACHINE_DEPLOYMENT_PATH") {
+            return Some(std::path::PathBuf::from(path));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var_os("ProgramData")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\ProgramData"));
+        Some(base.join("GeoLibre").join("deployment.json"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(std::path::PathBuf::from("/Library/Application Support/GeoLibre/deployment.json"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Some(std::path::PathBuf::from("/etc/geolibre/deployment.json"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        None
+    }
+}
+
+/// Whether the active deployment policy originates from a machine-wide deployment.json file.
+#[tauri::command]
+fn is_machine_deployment_policy() -> bool {
+    machine_deployment_policy_path()
+        .and_then(|p| fs::metadata(p).ok())
+        .is_some_and(|m| m.is_file())
+}
+
+/// Read the optional deployment policy. Honours machine-wide deployment.json
+/// with documented precedence over per-user `<app_config_dir>/deployment.json`.
+/// Returns raw UTF-8 text, or `None` only when both files are absent.
 #[tauri::command]
 fn read_deployment_policy(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    if let Some(machine_path) = machine_deployment_policy_path() {
+        if let Some(policy) = read_optional_config_file(&machine_path)
+            .map_err(|error| format!("Could not read machine deployment policy: {error}"))?
+        {
+            return Ok(Some(policy));
+        }
+    }
+
     let config_dir = app
         .path()
         .app_config_dir()
         .map_err(|error| format!("Could not resolve config directory: {error}"))?;
     read_optional_config_file(&config_dir.join("deployment.json"))
         .map_err(|error| format!("Could not read deployment policy: {error}"))
+}
+
+/// Read an allowed file for an external plugin, gated by the machine-wide
+/// deployment policy (`plugins.fileAccess`).
+///
+/// Returns the file text as UTF-8, capped at 50 MB.
+/// Bypasses the webview fs scope. Both the requested path and the policy allowlist
+/// entries are canonicalised before comparison to prevent path traversal and symlink
+/// escapes.
+#[tauri::command]
+fn read_allowed_file(plugin_id: String, path: String) -> Result<String, String> {
+    read_allowed_file_impl(&plugin_id, &path, machine_deployment_policy_path().as_deref())
+}
+
+/// The `plugins.fileAccess` entries for `plugin_id`, validated with the UI
+/// parser's rules. The UI drops the whole `plugins` section when `fileAccess`
+/// is malformed (a non-object, a blank or duplicate key after trimming, or a
+/// non-string, blank or duplicate entry), so the native gate denies every read
+/// in that case rather than granting from a section the app ignores.
+fn machine_file_access_allowlist(
+    policy: &serde_json::Value,
+    plugin_id: &str,
+) -> Result<Vec<String>, String> {
+    let malformed = || {
+        "Machine deployment policy has an invalid plugins.fileAccess section; plugin fileAccess is denied"
+            .to_string()
+    };
+    let Some(file_access) = policy.get("plugins").and_then(|p| p.get("fileAccess")) else {
+        return Err(format!(
+            "Plugin '{plugin_id}' has no fileAccess allowlist configured in machine deployment policy"
+        ));
+    };
+    let file_access = file_access.as_object().ok_or_else(malformed)?;
+    let mut keys = HashSet::new();
+    let mut found = None;
+    for (raw_key, raw_list) in file_access {
+        // JS `trim()` also strips a BOM, which Rust's `trim()` does not.
+        let key = raw_key.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+        if key.is_empty() || !keys.insert(key) {
+            return Err(malformed());
+        }
+        let list = raw_list.as_array().ok_or_else(malformed)?;
+        let mut entries = Vec::with_capacity(list.len());
+        let mut seen = HashSet::new();
+        for raw_entry in list {
+            let entry = raw_entry
+                .as_str()
+                .map(|e| e.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}'))
+                .filter(|e| !e.is_empty())
+                .ok_or_else(malformed)?;
+            if !seen.insert(entry) {
+                return Err(malformed());
+            }
+            entries.push(entry.to_string());
+        }
+        if key == plugin_id {
+            found = Some(entries);
+        }
+    }
+    found.ok_or_else(|| {
+        format!("Plugin '{plugin_id}' has no fileAccess allowlist configured in machine deployment policy")
+    })
+}
+
+fn read_allowed_file_impl(
+    plugin_id: &str,
+    path: &str,
+    policy_path: Option<&std::path::Path>,
+) -> Result<String, String> {
+    let trimmed_id = plugin_id.trim();
+    if trimmed_id.is_empty() {
+        return Err("Plugin ID must be a non-blank string".to_string());
+    }
+
+    let Some(policy_path) = policy_path else {
+        return Err("No machine deployment policy configured; plugin fileAccess is denied".to_string());
+    };
+    let Some(policy_contents) = read_optional_config_file(policy_path)
+        .map_err(|error| format!("Could not read machine deployment policy: {error}"))?
+    else {
+        return Err("Machine deployment policy does not exist; plugin fileAccess is denied".to_string());
+    };
+
+    // The UI parser accepts a leading UTF-8 BOM, so the native gate must too.
+    let policy_text = policy_contents
+        .strip_prefix('\u{feff}')
+        .unwrap_or(&policy_contents);
+    let policy: serde_json::Value = serde_json::from_str(policy_text)
+        .map_err(|error| format!("Could not parse machine deployment policy: {error}"))?;
+    // The UI ignores a policy with an unsupported version; never grant from one.
+    if policy.get("version").and_then(Value::as_u64) != Some(1) {
+        return Err("Machine deployment policy has an unsupported version; plugin fileAccess is denied".to_string());
+    }
+
+    let allowlist = machine_file_access_allowlist(&policy, trimmed_id)?;
+
+    if !is_safe_absolute_path(path) {
+        return Err(format!(
+            "Refusing to read \"{path}\": not a safe absolute local file path"
+        ));
+    }
+
+    let canonical_requested = fs::canonicalize(path)
+        .map_err(|error| format!("Could not resolve path \"{path}\": {error}"))?;
+
+    let metadata = fs::metadata(&canonical_requested)
+        .map_err(|error| format!("Could not inspect path \"{path}\": {error}"))?;
+    // Regular files only: a directory cannot be read, and opening a FIFO or
+    // device with no writer would block this command indefinitely.
+    if !metadata.is_file() {
+        return Err(format!("Refusing to read \"{path}\": not a regular file"));
+    }
+
+    let mut is_allowed = false;
+    for trimmed_entry in &allowlist {
+        let trimmed_entry = trimmed_entry.as_str();
+        if !is_safe_absolute_path(trimmed_entry) {
+            continue;
+        }
+        if let Ok(canonical_entry) = fs::canonicalize(trimmed_entry) {
+            if canonical_entry == canonical_requested {
+                is_allowed = true;
+                break;
+            }
+        }
+    }
+
+    if !is_allowed {
+        return Err(format!(
+            "Path \"{path}\" is not in the fileAccess allowlist for plugin '{trimmed_id}'"
+        ));
+    }
+
+    // `fs::File`, not `File`: the bare import is compiled out of MAS builds.
+    let file = fs::File::open(&canonical_requested)
+        .map_err(|error| format!("Could not open file \"{path}\": {error}"))?;
+    let mut text = String::new();
+    file.take(MAX_PLUGIN_ENTRY_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|error| format!("Could not read file \"{path}\" as UTF-8: {error}"))?;
+    if text.len() as u64 > MAX_PLUGIN_ENTRY_BYTES {
+        return Err(format!(
+            "File \"{path}\" exceeds the {}-MB size limit",
+            MAX_PLUGIN_ENTRY_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(text)
 }
 
 /// The only environment variable names `read_env_vars` will ever return. This
@@ -1357,6 +1657,8 @@ const ALLOWED_ENV_VARS: &[&str] = &[
     "OPENROUTER_MODEL",
     "AI_GATEWAY_API_KEY",
     "AI_GATEWAY_MODEL",
+    "TRUSTEDROUTER_API_KEY",
+    "TRUSTEDROUTER_MODEL",
     "OLLAMA_BASE_URL",
     "OLLAMA_MODEL",
     "OPENAI_COMPATIBLE_BASE_URL",
@@ -2059,6 +2361,33 @@ fn load_external_plugin_bundles_blocking(
     fs::create_dir_all(&plugins_dir)
         .map_err(|error| format!("Could not create plugins directory: {error}"))?;
 
+    let plugin_dirs = plugin_roots(additional_plugin_directories, plugins_dir);
+
+    let mut bundles = Vec::new();
+    let mut errors = Vec::new();
+    for plugin_dir in &plugin_dirs {
+        scan_external_plugin_directory(plugin_dir, &mut bundles, &mut errors);
+    }
+    // Remember exactly what loaded, so read_external_plugin_asset can refuse
+    // any source the scan did not itself find.
+    app.state::<LoadedPluginBundles>()
+        .replace(bundles.iter().map(|bundle| PathBuf::from(&bundle.archive_name)));
+
+    Ok(ExternalPluginBundleLoadResult {
+        plugins_directories: plugin_dirs
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+        bundles,
+        errors,
+    })
+}
+
+/// The deduplicated plugin root directories the startup scan walks: the
+/// user-configured additional directories first, then the app-data plugins
+/// directory.
+#[cfg(not(feature = "mas"))]
+fn plugin_roots(additional_plugin_directories: Vec<String>, plugins_dir: PathBuf) -> Vec<PathBuf> {
     let mut plugin_dirs = Vec::new();
     let mut seen_dirs = HashSet::new();
     for directory in additional_plugin_directories {
@@ -2075,21 +2404,132 @@ fn load_external_plugin_bundles_blocking(
     if seen_dirs.insert(normalize_path_key(&plugins_dir)) {
         plugin_dirs.push(plugins_dir);
     }
+    plugin_dirs
+}
 
-    let mut bundles = Vec::new();
-    let mut errors = Vec::new();
-    for plugin_dir in &plugin_dirs {
-        scan_external_plugin_directory(plugin_dir, &mut bundles, &mut errors);
-    }
-
-    Ok(ExternalPluginBundleLoadResult {
-        plugins_directories: plugin_dirs
-            .iter()
-            .map(|path| path.to_string_lossy().to_string())
-            .collect(),
-        bundles,
-        errors,
+#[cfg(not(feature = "mas"))]
+#[tauri::command]
+async fn read_external_plugin_asset(
+    app: tauri::AppHandle,
+    source_path: String,
+    relative_path: String,
+) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_external_plugin_asset_blocking(&app, &source_path, &relative_path)
     })
+    .await
+    .map_err(|error| format!("External plugin asset read task failed: {error}"))?
+}
+
+#[cfg(not(feature = "mas"))]
+fn read_external_plugin_asset_blocking(
+    app: &tauri::AppHandle,
+    source_path: &str,
+    relative_path: &str,
+) -> Result<tauri::ipc::Response, String> {
+    validate_external_plugin_path("relative_path", relative_path)?;
+    // The source must be a bundle the last scan loaded. The roots are not
+    // taken from the caller: a webview that could name its own root could
+    // point this read at any directory on disk.
+    let canonical_source = app
+        .state::<LoadedPluginBundles>()
+        .canonical_known_source(Path::new(source_path))
+        .ok_or_else(|| {
+            "Refusing to read plugin assets: source is not a loaded plugin bundle".to_string()
+        })?;
+    // Dispatch on what is actually on disk, not on the recorded name: a
+    // directory may legitimately be named `*.zip`, and a symlink may resolve to
+    // either shape, so the extension alone would route the read to the wrong
+    // reader.
+    let is_directory = fs::metadata(&canonical_source)
+        .map_err(|error| format!("Plugin source is unavailable: {error}"))?
+        .is_dir();
+    if is_directory {
+        Ok(tauri::ipc::Response::new(read_directory_plugin_asset_bytes(
+            &canonical_source,
+            relative_path,
+        )?))
+    } else {
+        Ok(tauri::ipc::Response::new(read_zip_plugin_asset_bytes(
+            &canonical_source,
+            relative_path,
+        )?))
+    }
+}
+
+#[cfg(not(feature = "mas"))]
+fn read_zip_plugin_asset_bytes(
+    archive_path: &Path,
+    relative_path: &str,
+) -> Result<Vec<u8>, String> {
+    let file = File::open(archive_path)
+        .map_err(|error| format!("Could not open plugin zip: {error}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| format!("Could not read plugin zip: {error}"))?;
+    // Assets resolve against the manifest's own directory, mirroring how the
+    // entry/style paths resolve at load time (a wrapping folder is tolerated).
+    let manifest_path = find_zip_manifest_path(&archive)
+        .ok_or_else(|| "Plugin archive is missing a plugin.json".to_string())?;
+    let prefix = manifest_path.strip_suffix("plugin.json").unwrap_or("");
+    let entry_name = format!("{prefix}{relative_path}");
+    let entry = archive.by_name(&entry_name).map_err(|_| {
+        format!("Plugin asset '{relative_path}' does not exist in the plugin archive")
+    })?;
+    if entry.is_dir() {
+        return Err(format!("Plugin asset '{relative_path}' must be a file"));
+    }
+    // Cap the actual bytes read instead of trusting the zip header size,
+    // which a hand-crafted archive can spoof.
+    let mut bytes = Vec::new();
+    entry
+        .take(MAX_PLUGIN_ENTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not read plugin asset '{relative_path}': {error}"))?;
+    if bytes.len() as u64 > MAX_PLUGIN_ENTRY_BYTES {
+        return Err(format!(
+            "Plugin asset '{relative_path}' exceeds the {}-MB size limit",
+            MAX_PLUGIN_ENTRY_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(feature = "mas"))]
+fn read_directory_plugin_asset_bytes(
+    plugin_dir: &Path,
+    relative_path: &str,
+) -> Result<Vec<u8>, String> {
+    let canonical_root = plugin_dir
+        .canonicalize()
+        .unwrap_or_else(|_| plugin_dir.to_path_buf());
+    let entry_path = canonical_root.join(relative_path);
+    // Resolve through path metadata so a symlink inside the plugin directory
+    // cannot redirect the read outside it, then re-check containment on the
+    // resolved path (same resolved-path re-check read_project_file applies).
+    let canonical_entry = entry_path
+        .canonicalize()
+        .map_err(|_| format!("Plugin asset '{relative_path}' does not exist"))?;
+    if !canonical_entry.starts_with(&canonical_root) {
+        return Err(format!(
+            "Refusing to read \"{relative_path}\": it resolves outside the plugin directory"
+        ));
+    }
+    if !canonical_entry.is_file() {
+        return Err(format!("Plugin asset '{relative_path}' must be a file"));
+    }
+    let file = File::open(&canonical_entry)
+        .map_err(|error| format!("Could not read plugin asset '{relative_path}': {error}"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PLUGIN_ENTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not read plugin asset '{relative_path}': {error}"))?;
+    if bytes.len() as u64 > MAX_PLUGIN_ENTRY_BYTES {
+        return Err(format!(
+            "Plugin asset '{relative_path}' exceeds the {}-MB size limit",
+            MAX_PLUGIN_ENTRY_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(bytes)
 }
 
 #[cfg(not(feature = "mas"))]
@@ -2232,7 +2672,9 @@ fn load_external_plugin_archive(
 /// full path within the archive, or None when no plugin.json is present.
 #[cfg(not(feature = "mas"))]
 fn find_zip_manifest_path<R: Read + std::io::Seek>(archive: &zip::ZipArchive<R>) -> Option<String> {
-    let names: Vec<&str> = archive.file_names().collect();
+    // Entries whose names can't be decoded can't be the manifest; skip them.
+    let owned: Vec<_> = archive.file_names().filter_map(Result::ok).collect();
+    let names: Vec<&str> = owned.iter().map(|name| name.as_ref()).collect();
     if names.contains(&"plugin.json") {
         return Some("plugin.json".to_string());
     }
@@ -2298,9 +2740,6 @@ fn read_fs_text_entry(root: &Path, entry_name: &str, label: &str) -> Result<Stri
     }
     Ok(text)
 }
-
-#[cfg(not(feature = "mas"))]
-const MAX_PLUGIN_ENTRY_BYTES: u64 = 50 * 1024 * 1024;
 
 #[cfg(not(feature = "mas"))]
 fn read_zip_text_entry<R: Read + std::io::Seek>(
@@ -2598,6 +3037,18 @@ async fn load_external_plugin_bundles(
     })
 }
 
+// Mirrors the non-MAS command's refusal: the MAS build ships no external
+// plugin support, so there are no bundles to read assets from.
+#[cfg(feature = "mas")]
+#[tauri::command]
+async fn read_external_plugin_asset(
+    _app: tauri::AppHandle,
+    _source_path: String,
+    _relative_path: String,
+) -> Result<tauri::ipc::Response, String> {
+    Err("External plugin assets are not available in the Mac App Store build.".to_string())
+}
+
 #[cfg(not(feature = "mas"))]
 #[tauri::command]
 fn ensure_martin_binary(app: tauri::AppHandle) -> Result<MartinBinaryInfo, String> {
@@ -2697,6 +3148,21 @@ async fn start_geolibre_sidecar(app: tauri::AppHandle) -> Result<SidecarServerIn
         .map_err(|error| format!("Could not join sidecar startup task: {error}"))?
 }
 
+// Interpreter for the uv project environments behind the sidecar and Jupyter.
+// Left unpinned, uv takes the newest Python it can find or download, which can
+// be a release that locked wheels (psycopg-binary, for one) don't support yet,
+// and then `uv run` fails before the server starts. 3.12 matches the Whitebox and
+// conversion runtime defaults and the version CI tests.
+#[cfg(not(feature = "mas"))]
+const SIDECAR_PYTHON_VERSION: &str = "3.12";
+
+// uv replaces an existing project environment built on another Python, so this
+// also repairs installs whose environment was created before the pin.
+#[cfg(not(feature = "mas"))]
+fn add_sidecar_python_pin(command: &mut Command) {
+    command.arg("--python").arg(SIDECAR_PYTHON_VERSION);
+}
+
 #[cfg(not(feature = "mas"))]
 fn add_main_sidecar_extras(command: &mut Command) {
     command
@@ -2783,6 +3249,7 @@ fn start_geolibre_sidecar_blocking(app: tauri::AppHandle) -> Result<SidecarServe
         .arg("--frozen")
         .arg("--project")
         .arg(&project_dir);
+    add_sidecar_python_pin(&mut command);
     // The main sidecar serves AI segmentation, editable PostGIS and SQL Server
     // layers. Unlike whitebox/conversion (separate managed venvs), their extras
     // must be synced into this environment here.
@@ -2964,14 +3431,13 @@ fn start_jupyter_server_blocking(app: tauri::AppHandle) -> Result<JupyterServerI
             notebooks_dir.display()
         )
     })?;
-    // Seed the starter Welcome notebook (the same one bundled into JupyterLite on
-    // web) on first run only, so we never clobber a user's edits.
-    let welcome_dest = notebooks_dir.join("Welcome.ipynb");
-    if !welcome_dest.exists() {
-        let _ = fs::copy(
-            project_dir.join("notebook_examples").join("Welcome.ipynb"),
-            &welcome_dest,
-        );
+    // Seed the example notebooks (the same ones bundled into JupyterLite on web)
+    // only when missing, so we never clobber a user's edits.
+    for notebook in ["Welcome.ipynb", "Explore_GeoLibre.ipynb"] {
+        let dest = notebooks_dir.join(notebook);
+        if !dest.exists() {
+            let _ = fs::copy(project_dir.join("notebook_examples").join(notebook), &dest);
+        }
     }
     // Make the kernel-side `geolibre` client importable from any notebook: copy
     // it out of the bundled backend resource into a dedicated lib dir placed on
@@ -3008,7 +3474,9 @@ fn start_jupyter_server_blocking(app: tauri::AppHandle) -> Result<JupyterServerI
         // tested against instead of re-resolving against live PyPI per machine.
         .arg("--frozen")
         .arg("--project")
-        .arg(&project_dir)
+        .arg(&project_dir);
+    add_sidecar_python_pin(&mut command);
+    command
         // The `notebook` extra carries JupyterLab. Synced into a dedicated
         // project environment so it never disturbs the FastAPI sidecar's env
         // (which syncs the `ml` extra).
@@ -4588,7 +5056,10 @@ fn extract_martin_binary_from_zip(archive: &[u8], binary_path: &Path) -> Result<
         let mut file = archive
             .by_index(index)
             .map_err(|error| format!("Could not read Martin zip entry: {error}"))?;
-        let path = PathBuf::from(file.name());
+        let name = file
+            .name()
+            .map_err(|error| format!("Could not read Martin zip entry name: {error}"))?;
+        let path = PathBuf::from(name.as_ref());
         if path.file_name().and_then(|name| name.to_str()) != Some(executable_name) {
             continue;
         }
@@ -5221,12 +5692,13 @@ fn configure_linux_webkit() {}
 mod tests {
     use super::{
         client_cert_is_pkcs12, client_cert_password_without_path, ensure_fetchable_url,
-        is_allowed_geojson_write_path, is_allowed_local_vector_path, is_allowed_project_path,
-        is_disallowed_ip, is_geolibre_sidecar_command_line, is_image_picker_path,
-        is_persisted_image_file, is_safe_absolute_path, is_ssrf_guard_error, is_unc_resolved_path,
-        path_is_under, project_path_string, project_paths_from_args, read_mbtiles_zoom_range,
-        resolve_fetch_timeout_secs, tcp_table_port, write_local_geojson_file,
-        MAX_FETCH_TIMEOUT_SECS, REMOTE_TILE_TIMEOUT_SECS, SSRF_BLOCKED_MESSAGE,
+        hidden_drop_paths, is_allowed_geojson_write_path, is_allowed_local_vector_path,
+        is_allowed_project_path, is_disallowed_ip, is_geolibre_sidecar_command_line,
+        is_image_picker_path, is_persisted_image_file, is_safe_absolute_path, is_ssrf_guard_error,
+        is_unc_resolved_path, path_is_under, project_path_string, project_paths_from_args,
+        read_mbtiles_zoom_range, resolve_fetch_timeout_secs, tcp_table_port,
+        write_local_geojson_file, MAX_FETCH_TIMEOUT_SECS, REMOTE_TILE_TIMEOUT_SECS,
+        SSRF_BLOCKED_MESSAGE,
     };
     #[cfg(target_os = "linux")]
     use super::{
@@ -5239,8 +5711,10 @@ mod tests {
     // tests that exercise it (and their scaffolding) are gated with it.
     #[cfg(not(feature = "mas"))]
     use super::{
-        add_main_sidecar_extras, child_failure_message, clear_appimage_python_env,
-        find_zip_manifest_path, plugin_archive_file_name, resolve_sidecar_in_resource_dir,
+        add_main_sidecar_extras, add_sidecar_python_pin, child_failure_message, clear_appimage_python_env,
+        find_zip_manifest_path, plugin_archive_file_name, read_directory_plugin_asset_bytes,
+        LoadedPluginBundles,
+        read_zip_plugin_asset_bytes, resolve_sidecar_in_resource_dir,
         sidecar_accepts_token, sidecar_health_is_ready, CapturedOutput, CAPTURED_LOG_MAX_LINES,
         CAPTURED_LOG_REPORTED_LINES, CAPTURED_LOG_SETTLE,
     };
@@ -5308,6 +5782,15 @@ mod tests {
                 OsStr::new("mssql"),
             ]
         );
+    }
+
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn sidecar_environments_pass_the_python_pin() {
+        let mut command = Command::new("uv");
+        add_sidecar_python_pin(&mut command);
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, [OsStr::new("--python"), OsStr::new("3.12")]);
     }
 
     // A throwaway directory tree under the system temp dir that removes itself
@@ -5383,6 +5866,153 @@ mod tests {
                 format!("Could not read admin profile: {original_error}")
             );
         }
+    }
+
+    #[test]
+    fn read_allowed_file_honors_machine_policy_and_blocks_unauthorized() {
+        let root = ScratchDir::new("plugin-file-access");
+        let allowed_file = root.path().join("allowed.json");
+        fs::write(&allowed_file, "{\"hello\":\"world\"}").unwrap();
+        let unlisted_file = root.path().join("secret.json");
+        fs::write(&unlisted_file, "{\"secret\":123}").unwrap();
+
+        let allowed_str = allowed_file.to_str().unwrap().replace('\\', "/");
+        let unlisted_str = unlisted_file.to_str().unwrap().replace('\\', "/");
+
+        let policy_path = root.path().join("deployment.json");
+        let policy_json = format!(
+            r#"{{"version":1,"plugins":{{"fileAccess":{{"my-plugin":["{}"]}}}}}}"#,
+            allowed_str
+        );
+        fs::write(&policy_path, policy_json).unwrap();
+
+        // 1. Allowed path matches and reads
+        let res = super::read_allowed_file_impl("my-plugin", &allowed_str, Some(&policy_path));
+        assert_eq!(res.unwrap(), "{\"hello\":\"world\"}");
+
+        // 2. Unlisted path is rejected
+        let res_unlisted = super::read_allowed_file_impl("my-plugin", &unlisted_str, Some(&policy_path));
+        assert!(res_unlisted.is_err());
+        assert!(res_unlisted.unwrap_err().contains("not in the fileAccess allowlist"));
+
+        // 3. Wrong plugin id is rejected
+        let res_wrong_id = super::read_allowed_file_impl("other-plugin", &allowed_str, Some(&policy_path));
+        assert!(res_wrong_id.is_err());
+        assert!(res_wrong_id.unwrap_err().contains("has no fileAccess allowlist"));
+
+        // 4. Traversal using .. is rejected
+        let traversal_str = format!("{}/../secret.json", allowed_file.parent().unwrap().to_str().unwrap().replace('\\', "/"));
+        let res_traversal = super::read_allowed_file_impl("my-plugin", &traversal_str, Some(&policy_path));
+        assert!(res_traversal.is_err());
+        assert!(res_traversal.unwrap_err().contains("not a safe absolute local file path"));
+
+        // 5. No machine-wide policy (None, or an absent file) denies every read
+        let res_none = super::read_allowed_file_impl("my-plugin", &allowed_str, None);
+        assert!(res_none.is_err());
+        assert!(res_none.unwrap_err().contains("No machine deployment policy configured"));
+
+        let absent_policy = root.path().join("absent.json");
+        let res_absent = super::read_allowed_file_impl("my-plugin", &allowed_str, Some(&absent_policy));
+        assert!(res_absent.is_err());
+        assert!(res_absent.unwrap_err().contains("does not exist"));
+
+        // 6. Policy keys are matched after trimming, as the UI parser does.
+        let padded_policy = root.path().join("padded.json");
+        fs::write(
+            &padded_policy,
+            format!(
+                r#"{{"version":1,"plugins":{{"fileAccess":{{" my-plugin ":["{}"]}}}}}}"#,
+                allowed_str
+            ),
+        )
+        .unwrap();
+        let res_padded = super::read_allowed_file_impl("my-plugin", &allowed_str, Some(&padded_policy));
+        assert_eq!(res_padded.unwrap(), "{\"hello\":\"world\"}");
+
+        // 7. A BOM-prefixed policy parses, as it does in the UI.
+        let bom_policy = root.path().join("bom.json");
+        fs::write(
+            &bom_policy,
+            format!(
+                "\u{feff}{{\"version\":1,\"plugins\":{{\"fileAccess\":{{\"my-plugin\":[\"{}\"]}}}}}}",
+                allowed_str
+            ),
+        )
+        .unwrap();
+        let res_bom = super::read_allowed_file_impl("my-plugin", &allowed_str, Some(&bom_policy));
+        assert_eq!(res_bom.unwrap(), "{\"hello\":\"world\"}");
+
+        // 8. An unsupported version never grants access.
+        let v2_policy = root.path().join("v2.json");
+        fs::write(
+            &v2_policy,
+            format!(
+                r#"{{"version":2,"plugins":{{"fileAccess":{{"my-plugin":["{}"]}}}}}}"#,
+                allowed_str
+            ),
+        )
+        .unwrap();
+        let res_v2 = super::read_allowed_file_impl("my-plugin", &allowed_str, Some(&v2_policy));
+        assert!(res_v2.unwrap_err().contains("unsupported version"));
+
+        // 9. A fileAccess section the UI would drop grants nothing natively.
+        for bad in [
+            format!(r#"{{"my-plugin":["{allowed_str}",""]}}"#),
+            format!(r#"{{"my-plugin":["{allowed_str}"],"other":[" {allowed_str} ","{allowed_str}"]}}"#),
+            format!(r#"{{"my-plugin":["{allowed_str}"]," my-plugin":["{allowed_str}"]}}"#),
+            format!(r#"{{"my-plugin":["{allowed_str}"],"   ":[]}}"#),
+            r#"["not-an-object"]"#.to_string(),
+        ] {
+            let bad_policy = root.path().join("bad.json");
+            fs::write(
+                &bad_policy,
+                format!(r#"{{"version":1,"plugins":{{"fileAccess":{bad}}}}}"#),
+            )
+            .unwrap();
+            let res_bad = super::read_allowed_file_impl("my-plugin", &allowed_str, Some(&bad_policy));
+            assert!(
+                res_bad.unwrap_err().contains("invalid plugins.fileAccess"),
+                "{bad}"
+            );
+        }
+
+        // 10. A directory listed in the allowlist is not a regular file.
+        let dir_str = root.path().to_str().unwrap().replace('\\', "/");
+        let dir_policy = root.path().join("dir.json");
+        fs::write(
+            &dir_policy,
+            format!(r#"{{"version":1,"plugins":{{"fileAccess":{{"my-plugin":["{}"]}}}}}}"#, dir_str),
+        )
+        .unwrap();
+        let res_dir = super::read_allowed_file_impl("my-plugin", &dir_str, Some(&dir_policy));
+        assert!(res_dir.unwrap_err().contains("not a regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_allowed_file_blocks_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let root = ScratchDir::new("plugin-symlink-escape");
+        let secret_file = root.path().join("secret.txt");
+        fs::write(&secret_file, "forbidden").unwrap();
+
+        let link = root.path().join("link_to_secret.txt");
+        symlink(&secret_file, &link).unwrap();
+
+        let safe_file = root.path().join("safe.txt");
+        fs::write(&safe_file, "safe").unwrap();
+
+        let policy_path = root.path().join("deployment.json");
+        let policy_json = format!(
+            r#"{{"version":1,"plugins":{{"fileAccess":{{"my-plugin":["{}"]}}}}}}"#,
+            safe_file.to_str().unwrap()
+        );
+        fs::write(&policy_path, policy_json).unwrap();
+
+        let link_str = link.to_str().unwrap();
+        let res = super::read_allowed_file_impl("my-plugin", link_str, Some(&policy_path));
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("not in the fileAccess allowlist"));
     }
 
     // Only a regular marker file next to the exe marks the portable build: an
@@ -6013,6 +6643,108 @@ mod tests {
     }
 
     #[cfg(not(feature = "mas"))]
+    fn zip_with_contents(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, contents) in files {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(contents).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn reads_zip_plugin_asset_relative_to_manifest_directory() {
+        let dir = env::temp_dir().join("geolibre-read-asset-zip-test");
+        fs::create_dir_all(&dir).unwrap();
+        let archive_path = dir.join("wrapped-plugin.zip");
+        fs::write(
+            &archive_path,
+            zip_with_contents(&[
+                ("my-plugin/plugin.json", b"{}"),
+                ("my-plugin/assets/conn.json", b"{\"host\":\"db\"}"),
+            ]),
+        )
+        .unwrap();
+        let bytes = read_zip_plugin_asset_bytes(&archive_path, "assets/conn.json").unwrap();
+        assert_eq!(bytes, b"{\"host\":\"db\"}");
+        assert!(read_zip_plugin_asset_bytes(&archive_path, "missing.json").is_err());
+        fs::remove_file(&archive_path).unwrap();
+    }
+
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn reads_directory_plugin_asset_and_refuses_escapes() {
+        // A per-run directory: concurrent or interrupted runs must not share
+        // fixtures, and cleanup stays inside this test's own root.
+        let dir = env::temp_dir().join(format!(
+            "geolibre-read-asset-dir-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir.join("assets")).unwrap();
+        fs::write(dir.join("assets/conn.json"), b"{\"host\":\"db\"}").unwrap();
+        let bytes = read_directory_plugin_asset_bytes(&dir, "assets/conn.json").unwrap();
+        assert_eq!(bytes, b"{\"host\":\"db\"}");
+        // Missing entries are refused.
+        assert!(read_directory_plugin_asset_bytes(&dir, "missing.json").is_err());
+        // A dot-segment escape that resolves to an existing sibling file is
+        // refused by the resolved-path containment re-check.
+        let escape = dir.parent().unwrap().join("escape.json");
+        fs::write(&escape, b"secret").unwrap();
+        assert!(read_directory_plugin_asset_bytes(&dir, "../escape.json").is_err());
+        // Remove the sibling too: leaving it behind leaks `secret` into the
+        // shared temp directory and collides with a later interrupted run.
+        fs::remove_file(&escape).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(all(unix, not(feature = "mas")))]
+    #[test]
+    fn directory_plugin_asset_read_follows_no_symlink_escape() {
+        let dir = env::temp_dir().join("geolibre-read-asset-symlink-test");
+        fs::create_dir_all(&dir).unwrap();
+        let outside = env::temp_dir().join("geolibre-read-asset-symlink-outside.txt");
+        fs::write(&outside, b"secret").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("evil")).unwrap();
+        // canonicalize resolves the symlink, and the containment re-check
+        // refuses the read even though the textual join stayed inside.
+        assert!(read_directory_plugin_asset_bytes(&dir, "evil").is_err());
+        fs::remove_file(&outside).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(not(feature = "mas"))]
+    #[test]
+    fn loaded_plugin_bundles_accept_only_scanned_sources() {
+        let root = env::temp_dir().join(format!(
+            "geolibre-loaded-bundles-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let plugin = root.join("plugins").join("my-plugin");
+        fs::create_dir_all(&plugin).unwrap();
+        fs::write(plugin.join("plugin.json"), b"{}").unwrap();
+        let bundles = LoadedPluginBundles::default();
+        bundles.replace([&plugin]);
+        // The scanned bundle is accepted, also through a non-canonical spelling.
+        assert!(bundles.canonical_known_source(&plugin).is_some());
+        assert!(bundles
+            .canonical_known_source(&plugin.join("..").join("my-plugin"))
+            .is_some());
+        // A directory the scan never loaded is refused, even one that contains
+        // the bundle (the caller-chosen-root attack: `$HOME` + `.ssh/id_rsa`).
+        assert!(bundles.canonical_known_source(&root).is_none());
+        assert!(bundles.canonical_known_source(&root.join("plugins")).is_none());
+        assert!(bundles.canonical_known_source(&root.join("missing")).is_none());
+        // A rescan replaces the set rather than adding to it.
+        bundles.replace(Vec::<PathBuf>::new());
+        assert!(bundles.canonical_known_source(&plugin).is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(not(feature = "mas"))]
     fn zip_with_names(names: &[&str]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default()
@@ -6088,6 +6820,20 @@ mod tests {
         assert_eq!(plugin_archive_file_name("..hidden"), "hidden.zip");
         // A name that sanitizes away entirely falls back to a fixed stem.
         assert_eq!(plugin_archive_file_name("..."), "plugin.zip");
+    }
+
+    #[test]
+    fn hidden_drop_paths_reports_missing_scoped_paths_only_in_flatpak() {
+        let existing = env::temp_dir().to_string_lossy().into_owned();
+        let missing = "/geolibre-issue-3393-missing/dem.tif".to_string();
+        let unscoped = "/geolibre-issue-3393-unscoped/dem.tif".to_string();
+        let paths = vec![existing.clone(), missing.clone(), unscoped.clone()];
+        let allowed = |path: &str| path != unscoped;
+        assert_eq!(
+            hidden_drop_paths(paths.clone(), true, allowed),
+            vec![missing]
+        );
+        assert!(hidden_drop_paths(paths, false, allowed).is_empty());
     }
 
     #[test]

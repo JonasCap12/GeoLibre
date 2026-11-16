@@ -30,7 +30,6 @@ theme:
         name: Switch to light mode
   features:
     - navigation.instant
-    - navigation.sections
     - navigation.top
     - search.highlight
     - search.share
@@ -58,6 +57,7 @@ nav:
       - Chrome Extension: user-guide/chrome-extension.md
       - Managing Layers: user-guide/layers.md
       - Styling Layers: user-guide/styling.md
+      - Indoor Maps and BIM: user-guide/indoor-maps.md
       - Attribute Table: user-guide/attribute-table.md
       - Map Controls & Tools: user-guide/map-controls.md
       - GPS Tracking & Field Collection: user-guide/field-collection.md
@@ -75,6 +75,8 @@ nav:
       - Cloud Storage (S3): user-guide/cloud-storage.md
       - Plugins & Marketplace: user-guide/plugins.md
       - Web Services: user-guide/web-services.md
+      - Editing ArcGIS Services: arcgis-editing.md
+      - USGS NLDI Workflows: user-guide/usgs-nldi.md
       - Settings & Preferences: user-guide/settings.md
       - Story Maps: user-guide/storymaps.md
       - Embedding & Sharing: user-guide/embedding.md
@@ -92,6 +94,17 @@ nav:
       - Format Reference (中文): tutorials/supported-formats-zh.md
       - Source Code Deep Dive: tutorials/source-code-deep-dive-en.md
       - Source Code Deep Dive (中文): tutorials/source-code-deep-dive-zh.md
+  - Workshops:
+      - NGIS 2026:
+          - Overview: workshops/ngis-2026/index.md
+          - "1. Getting Started": workshops/ngis-2026/01-getting-started.md
+          - "2. Bringing In Data": workshops/ngis-2026/02-bringing-in-data.md
+          - "3. Visualization & Styling": workshops/ngis-2026/03-visualization-styling.md
+          - "4. Attributes, Editing & SQL": workshops/ngis-2026/04-attributes-editing-sql.md
+          - "5. Analysis & Processing": workshops/ngis-2026/05-analysis-processing.md
+          - "6. Engines, 3D & Time": workshops/ngis-2026/06-3d-and-time.md
+          - "7. Communicating & Collaborating": workshops/ngis-2026/07-communicating-collaborating.md
+          - "8. AI & Automation": workshops/ngis-2026/08-ai-automation.md
   - Reference:
       - Architecture: architecture.md
       - MapLibre Renderer: maplibre-renderer.md
@@ -99,6 +112,7 @@ nav:
       - Cesium Renderer: cesium-renderer.md
       - ArcGIS Renderer: arcgis-renderer.md
       - Self-Hosting: self-hosting.md
+      - Network Endpoints: network-endpoints.md
       - Server API: server-api.md
       - Self-Hosted Accounts: selfhost-auth.md
       - Android: android.md
@@ -112,6 +126,18 @@ nav:
       - Deployment Policy: deployment-policy.md
       - Internationalization: i18n.md
       - Python Package: python.md
+      - Python API Reference:
+          - Overview: python-api/index.md
+          - Map, Layer and Feature: python-api/map.md
+          - authoring: python-api/authoring.md
+          - project: python-api/project.md
+          - color_ramp: python-api/color_ramp.md
+          - legends: python-api/legends.md
+          - basemaps: python-api/basemaps.md
+          - polyline: python-api/polyline.md
+          - pointcloud: python-api/pointcloud.md
+          - spaceborne_lidar: python-api/spaceborne_lidar.md
+          - dash_component: python-api/dash_component.md
       - R Package: r.md
       - MCP Server: mcp.md
       - Agent Skill: agent-skill.md
@@ -119,6 +145,7 @@ nav:
       - Roadmap: roadmap.md
       - Contributing: contributing.md
       - Maintenance Notes: maintenance.md
+      - Third-Party Licenses: third-party-licenses.md
       - How to Cite: citation.md
       - Acknowledgements: acknowledgements.md
       - Privacy Policy: privacy.md
@@ -126,6 +153,30 @@ nav:
 
 plugins:
   - search
+  # Python API reference (docs/python-api/), rendered from the geolibre
+  # package's docstrings. Griffe reads python/src statically, so the docs build
+  # does not need to install geolibre or its optional dependencies.
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [python/src]
+          options:
+            # Render the docstrings' Sphinx roles (:meth:`x`) as inline code.
+            extensions:
+              - scripts/griffe_sphinx_roles.py:SphinxRoles
+            docstring_style: google
+            show_source: false
+            show_root_heading: false
+            show_root_toc_entry: false
+            heading_level: 2
+            members_order: source
+            filters: ["!^_"]
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
 
 markdown_extensions:
   - admonition

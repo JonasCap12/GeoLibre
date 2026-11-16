@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import copy
 import csv
 import html as _html
@@ -56,6 +58,19 @@ MAP_CONTROLS = frozenset(
 )
 
 _VALID_PROJECTIONS = frozenset({"globe", "mercator"})
+
+#: Units the Measure panel accepts for :meth:`Map.show_control`. Mirrors
+#: ``MEASURE_DISTANCE_UNITS`` / ``MEASURE_AREA_UNITS`` in
+#: ``packages/plugins/src/plugins/components/measure.ts``.
+MEASURE_DISTANCE_UNITS = frozenset(
+    {"meters", "kilometers", "miles", "feet", "yards", "nautical-miles"}
+)
+MEASURE_AREA_UNITS = frozenset(
+    {"square-meters", "square-kilometers", "square-miles", "hectares", "acres", "square-feet"}
+)
+
+#: Panels that take a ``collapsed`` option in :meth:`Map.show_control`.
+_COLLAPSIBLE_PANELS = frozenset({"measure", "minimap"})
 
 # CSV/tabular input is inlined into the project exactly like GeoJSON is, so the
 # same 50 MB ceiling applies to a fetched response or a local file.
@@ -383,8 +398,10 @@ class Map(anywidget.AnyWidget):
     # port proxy.
     _remote_mode = traitlets.Unicode("").tag(sync=True)
     height = traitlets.Unicode("800px").tag(sync=True)
-    # "embed" (compact chrome), "full" (desktop chrome), or "maponly".
-    layout = traitlets.Unicode("embed").tag(sync=True)
+    # "embed" (compact chrome), "full" (desktop chrome), or "maponly". Not named
+    # ``layout``: that trait belongs to ipywidgets.DOMWidget and holds the Layout
+    # widget every frontend resolves when it displays the view.
+    app_layout = traitlets.Unicode("embed").tag(sync=True)
     theme = traitlets.Unicode("light").tag(sync=True)
     # Bumped on every Python-initiated project change; echoed by the app.
     _seq = traitlets.Int(0).tag(sync=True)
@@ -405,7 +422,8 @@ class Map(anywidget.AnyWidget):
         basemap: str | None = None,
         renderer: str = "maplibre",
         height: str = "800px",
-        layout: str = "embed",
+        app_layout: str | None = None,
+        layout: Any = None,
         theme: str = "light",
         server_proxy: bool | str = "auto",
         **kwargs: Any,
@@ -418,8 +436,11 @@ class Map(anywidget.AnyWidget):
             basemap: A basemap name or MapLibre style URL for the background.
             renderer: ``"maplibre"`` (default), ``"cesium"``, ``"mapbox"``, or ``"arcgis"``.
             height: CSS height of the widget (e.g. ``"800px"``).
-            layout: ``"embed"`` (compact UI), ``"full"`` (full desktop UI), or
-                ``"maponly"`` (map without chrome).
+            app_layout: ``"embed"`` (compact UI, the default), ``"full"`` (full
+                desktop UI), or ``"maponly"`` (map without chrome).
+            layout: An ``ipywidgets.Layout`` for the widget, as on any other
+                ipywidgets widget. Its ``height`` overrides ``height``. Passing
+                an ``app_layout`` string here is deprecated.
             theme: ``"light"`` or ``"dark"``.
             server_proxy: How the browser reaches the bundled app.
                 ``"auto"`` (default) serves the app directly from localhost for
@@ -437,14 +458,31 @@ class Map(anywidget.AnyWidget):
                 always uses its own port proxy.
             **kwargs: Forwarded to ``anywidget.AnyWidget``.
         """
-        if layout not in _VALID_LAYOUTS:
-            raise ValueError(f"layout must be one of {sorted(_VALID_LAYOUTS)}, got {layout!r}")
+        if isinstance(layout, str):
+            if app_layout is not None:
+                raise TypeError("Pass the app chrome as app_layout only, not also as layout")
+            warnings.warn(
+                "Map(layout=<str>) is deprecated; use Map(app_layout=<str>). "
+                "layout now holds the ipywidgets Layout.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            app_layout, layout = layout, None
+        if app_layout is None:
+            app_layout = "embed"
+        if app_layout not in _VALID_LAYOUTS:
+            raise ValueError(
+                f"app_layout must be one of {sorted(_VALID_LAYOUTS)}, got {app_layout!r}"
+            )
         if theme not in _VALID_THEMES:
             raise ValueError(f"theme must be one of {sorted(_VALID_THEMES)}, got {theme!r}")
+        if layout is not None:
+            kwargs["layout"] = layout
         super().__init__(**kwargs)
         self.height = height
-        self.layout = layout
+        self.app_layout = app_layout
         self.theme = theme
+        self._watch_layout_height(self.layout)
         self._remote_mode = self._resolve_remote_mode(server_proxy)
         # Always start the localhost bundle server. Locally it is the app origin;
         # under "remote" it backs the jupyter-server-proxy route (and serves the
@@ -479,9 +517,54 @@ class Map(anywidget.AnyWidget):
         )
         self.on_msg(self._on_custom_msg)
 
+    def _watch_layout_height(self, layout: Any) -> None:
+        """Follow a Layout widget's height, applying the one it already has.
+
+        ipywidgets sizes only the view's outer element from the Layout. The app
+        iframe inside it is sized by the ``height`` trait, so without this
+        ``m.layout.height = "100%"`` would leave the map at its old height.
+
+        Args:
+            layout: The ``ipywidgets.Layout`` now assigned to this widget.
+        """
+        layout.observe(self._on_layout_height, "height")
+        if layout.height:
+            self.height = layout.height
+
+    def _on_layout_height(self, change: dict[str, Any]) -> None:
+        """Copy a Layout height change onto the ``height`` trait.
+
+        Args:
+            change: The traitlets change notification. Clearing the Layout's
+                height leaves the current ``height`` in place.
+        """
+        if change["new"]:
+            self.height = change["new"]
+
+    @traitlets.observe("layout")
+    def _on_layout_replaced(self, change: dict[str, Any]) -> None:
+        """Move the height watcher when ``m.layout`` is assigned a new Layout.
+
+        Args:
+            change: The traitlets change notification for the ``layout`` trait.
+        """
+        old = change["old"]
+        if old is not None and old is not traitlets.Undefined:
+            old.unobserve(self._on_layout_height, "height")
+        self._watch_layout_height(change["new"])
+
     def close(self) -> None:
         """Close the widget and remove rasters materialized from xarray data."""
         try:
+            # The Layout outlives this widget in the ipywidgets registry, so its
+            # observer would otherwise keep a closed Map alive. traitlets raises
+            # ValueError once it is gone, as on a repeated close(). Read the stored
+            # value: a rejected constructor reaches here through __del__, and
+            # self.layout would create a new Layout widget just to discard it.
+            layout = self._trait_values.get("layout")
+            if layout is not None:
+                with contextlib.suppress(ValueError):
+                    layout.unobserve(self._on_layout_height, "height")
             super().close()
         finally:
             _remove_temporary_rasters(getattr(self, "_temporary_rasters", []))
@@ -561,15 +644,36 @@ class Map(anywidget.AnyWidget):
         msg_type = content.get("type")
         if msg_type == "geolibre:result":
             slot = self._pending.get(content.get("requestId"))
-            if slot is None:
-                # A reply for a request that already timed out / was cleaned up.
+            if slot is None or slot["done"]:
+                # A reply for a request that already timed out / was cleaned
+                # up, or a duplicate reply.
                 return
             slot["ok"] = bool(content.get("ok"))
             slot["value"] = content.get("value")
             slot["error"] = content.get("error")
             slot["done"] = True
+            future = slot.get("future")
+            if future is not None:
+                # Async request: wake the awaiting coroutine on its own loop.
+                # Replies may arrive on any thread (the Jupyter kernel's,
+                # Shiny's event loop, ...), so go through call_soon_threadsafe.
+                try:
+                    future.get_loop().call_soon_threadsafe(self._resolve_future, future)
+                except RuntimeError:
+                    # The awaiting coroutine's loop already closed.
+                    pass
         elif msg_type == "geolibre:event":
             self._dispatch_event(content.get("event"), content.get("payload"))
+
+    @staticmethod
+    def _resolve_future(future: asyncio.Future) -> None:
+        """Resolve a pending async-request future, if nobody beat us to it.
+
+        A future can already be done when its waiter timed out
+        (``asyncio.wait_for`` cancels it) but the reply arrived anyway.
+        """
+        if not future.done():
+            future.set_result(None)
 
     def _dispatch_event(self, event: Any, payload: Any) -> None:
         """Invoke every callback registered for an event, isolating failures."""
@@ -584,12 +688,19 @@ class Map(anywidget.AnyWidget):
 
     @staticmethod
     def _wait_for_result(slot: dict[str, Any], method: str, timeout: float) -> None:
-        """Block the kernel until a result slot resolves or the timeout elapses.
+        """Block until a result slot resolves or the timeout elapses.
 
         Jupyter comms are asynchronous, so the kernel must keep processing
         incoming messages while the calling cell blocks. ``jupyter_ui_poll``
         pumps the kernel's event loop re-entrantly (handling the ipykernel
         version differences) so the ``on_msg`` reply lands and fills the slot.
+
+        Outside Jupyter there is no kernel to pump (e.g., inside a Shiny app,
+        where the reply is delivered by the app's asyncio event loop). Blocking
+        is then only legitimate on a thread that is not running an event loop
+        (e.g., a worker thread), which keeps the loop that delivers the reply
+        free; a plain sleep-poll is enough. Blocking a thread that is running
+        an event loop would deadlock, so that case raises instead.
 
         Args:
             slot: The pending request slot, resolved in place by ``_on_custom_msg``.
@@ -598,15 +709,14 @@ class Map(anywidget.AnyWidget):
 
         Raises:
             TimeoutError: If no reply arrives within ``timeout`` seconds.
-            RuntimeError: If ``jupyter_ui_poll`` is not installed.
+            RuntimeError: If no kernel pump is available and the calling
+                thread is running an asyncio event loop.
         """
         try:
             from jupyter_ui_poll import ui_events
-        except ImportError as exc:
-            raise RuntimeError(
-                "Interactive GeoLibre queries require the 'jupyter_ui_poll' "
-                "package. Install it with `pip install jupyter_ui_poll`."
-            ) from exc
+        except ImportError:
+            ui_events = None  # type: ignore[assignment]
+
         deadline = time.monotonic() + timeout
 
         def _check_deadline() -> None:
@@ -615,21 +725,60 @@ class Map(anywidget.AnyWidget):
                     f"GeoLibre command {method!r} timed out after {timeout}s. "
                     "The map must be displayed and loaded before it can "
                     "answer; show the map, then retry or pass a larger "
-                    "timeout=."
+                    "timeout=. Outside Jupyter and Shiny, the reply must come "
+                    "from a running app on another thread."
                 )
 
-        with ui_events() as poll:
-            while not slot["done"]:
-                # Check before and after pumping: a slow poll() with a large event
-                # backlog could otherwise overrun a very small timeout.
-                _check_deadline()
-                poll(10)
-                if slot["done"]:
-                    break
-                _check_deadline()
-                # 20 Hz: imperceptible latency, far less CPU than a 100 Hz spin
-                # (jupyter_ui_poll already pumps 10 kernel events per iteration).
-                time.sleep(0.05)
+        if ui_events is not None:
+            # Only entering the pump is guarded: an AttributeError or
+            # RuntimeError raised later (by poll() or a reply handler) is a real
+            # failure and must reach the caller instead of being swallowed.
+            with contextlib.ExitStack() as stack:
+                try:
+                    poll = stack.enter_context(ui_events())
+                except (AttributeError, RuntimeError):
+                    # No live kernel for ui_events to pump (e.g., inside a Shiny
+                    # app). Fall through to the kernel-free path below.
+                    poll = None
+                if poll is not None:
+                    while not slot["done"]:
+                        # Check before and after pumping: a slow poll() with a
+                        # large event backlog could otherwise overrun a very
+                        # small timeout.
+                        _check_deadline()
+                        poll(10)
+                        if slot["done"]:
+                            break
+                        _check_deadline()
+                        # 20 Hz: imperceptible latency, far less CPU than a 100
+                        # Hz spin (jupyter_ui_poll already pumps 10 kernel
+                        # events per iteration).
+                        time.sleep(0.05)
+                    return
+
+        # No kernel pump available. The reply arrives via an event loop on
+        # another thread, so blocking is only safe when this thread is not
+        # itself running an event loop.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # No loop on this thread (e.g., a worker thread): safe to block.
+        else:
+            raise RuntimeError(
+                f"GeoLibre's {method}() blocks until the running app replies, "
+                "but this thread is running the event loop that would deliver "
+                "the reply, so waiting here would deadlock. In Jupyter, "
+                "install 'jupyter_ui_poll' to pump the kernel's event loop "
+                "instead. In Shiny, call blocking methods from a worker "
+                "thread -- e.g., inside `reactive.extended_task`, via "
+                "`asyncio.get_running_loop().run_in_executor(None, ...)` -- "
+                "or use a non-blocking alternative (e.g., set_center() "
+                "instead of fly_to(), or read the synced `project` trait "
+                "instead of get_center())."
+            )
+        while not slot["done"]:
+            _check_deadline()
+            time.sleep(0.05)
 
     def request(
         self,
@@ -681,6 +830,71 @@ class Map(anywidget.AnyWidget):
             raise RuntimeError(slot["error"] or f"GeoLibre command {method!r} failed")
         return slot["value"]
 
+    async def request_async(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float = 10.0,
+    ) -> Any:
+        """Send a command to the running app and asynchronously await its reply.
+
+        Async counterpart of :meth:`request`, with the same command set,
+        arguments, return value, and errors. Because awaiting suspends the
+        coroutine instead of blocking a thread, this works on the thread
+        running the asyncio event loop that delivers the reply -- e.g.
+        directly inside an async Shiny for Python observer or
+        ``reactive.extended_task``, with no worker thread and no
+        ``jupyter_ui_poll`` pumping. It also works with top-level ``await``
+        in Jupyter.
+
+        Args:
+            method: The command name (e.g. ``"getCenter"``).
+            params: Command parameters.
+            timeout: Seconds to wait for the reply.
+
+        Returns:
+            The command's result value.
+
+        Raises:
+            TimeoutError: If the app does not reply in time.
+            RuntimeError: If the app reports the command failed.
+        """
+        loop = asyncio.get_running_loop()
+        request_id = uuid.uuid4().hex
+        slot: dict[str, Any] = {
+            "done": False,
+            "ok": False,
+            "value": None,
+            "error": None,
+            "future": loop.create_future(),
+        }
+        try:
+            # Register and send inside the try so a failing send() still cleans
+            # up the slot in finally.
+            self._pending[request_id] = slot
+            self.send(
+                {
+                    "type": "geolibre:command",
+                    "requestId": request_id,
+                    "method": method,
+                    "params": params or {},
+                }
+            )
+            await asyncio.wait_for(slot["future"], timeout)
+        except TimeoutError:
+            raise TimeoutError(
+                f"GeoLibre command {method!r} timed out after {timeout}s. "
+                "The map must be displayed and loaded before it can "
+                "answer; show the map, then retry or pass a larger "
+                "timeout=."
+            ) from None
+        finally:
+            self._pending.pop(request_id, None)
+        if not slot["ok"]:
+            raise RuntimeError(slot["error"] or f"GeoLibre command {method!r} failed")
+        return slot["value"]
+
     def on(self, event: str, callback: Callable[[Any], None]) -> Callable[[], None]:
         """Register a callback for an app event.
 
@@ -724,13 +938,25 @@ class Map(anywidget.AnyWidget):
         """Return the live camera ``{center, zoom, bearing, pitch, bbox}``."""
         return self.request("getView", timeout=timeout)
 
+    async def get_view_async(self, *, timeout: float = 10.0) -> dict[str, Any]:
+        """Async variant of :meth:`get_view`; see :meth:`request_async`."""
+        return await self.request_async("getView", timeout=timeout)
+
     def get_center(self, *, timeout: float = 10.0) -> list[float]:
         """Return the live map center as ``[lng, lat]``."""
         return self.request("getCenter", timeout=timeout)
 
+    async def get_center_async(self, *, timeout: float = 10.0) -> list[float]:
+        """Async variant of :meth:`get_center`; see :meth:`request_async`."""
+        return await self.request_async("getCenter", timeout=timeout)
+
     def get_bounds(self, *, timeout: float = 10.0) -> list[float]:
         """Return the live viewport bounds as ``[west, south, east, north]``."""
         return self.request("getBounds", timeout=timeout)
+
+    async def get_bounds_async(self, *, timeout: float = 10.0) -> list[float]:
+        """Async variant of :meth:`get_bounds`; see :meth:`request_async`."""
+        return await self.request_async("getBounds", timeout=timeout)
 
     def fly_to(
         self,
@@ -754,6 +980,40 @@ class Map(anywidget.AnyWidget):
             duration: Animation duration in milliseconds.
             timeout: Seconds to wait for acknowledgement.
         """
+        self.request(
+            "flyTo",
+            self._fly_to_params(lng, lat, zoom, bearing, pitch, duration),
+            timeout=timeout,
+        )
+
+    async def fly_to_async(
+        self,
+        lng: float | None = None,
+        lat: float | None = None,
+        *,
+        zoom: float | None = None,
+        bearing: float | None = None,
+        pitch: float | None = None,
+        duration: float | None = None,
+        timeout: float = 10.0,
+    ) -> None:
+        """Async variant of :meth:`fly_to`; see :meth:`request_async`."""
+        await self.request_async(
+            "flyTo",
+            self._fly_to_params(lng, lat, zoom, bearing, pitch, duration),
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _fly_to_params(
+        lng: float | None,
+        lat: float | None,
+        zoom: float | None,
+        bearing: float | None,
+        pitch: float | None,
+        duration: float | None,
+    ) -> dict[str, Any]:
+        """Build the ``flyTo`` command params; only provided fields change."""
         params: dict[str, Any] = {}
         if lng is not None and lat is not None:
             params["center"] = [float(lng), float(lat)]
@@ -765,7 +1025,7 @@ class Map(anywidget.AnyWidget):
             params["pitch"] = float(pitch)
         if duration is not None:
             params["duration"] = float(duration)
-        self.request("flyTo", params, timeout=timeout)
+        return params
 
     def fit_bounds(
         self,
@@ -774,6 +1034,24 @@ class Map(anywidget.AnyWidget):
         timeout: float = 10.0,
     ) -> None:
         """Fit the camera to ``[west, south, east, north]``."""
+        values = self._validate_bounds(bounds)
+        self.request("fitBounds", {"bounds": values}, timeout=timeout)
+
+    async def fit_bounds_async(
+        self,
+        bounds: list[float] | tuple[float, float, float, float],
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        """Async variant of :meth:`fit_bounds`; see :meth:`request_async`."""
+        values = self._validate_bounds(bounds)
+        await self.request_async("fitBounds", {"bounds": values}, timeout=timeout)
+
+    @staticmethod
+    def _validate_bounds(
+        bounds: list[float] | tuple[float, float, float, float],
+    ) -> list[float]:
+        """Validate ``[west, south, east, north]`` bounds and return them as floats."""
         values = [float(b) for b in bounds]
         if len(values) != 4:
             raise ValueError("bounds must contain [west, south, east, north]")
@@ -782,7 +1060,7 @@ class Map(anywidget.AnyWidget):
         west, south, east, north = values
         if west > east or south > north:
             raise ValueError("bounds must satisfy west <= east and south <= north")
-        self.request("fitBounds", {"bounds": values}, timeout=timeout)
+        return values
 
     def zoom_to_bounds(
         self,
@@ -793,10 +1071,24 @@ class Map(anywidget.AnyWidget):
         """Fit the map to bounds (leafmap-style alias of :meth:`fit_bounds`)."""
         self.fit_bounds(bounds, timeout=timeout)
 
+    async def zoom_to_bounds_async(
+        self,
+        bounds: list[float] | tuple[float, float, float, float],
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        """Async variant of :meth:`zoom_to_bounds`; see :meth:`request_async`."""
+        await self.fit_bounds_async(bounds, timeout=timeout)
+
     def zoom_to_layer(self, layer: str | Layer, *, timeout: float = 10.0) -> None:
         """Fit the map to a layer, addressed by id, name, or layer handle."""
         resolved = self._resolve_layer(layer)
         self.request("zoomToLayer", {"layerId": resolved.id}, timeout=timeout)
+
+    async def zoom_to_layer_async(self, layer: str | Layer, *, timeout: float = 10.0) -> None:
+        """Async variant of :meth:`zoom_to_layer`; see :meth:`request_async`."""
+        resolved = self._resolve_layer(layer)
+        await self.request_async("zoomToLayer", {"layerId": resolved.id}, timeout=timeout)
 
     def identify(
         self,
@@ -823,6 +1115,20 @@ class Map(anywidget.AnyWidget):
             params["layerId"] = layer_id
         return self.request("identify", params, timeout=timeout)
 
+    async def identify_async(
+        self,
+        lng: float,
+        lat: float,
+        *,
+        layer_id: str | None = None,
+        timeout: float = 10.0,
+    ) -> list[dict[str, Any]]:
+        """Async variant of :meth:`identify`; see :meth:`request_async`."""
+        params: dict[str, Any] = {"lngLat": [float(lng), float(lat)]}
+        if layer_id is not None:
+            params["layerId"] = layer_id
+        return await self.request_async("identify", params, timeout=timeout)
+
     def get_features(self, layer_id: str, *, timeout: float = 10.0) -> list[Feature]:
         """Return a layer's features as :class:`Feature` (GeoJSON) objects.
 
@@ -838,6 +1144,18 @@ class Map(anywidget.AnyWidget):
             A list of :class:`Feature` objects (each also a plain GeoJSON dict).
         """
         features = self.request("getLayerFeatures", {"layerId": layer_id}, timeout=timeout)
+        return self._wrap_features(features)
+
+    async def get_features_async(self, layer_id: str, *, timeout: float = 10.0) -> list[Feature]:
+        """Async variant of :meth:`get_features`; see :meth:`request_async`."""
+        features = await self.request_async(
+            "getLayerFeatures", {"layerId": layer_id}, timeout=timeout
+        )
+        return self._wrap_features(features)
+
+    @staticmethod
+    def _wrap_features(features: Any) -> list[Feature]:
+        """Wrap raw GeoJSON feature dicts as :class:`Feature` objects."""
         return [Feature(f) for f in features or []]
 
     @staticmethod
@@ -890,7 +1208,15 @@ class Map(anywidget.AnyWidget):
             the result is an empty list; use :meth:`identify` for those layers.
         """
         features = self.request("getSelectedFeatures", timeout=timeout)
-        feats = [Feature(f) for f in features or []]
+        feats = self._wrap_features(features)
+        return self._features_to_gdf(feats) if as_gdf else feats
+
+    async def get_selected_features_async(
+        self, *, as_gdf: bool = False, timeout: float = 10.0
+    ) -> list[Feature] | Any:
+        """Async variant of :meth:`get_selected_features`; see :meth:`request_async`."""
+        features = await self.request_async("getSelectedFeatures", timeout=timeout)
+        feats = self._wrap_features(features)
         return self._features_to_gdf(feats) if as_gdf else feats
 
     def get_drawn_features(
@@ -912,7 +1238,15 @@ class Map(anywidget.AnyWidget):
             ``as_gdf`` is true.
         """
         features = self.request("getDrawnFeatures", timeout=timeout)
-        feats = [Feature(f) for f in features or []]
+        feats = self._wrap_features(features)
+        return self._features_to_gdf(feats) if as_gdf else feats
+
+    async def get_drawn_features_async(
+        self, *, as_gdf: bool = False, timeout: float = 10.0
+    ) -> list[Feature] | Any:
+        """Async variant of :meth:`get_drawn_features`; see :meth:`request_async`."""
+        features = await self.request_async("getDrawnFeatures", timeout=timeout)
+        feats = self._wrap_features(features)
         return self._features_to_gdf(feats) if as_gdf else feats
 
     @property
@@ -936,6 +1270,10 @@ class Map(anywidget.AnyWidget):
             :meth:`run_algorithm`.
         """
         return self.request("listAlgorithms", timeout=timeout)
+
+    async def list_algorithms_async(self, *, timeout: float = 10.0) -> list[dict[str, Any]]:
+        """Async variant of :meth:`list_algorithms`; see :meth:`request_async`."""
+        return await self.request_async("listAlgorithms", timeout=timeout)
 
     def run_algorithm(
         self,
@@ -962,6 +1300,20 @@ class Map(anywidget.AnyWidget):
             timeout=timeout,
         )
 
+    async def run_algorithm_async(
+        self,
+        algorithm_id: str,
+        parameters: dict[str, Any] | None = None,
+        *,
+        timeout: float = 120.0,
+    ) -> dict[str, Any]:
+        """Async variant of :meth:`run_algorithm`; see :meth:`request_async`."""
+        return await self.request_async(
+            "runAlgorithm",
+            {"id": algorithm_id, "params": parameters or {}},
+            timeout=timeout,
+        )
+
     def run_model_builder(
         self,
         graph: dict[str, Any],
@@ -976,6 +1328,15 @@ class Map(anywidget.AnyWidget):
         """
         return self.request("runModelBuilder", {"graph": graph}, timeout=timeout)
 
+    async def run_model_builder_async(
+        self,
+        graph: dict[str, Any],
+        *,
+        timeout: float = 600.0,
+    ) -> dict[str, Any]:
+        """Async variant of :meth:`run_model_builder`; see :meth:`request_async`."""
+        return await self.request_async("runModelBuilder", {"graph": graph}, timeout=timeout)
+
     def list_whitebox_tools(self, *, timeout: float = 30.0) -> list[dict[str, Any]]:
         """List the bundled Whitebox/GeoLibre WASM tools and their parameters.
 
@@ -983,6 +1344,10 @@ class Map(anywidget.AnyWidget):
         runtime executes the tools. Display the map before calling this method.
         """
         return self.request("listWhiteboxTools", timeout=timeout)
+
+    async def list_whitebox_tools_async(self, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+        """Async variant of :meth:`list_whitebox_tools`; see :meth:`request_async`."""
+        return await self.request_async("listWhiteboxTools", timeout=timeout)
 
     def run_whitebox_tool(
         self,
@@ -1008,15 +1373,34 @@ class Map(anywidget.AnyWidget):
         Returns:
             ``{"logs": [...], "resultLayerIds": [...]}``.
         """
-        resolved = {
-            key: self._resolve_layer(value).id if isinstance(value, Layer) else value
-            for key, value in (parameters or {}).items()
-        }
+        resolved = self._resolve_tool_params(parameters)
         return self.request(
             "runWhiteboxTool",
             {"id": str(tool_id), "params": resolved},
             timeout=timeout,
         )
+
+    async def run_whitebox_tool_async(
+        self,
+        tool_id: str,
+        parameters: dict[str, Any] | None = None,
+        *,
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        """Async variant of :meth:`run_whitebox_tool`; see :meth:`request_async`."""
+        resolved = self._resolve_tool_params(parameters)
+        return await self.request_async(
+            "runWhiteboxTool",
+            {"id": str(tool_id), "params": resolved},
+            timeout=timeout,
+        )
+
+    def _resolve_tool_params(self, parameters: dict[str, Any] | None) -> dict[str, Any]:
+        """Replace :class:`Layer` handles in tool parameters with their layer ids."""
+        return {
+            key: self._resolve_layer(value).id if isinstance(value, Layer) else value
+            for key, value in (parameters or {}).items()
+        }
 
     def to_image(self, path: str | None = None, *, timeout: float = 30.0) -> bytes | None:
         """Capture the current map view as a PNG.
@@ -1030,6 +1414,18 @@ class Map(anywidget.AnyWidget):
             The PNG bytes, or ``None`` when written to ``path``.
         """
         data_url = self.request("toImage", timeout=timeout)
+        return self._png_from_data_url(data_url, path)
+
+    async def to_image_async(
+        self, path: str | None = None, *, timeout: float = 30.0
+    ) -> bytes | None:
+        """Async variant of :meth:`to_image`; see :meth:`request_async`."""
+        data_url = await self.request_async("toImage", timeout=timeout)
+        return self._png_from_data_url(data_url, path)
+
+    @staticmethod
+    def _png_from_data_url(data_url: Any, path: str | None) -> bytes | None:
+        """Decode a ``toImage`` data URL to PNG bytes, optionally writing ``path``."""
         _, sep, encoded = str(data_url).partition(",")
         if not sep:
             raise ValueError(f"toImage returned an unexpected value: {data_url!r}")
@@ -1055,7 +1451,7 @@ class Map(anywidget.AnyWidget):
         The page embeds the GeoLibre app in an ``<iframe>`` and injects the
         current project into it over the same ``postMessage`` bridge the widget
         uses, so it renders the map exactly as configured here, in this map's
-        :attr:`layout` and :attr:`theme`. Unlike
+        :attr:`app_layout` and :attr:`theme`. Unlike
         :meth:`to_image` this needs no running kernel to view; by default it
         loads the hosted GeoLibre app over the network so the file stays
         portable.
@@ -1087,7 +1483,7 @@ class Map(anywidget.AnyWidget):
             width=width,
             height=height or self.height,
             app_url=app_url,
-            layout=self.layout,
+            layout=self.app_layout,
             theme=self.theme,
         )
         if path is not None:
@@ -1329,6 +1725,39 @@ class Map(anywidget.AnyWidget):
         handle = self._resolve_layer(layer)
         self._update_project(
             lambda project: _authoring.set_layer_filter(project, handle.id, expression)
+        )
+
+    def set_floor_picker(
+        self,
+        layer: str | Layer,
+        field: str | None = "level",
+        level: Any = None,
+        *,
+        mode: str | None = None,
+    ) -> None:
+        """Link a multi-floor layer to the app's on-map floor picker.
+
+        The picker lists the floors in ``field`` across every linked layer and
+        draws one floor, or a floor and the ones below it. It reads
+        OpenStreetMap ``level`` values (``"0"``, ``"0;1"``, ``"-1-0"``),
+        numbers and IMDF ordinals. Combine it with an extrusion base from the
+        same field to stack the floors in 3D.
+
+        Args:
+            layer: The layer, by id, name, or handle.
+            field: The property holding the floor; ``None`` unlinks the layer.
+            level: The floor to show, e.g. ``"0"`` or ``-1``. Applies to every
+                linked layer. ``None`` keeps the floor already shown; pass
+                ``mode="all"`` to show every floor.
+            mode: ``"only"`` (the default for a level), ``"below"`` to also
+                show the floors under it, or ``"all"``.
+
+        Example:
+            >>> m.set_floor_picker("Rooms", "level", "0", mode="below")
+        """
+        handle = self._resolve_layer(layer)
+        self._update_project(
+            lambda project: _authoring.set_floor_picker(project, handle.id, field, level, mode=mode)
         )
 
     def set_labels(
@@ -2314,6 +2743,96 @@ class Map(anywidget.AnyWidget):
             )
         )
 
+    def add_planetary_computer(
+        self,
+        collection: str,
+        item: str | None = None,
+        name: str | None = None,
+        *,
+        datetime: str | tuple[str, str] | list[str] | None = None,
+        bbox: list[float] | tuple[float, ...] | None = None,
+        preset: str | None = None,
+        assets: list[str] | None = None,
+        expression: str | None = None,
+        rescale: tuple[float, float] | list[float] | None = None,
+        colormap: str | None = None,
+        max_cloud_cover: float | None = None,
+        visible: bool = True,
+        opacity: float = 1.0,
+    ) -> str:
+        """Add Microsoft Planetary Computer imagery as a raster layer.
+
+        With ``item`` the layer draws that one STAC item. Without it the layer
+        is a mosaic: every item of the collection matching ``datetime`` and
+        ``max_cloud_cover``, composited into one seamless layer. No credentials
+        are needed, and nothing is fetched here: the app's Planetary Computer
+        panel builds the layer when it opens the project, lists it in its
+        Layers tab, and can restyle it. It needs the MapLibre renderer.
+
+        Examples:
+            A cloud-free summer composite and an NDVI of one scene::
+
+                m.add_planetary_computer(
+                    "sentinel-2-l2a",
+                    datetime="2024-06-01/2024-08-31",
+                    max_cloud_cover=10,
+                )
+                m.add_planetary_computer(
+                    "sentinel-2-l2a",
+                    "S2A_MSIL2A_20240906T190921_R056_T10TET_20240907T023150",
+                    preset="ndvi",
+                )
+
+        Args:
+            collection: STAC collection id, e.g. ``"sentinel-2-l2a"``.
+            item: STAC item id to draw. Omit for a mosaic of the collection.
+            name: Layer display name. Defaults to the item id, or to the
+                collection id with the date range for a mosaic.
+            datetime: Mosaic only. The date range to composite: a
+                ``"start/end"`` string or a ``(start, end)`` pair.
+            bbox: ``[west, south, east, north]`` extent of the layer.
+            preset: Name of a render preset for the collection, e.g.
+                ``"true-color"``, ``"false-color"``, ``"ndvi"``. The
+                collection's default preset is used when no render option is
+                given.
+            assets: Asset names to render, e.g. ``["B08", "B04", "B03"]``.
+            expression: Band-math expression over assets, e.g.
+                ``"(B08-B04)/(B08+B04)"``.
+            rescale: ``(min, max)`` value range stretched to the output colors.
+            colormap: Named colormap, e.g. ``"viridis"``.
+            max_cloud_cover: Mosaic only. Keep items at or below this cloud
+                cover percentage.
+            visible: Whether the layer starts visible.
+            opacity: Layer opacity from 0 to 1.
+
+        Returns:
+            The id of the added layer.
+
+        Raises:
+            ValueError: If the options are inconsistent (see
+                :func:`geolibre.project.planetary_computer_layer`) or
+                ``opacity`` is outside 0 to 1.
+        """
+        opacity_value = float(opacity)
+        if not 0 <= opacity_value <= 1:
+            raise ValueError("opacity must be between 0 and 1")
+        layer = _project.planetary_computer_layer(
+            collection,
+            item,
+            name=name,
+            datetime=datetime,
+            bbox=bbox,
+            preset=preset,
+            assets=assets,
+            expression=expression,
+            rescale=rescale,
+            colormap=colormap,
+            max_cloud_cover=max_cloud_cover,
+        )
+        layer["visible"] = bool(visible)
+        layer["opacity"] = opacity_value
+        return self._add_layer(layer)
+
     def add_ee_layer(
         self,
         ee_object: Any,
@@ -3067,10 +3586,12 @@ class Map(anywidget.AnyWidget):
         request_headers: dict[str, str] | None = None,
         **style: Any,
     ) -> str:
-        """Add a 3D Tiles layer from a ``tileset.json`` URL or a Cesium Ion asset.
+        """Add a 3D Tiles layer, an ArcGIS I3S scene layer, or a Cesium Ion asset.
 
         Args:
-            url: URL of the 3D Tiles ``tileset.json``. Omit for an Ion asset.
+            url: URL of the 3D Tiles ``tileset.json``, or of an ArcGIS I3S
+                scene layer (``.../SceneServer/layers/<n>``), which is added as
+                a scene layer. Omit for an Ion asset.
             name: Layer display name.
             ion_asset_id: A Cesium Ion asset id (for example 96188, Cesium OSM
                 Buildings). Renders on the 3D globe only, with the app's Ion token.
@@ -3658,7 +4179,7 @@ class Map(anywidget.AnyWidget):
             interaction["identify"] = list(identify) if isinstance(identify, list) else identify
         controls = self._ui.get("controls")
         if controls:
-            interaction["controls"] = dict(controls)
+            interaction["controls"] = copy.deepcopy(controls)
         if interaction:
             project["interaction"] = interaction
         return project
@@ -3708,7 +4229,15 @@ class Map(anywidget.AnyWidget):
             raise ValueError("set_identify: the list of layers is empty")
         self._set_ui(identify=ids[0] if len(ids) == 1 else ids)
 
-    def show_control(self, name: str, visible: bool = True) -> None:
+    def show_control(
+        self,
+        name: str,
+        visible: bool = True,
+        *,
+        collapsed: bool | None = None,
+        distance_unit: str | None = None,
+        area_unit: str | None = None,
+    ) -> None:
         """Show (or hide) a map control or toolbar panel.
 
         Covers the panels in the app's Controls menu (``"bookmark"``,
@@ -3723,18 +4252,57 @@ class Map(anywidget.AnyWidget):
         Hiding ``"globe"`` removes the globe/flat toggle button only; use
         :meth:`set_projection` to change how the map is drawn.
 
+        The Measure panel opens expanded with the tool active, so a viewer's
+        first clicks on the map place measurement points. For a shared map,
+        ``m.show_control("measure", collapsed=True)`` shows only its ruler
+        button until the viewer clicks it, and ``distance_unit`` /
+        ``area_unit`` pick the units it starts in.
+
         Args:
             name: The control or panel name.
             visible: ``True`` to show it, ``False`` to hide it.
+            collapsed: For ``"measure"`` and ``"minimap"``, ``True`` shows only
+                the control's on-map button, ``False`` opens it expanded.
+                ``None`` (the default) keeps the app's default, expanded.
+            distance_unit: For ``"measure"``, the distance unit: one of
+                ``"meters"``, ``"kilometers"`` (the app's default),
+                ``"miles"``, ``"feet"``, ``"yards"`` or ``"nautical-miles"``.
+            area_unit: For ``"measure"``, the area unit: one of
+                ``"square-meters"``, ``"square-kilometers"`` (the app's
+                default), ``"square-miles"``, ``"hectares"``, ``"acres"`` or
+                ``"square-feet"``.
 
         Raises:
-            ValueError: If ``name`` is not a known control or panel.
+            ValueError: If ``name`` is not a known control or panel, or an
+                option does not apply to it or has an unknown value.
         """
         if name not in MAP_PANELS and name not in MAP_CONTROLS:
             raise ValueError(
                 f"Unknown control {name!r}; expected one of {sorted(MAP_PANELS | MAP_CONTROLS)}"
             )
-        self._set_ui(controls={**self._ui.get("controls", {}), name: bool(visible)})
+        options: dict[str, Any] = {}
+        if collapsed is not None:
+            if name not in _COLLAPSIBLE_PANELS:
+                raise ValueError(f"collapsed applies only to {sorted(_COLLAPSIBLE_PANELS)}")
+            if not isinstance(collapsed, bool):
+                raise ValueError("collapsed must be a boolean")
+            options["collapsed"] = collapsed
+        for key, value, units in (
+            ("distanceUnit", distance_unit, MEASURE_DISTANCE_UNITS),
+            ("areaUnit", area_unit, MEASURE_AREA_UNITS),
+        ):
+            if value is None:
+                continue
+            if name != "measure":
+                raise ValueError(f"{key} applies only to 'measure'")
+            if value not in units:
+                raise ValueError(f"Unknown {key} {value!r}; expected one of {sorted(units)}")
+            options[key] = value
+        shown = bool(visible)
+        setting: bool | dict[str, Any] = (
+            {"visible": shown, **options} if options and shown else shown
+        )
+        self._set_ui(controls={**self._ui.get("controls", {}), name: setting})
 
     def hide_control(self, name: str) -> None:
         """Hide a map control or toolbar panel (see :meth:`show_control`).
@@ -4146,9 +4714,13 @@ class Map(anywidget.AnyWidget):
             changes["controls"] = {
                 **self._ui.get("controls", {}),
                 **{
-                    name: shown
+                    name: dict(shown) if isinstance(shown, dict) else shown
                     for name, shown in controls.items()
-                    if (name in MAP_PANELS or name in MAP_CONTROLS) and isinstance(shown, bool)
+                    if (name in MAP_PANELS or name in MAP_CONTROLS)
+                    and (
+                        isinstance(shown, bool)
+                        or (isinstance(shown, dict) and isinstance(shown.get("visible"), bool))
+                    )
                 },
             }
         if changes:

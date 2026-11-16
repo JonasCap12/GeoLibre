@@ -16,8 +16,10 @@ import {
   bundleFromZipBytes,
   type ExternalPluginBundle,
   isExternalPluginManifest,
+  isPluginAssistantInfo,
   isPluginEngineList,
   MAX_PLUGIN_ASSET_BYTES,
+  MAX_PLUGIN_ASSISTANT_DESCRIPTION_LENGTH,
 } from "./plugin-archive-unpack";
 import {
   isManagedUrlSource,
@@ -26,6 +28,8 @@ import {
   resolvePluginAssetUrl,
   withPluginAssetCacheToken,
 } from "./plugin-asset-url";
+import { readBodyBytesWithCap } from "./capped-body";
+import { isSafePluginAssetRelativePath } from "./plugin-asset-path";
 import {
   computePluginBundleHash,
   pinPluginBundle,
@@ -559,47 +563,16 @@ async function fetchPluginText(url: string, label: string, signal?: AbortSignal)
     throw new Error(`Could not fetch ${label}: HTTP ${response.status}`);
   }
 
-  // Fast-fail when the server declares the size; the streaming reader below
-  // is the real enforcement for responses without a content-length header.
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_PLUGIN_ASSET_BYTES) {
-    throw new Error(`Could not fetch ${label}: exceeds the 50 MB size limit.`);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_PLUGIN_ASSET_BYTES) {
-      throw new Error(`Could not fetch ${label}: exceeds the 50 MB size limit.`);
-    }
-    return text;
-  }
-
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_PLUGIN_ASSET_BYTES) {
-      await reader.cancel();
-      throw new Error(`Could not fetch ${label}: exceeds the 50 MB size limit.`);
-    }
-    chunks.push(value);
-  }
-
-  const merged = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(merged);
+  // One bounded reader for every URL path: declared length first, then the
+  // stream (a chunked response has no content-length to trust).
+  return new TextDecoder().decode(
+    await readBodyBytesWithCap(response, MAX_PLUGIN_ASSET_BYTES, label),
+  );
 }
 
 /**
  * Imports an external plugin bundle by creating an ephemeral object URL, verifying its export contract,
- * and propagating manifest engines metadata when omitted by the candidate plugin.
+ * and propagating manifest engines and assistant metadata when omitted by the candidate plugin.
  *
  * @param bundle - The unpacked external plugin bundle.
  * @returns A promise resolving to the validated {@link GeoLibrePlugin}.
@@ -632,6 +605,14 @@ async function importExternalPlugin(bundle: ExternalPluginBundle): Promise<GeoLi
     }
     if (bundle.manifest.engines && !candidate.engines) {
       candidate.engines = bundle.manifest.engines;
+    }
+    if (candidate.assistant !== undefined && !isPluginAssistantInfo(candidate.assistant)) {
+      throw new Error(
+        `Plugin assistant must be an object with a description of at most ${MAX_PLUGIN_ASSISTANT_DESCRIPTION_LENGTH} characters.`,
+      );
+    }
+    if (bundle.manifest.assistant && !candidate.assistant) {
+      candidate.assistant = bundle.manifest.assistant;
     }
     return candidate;
   } finally {
@@ -838,6 +819,66 @@ export function resolvePluginAssetUrlForLoadedPlugin(
   relativePath: string,
 ): string | null {
   return pluginAssetUrlFromSource(externallyLoadedPluginSources.get(pluginId), relativePath);
+}
+
+/** Deadline for one URL asset read, covering the body as well as the headers. */
+const PLUGIN_ASSET_TIMEOUT_MS = 30_000;
+
+/**
+ * Read one asset file from a loaded external plugin's own bundle, as raw
+ * bytes. Filesystem plugins (an installed zip or a development directory) read
+ * through the desktop command, which serves only bundles its last scan loaded;
+ * URL-installed plugins fetch the same asset URL
+ * {@link resolvePluginAssetUrlForLoadedPlugin} resolves. Resolves null when the
+ * plugin is unknown or built-in, the path is unsafe or the asset is missing,
+ * or off-desktop, where web-installed archives persist only their entry and
+ * style sources.
+ */
+export async function readPluginAssetForLoadedPlugin(
+  pluginId: string,
+  relativePath: string,
+): Promise<Uint8Array | null> {
+  const source = externallyLoadedPluginSources.get(pluginId);
+  if (source === undefined || !isSafePluginAssetRelativePath(relativePath)) {
+    return null;
+  }
+  if (isManagedUrlSource(source)) {
+    try {
+      // Revalidate like the loader does: the asset may change at the same URL
+      // between the scan and this read. The deadline covers the body read too,
+      // since the signal stays live until the body is consumed.
+      const url = pluginAssetUrlFromSource(source, relativePath);
+      if (url === null) {
+        return null;
+      }
+      const response = await fetch(url, {
+        cache: "no-cache",
+        signal: AbortSignal.timeout(PLUGIN_ASSET_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      // The reader throws on an oversized or failed body; this function
+      // reports both as null.
+      return await readBodyBytesWithCap(response, MAX_PLUGIN_ASSET_BYTES, "plugin asset");
+    } catch {
+      return null;
+    }
+  }
+  if (!isTauri()) {
+    // Web-installed archives persist only their entry and style sources, so
+    // arbitrary bundle assets are not available in the web build.
+    return null;
+  }
+  try {
+    const bytes = await invoke<ArrayBuffer>("read_external_plugin_asset", {
+      sourcePath: source,
+      relativePath,
+    });
+    return new Uint8Array(bytes);
+  } catch {
+    return null;
+  }
 }
 
 /**

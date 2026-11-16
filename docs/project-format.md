@@ -58,6 +58,17 @@ file contents do not change.
 | `interaction`     | object  | Optional startup Identify target and control visibility (see below); omitted by default                      |
 | `metadata`        | object  | Free-form project metadata                                                                                   |
 
+The map's 3D look is part of the project. `mapView.pitch` and `mapView.bearing`
+hold the camera tilt and rotation, and `preferences.map` holds the terrain:
+`terrainEnabled` (3D terrain on or off), `terrainExaggeration` (vertical
+exaggeration; omitted for the default of 1) and `terrainSource` (the HTTP(S) URL
+of a Cloud Optimized GeoTIFF DEM; omitted for the built-in global terrain). A DEM
+opened from a local file has no URL, so it is not saved. Like other URLs in a project,
+`terrainSource` passes through [credential redaction](#credential-redaction), so
+a presigned or keyed DEM URL loses its signature and needs re-signing to load
+again. `terrainIonAssetId`
+picks a Cesium Ion terrain asset for the globe.
+
 ## Plugin state
 
 ```json
@@ -142,7 +153,8 @@ carries no `printLayout` key.
   `title` follows the project name rather than freezing a copy of it.
 - Page: `paperSize` (`a4`, `a3`, `letter`, `legal`, `tabloid`, `fullhd`, `hd`,
   `uhd4k`, `square`, `custom`), `orientation`, `customWidth` / `customHeight` /
-  `customUnit` for `custom`, `pageMargin`, and the page/map frame colours.
+  `customUnit` for `custom`, `pageMargin`, `pageBackground`, `panelTheme`
+  (`light` or `dark`), and the page/map frame colours.
 - Elements: the `show*` toggles for legend, scale bar, north arrow, footer,
   date, attribution, colorbar, custom legend and info block, with their
   per-element settings.
@@ -158,7 +170,7 @@ widths) is deliberately not stored.
 
 ## Story map
 
-A story map turns the project into a scroll-driven narrative. Each chapter
+A story map turns the project into a chapter-based narrative. Each chapter
 captures a camera view plus text, and can fade project layers in or out on
 enter/exit. The section is omitted entirely when the project has no chapters.
 
@@ -184,6 +196,7 @@ enter/exit. The section is omitted entirely when the project has no chapters.
       "location": { "center": [-122.4194, 37.7749], "zoom": 11, "pitch": 45, "bearing": 0 },
       "mapAnimation": "flyTo",
       "rotateAnimation": false,
+      "durationSeconds": 15,
       "onChapterEnter": [{ "layerId": "layer-a", "opacity": 1, "duration": 2000 }],
       "onChapterExit": [{ "layerId": "layer-a", "opacity": 0 }]
     }
@@ -193,8 +206,16 @@ enter/exit. The section is omitted entirely when the project has no chapters.
 
 `alignment` is one of `left`, `center`, `right`, `full`; `mapAnimation` is
 `flyTo`, `easeTo`, or `jumpTo`. Layer opacity changes reference project layer
-ids. Build and present story maps from **Project → Story Map**, or export a
-self-contained HTML page for static hosting.
+ids, and their `opacity` replaces the layer's own `opacity` while the chapter
+is active; the layer's style (such as `fillOpacity`) still applies. Build and
+present story maps from **Project → Story Map**, or export a self-contained
+HTML page for static hosting.
+
+`durationSeconds` is an optional chapter dwell time for in-app autoplay. The
+countdown starts after the camera reaches the chapter view. Omitted or invalid
+values use 15 seconds; finite values are clamped to 1–3600 seconds. Existing
+projects and story JSON/CSV files without this field remain valid. This field
+does not change the standalone HTML export's scroll-driven playback.
 
 ## Dashboard widgets
 
@@ -275,7 +296,24 @@ a list of layer ids to identify only those, or `null` for off; ids that name no
 layer are skipped. `controls` maps a toolbar panel (`bookmark`, `search`,
 `measure`, `minimap`, `print`) or built-in map control (`navigation`,
 `fullscreen`, `compass`, `geolocate`, `globe`, `scale`, `attribution`, `logo`)
-to whether it starts shown; other names are ignored. The app writes the block
+to whether it starts shown; other names are ignored. `measure` and `minimap`
+also accept an object with a boolean `visible` and the control's options:
+
+```json
+{
+  "controls": {
+    "measure": { "visible": true, "collapsed": true, "distanceUnit": "feet", "areaUnit": "acres" },
+    "minimap": { "visible": true, "collapsed": true }
+  }
+}
+```
+
+`collapsed: true` opens only the control's on-map button, so a shared map does
+not start with the Measure panel over it and its tool armed. Measure's
+`distanceUnit` and `areaUnit` take the values listed in
+[Built-in control panels](plugin-api.md#built-in-control-panels); Minimap also
+takes `zoomOffset`, `width` and `height`. A plain `true` opens the control
+expanded, as the Controls menu does. The app writes the block
 back unchanged when it saves the project; turning Identify or a control on or
 off in the app does not edit it.
 
@@ -296,6 +334,9 @@ off in the app does not edit it.
     "strokeColor": "#1e40af",
     "strokeWidth": 2,
     "strokeWidthUnit": "pixels",
+    "strokeOpacity": 1,
+    "strokeDash": [],
+    "strokeBlur": 0,
     "fillOpacity": 0.6,
     "circleRadius": 6,
     "rasterBrightnessMin": 0,
@@ -497,6 +538,29 @@ The expression is saved with the project and remains active until it is cleared
 from the Select by Expression panel or from the layer's **Clear filters** action.
 It combines with Quick Filters and the transient filters described below.
 
+A layer linked to the on-map floor picker carries a `levelFilter`: the field
+holding each feature's floor, the picker's `mode` (`all`, `only`, or `below`
+for a floor and the ones under it), the chosen `level` as the picker labels it,
+and the raw `values` of that field that match the choice:
+
+```json
+{
+  "levelFilter": {
+    "field": "level",
+    "mode": "only",
+    "level": "0",
+    "values": ["0", "0;1", "-1-0"]
+  }
+}
+```
+
+The `values` are resolved from the layer's features when a floor is chosen
+(they include OpenStreetMap's multi-floor values such as `0;1`), and the layer is
+filtered with `["in", ["get", field], ["literal", values]]`, combined with the
+layer's other filters under one `all`. A link without `values` draws every floor
+until the app resolves them from the layer's features. Every linked layer shares
+one choice.
+
 What is stored is a plain MapLibre expression, so the Expression Builder's `@`
 variables (`@project_name`, `@layer_name`, `@feature_count`, `@map_zoom`,
 `@map_scale`) are resolved to literal values at the moment the filter is
@@ -638,6 +702,32 @@ export time, since STAC requires a `datetime`. Exporting a vector layer to
 GeoParquet writes the block as JSON into the file's Parquet key-value metadata
 under `geolibre:metadata`, beside the `geo` key.
 
+### Planetary Computer layers
+
+A layer drawn by the Planetary Computer panel is a `raster` layer with no tile
+URL. Its `metadata` describes what to draw, and the panel rebuilds the layer
+from it when the project opens (MapLibre renderer only):
+
+| Key | Meaning |
+| --- | --- |
+| `sourceKind` | `"planetary-computer-raster"`. With `externalNativeLayer: true`, marks the layer as the panel's. |
+| `planetaryComputerLayerType` | `"item"` for one STAC item, `"mosaic"` for many composited. (`"collection"`, written by older versions, is read as a mosaic with no search filter.) |
+| `stacCollectionId` | The STAC collection id, e.g. `sentinel-2-l2a`. Required. |
+| `stacItemId` | The STAC item id. Required for an `item` layer. |
+| `stacSearchParams` | Mosaic only. The STAC search selecting its items: `datetime` (RFC 3339 range), `query` (e.g. `{"eo:cloud_cover": {"lte": 10}}`), `sortby`, `filter`. The search is registered again on every open, because a registered search id expires and is never saved. |
+| `presetName` | A render preset of the collection (`true-color`, `ndvi`, ...). |
+| `renderParams` | Data API render parameters: `assets`, `expression`, `asset_as_band`, `rescale` (`"min,max"`), `colormap_name`, and so on. Parameters that select bands (`assets` or `expression` here, or a nonempty top-level `assets`) are a complete render and are used as saved: a `presetName` beside them is only a label, and its own expression or colormap is not applied. Without a band selection, the parameters are applied over the named preset's, or over the collection's default preset when none is named, so a lone `rescale` overrides just the stretch. With no parameters at all, the named or default preset is used. |
+| `assets` | The asset names rendered (empty for an expression). |
+| `bounds` | `[west, south, east, north]`, used by zoom-to-layer and to bound a mosaic's tile requests. |
+| `stacDatetime` | Item layers written by the app: the item's acquisition datetime. Informational. |
+| `identifiable` | `true`: Identify reads the layer's pixel values through the Data API. |
+| `tileType` | `"raster"`. |
+| `sourceId`, `sourceIds`, `nativeLayerIds` | The MapLibre source and layer ids the panel creates: `nativeLayerIds` is `[<layer id>]` and `sourceId` is `<layer id>-source`. |
+
+The Python API (`Map.add_planetary_computer`) and the MCP server
+(`add_planetary_computer_layer`) write this shape without contacting the
+service.
+
 ## Layer types
 
 | Type             | Status                                                                                             |
@@ -648,7 +738,7 @@ under `geolibre:metadata`, beside the `geo` key.
 | `wmts`           | Supported for WMTS raster tile templates                                                           |
 | `raster`         | Supported for raster tile templates; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion imagery asset the 3D globe loads with the app's Ion token (3D only) |
 | `vector-tiles`   | Supported for MapLibre vector tile sources                                                         |
-| `mbtiles`        | Supported in the desktop app through a local MapLibre protocol                                     |
+| `mbtiles`        | Desktop: local MapLibre protocol over Tauri. Browser: in-memory sql.js, not restored on reopen    |
 | `arcgis`         | Supported for ArcGIS VectorTileServer layers (FeatureServer layers are saved as `geojson`, and MapServer/ImageServer layers as `raster`) |
 | `pmtiles`        | Supported through the Components plugin                                                            |
 | `cog`            | Supported for COG and GeoTIFF raster layers                                                        |

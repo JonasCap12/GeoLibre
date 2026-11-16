@@ -71,7 +71,9 @@ export interface Env {
   GEOLIBRE_EMAIL_FROM?: string;
   // "1" logs each message instead of sending it. For `wrangler dev` only.
   GEOLIBRE_EMAIL_LOG_ONLY?: string;
-  // `wrangler secret put`. Absent skips the bot check with a warning.
+  // "1" explicitly skips a missing Turnstile secret for `wrangler dev` only.
+  GEOLIBRE_TURNSTILE_DISABLED?: string;
+  // `wrangler secret put`. Required unless the explicit local opt-out is set.
   TURNSTILE_SECRET_KEY?: string;
   // `wrangler secret put`, base64 of 32 random bytes. Required to enable MFA.
   MFA_ENCRYPTION_KEY?: string;
@@ -508,12 +510,12 @@ export function authEventStatements(
 // ---------------------------------------------------------------------------
 
 /**
- * Verifies the form's Turnstile token when this deployment has a secret.
+ * Verifies the form's Turnstile token, failing closed if the secret is missing.
  *
- * Without TURNSTILE_SECRET_KEY the check is skipped with a warning, the same
- * way an absent rate-limit binding is: a fresh or local deployment works.
- * Production cannot get there: deploy-projects-api.yml runs
- * scripts/predeploy-check.mjs, which refuses to deploy while the secret is unset.
+ * Local `wrangler dev` may explicitly set GEOLIBRE_TURNSTILE_DISABLED="1" to
+ * bypass a missing secret. An absent secret alone answers 503, including if a
+ * production secret is deleted after deploy. The predeploy secret check remains
+ * required, and a configured secret is verified even if the local opt-out is set.
  */
 export async function requireTurnstile(
   scope: Scope,
@@ -522,8 +524,8 @@ export async function requireTurnstile(
 ): Promise<void> {
   const secret = scope.env.TURNSTILE_SECRET_KEY?.trim() ?? "";
   if (secret === "") {
-    console.warn(`TURNSTILE_SECRET_KEY is not set; ${action} skips the bot check`);
-    return;
+    if (scope.env.GEOLIBRE_TURNSTILE_DISABLED === "1") return;
+    throw new ApiError(503, "bot check is unavailable; retry later");
   }
   const refusal = await verifyTurnstile({
     secret,

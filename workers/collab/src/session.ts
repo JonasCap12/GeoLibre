@@ -33,7 +33,6 @@ import {
   MAX_CHAT_STORAGE_BYTES,
   MAX_CHAT_TEXT_LENGTH,
   MAX_SESSION_LOG_STORAGE_BYTES,
-  MAX_SNAPSHOT_BYTES,
   parseStoredChat,
   MIN_CHAT_INTERVAL_MS,
   normalizeMode,
@@ -49,16 +48,7 @@ import {
   type SessionParticipant,
 } from "@geolibre/collab-core";
 
-/** Parse the stored snapshot defensively: a corrupt value yields null rather
- *  than throwing (which would lock joiners out of the session). */
-function parseStoredSnapshot(snapshot: string | undefined): unknown {
-  if (!snapshot) return null;
-  try {
-    return JSON.parse(snapshot);
-  } catch {
-    return null;
-  }
-}
+import { parseStoredSnapshot, parseStoredSessionLog, snapshotByteLimit } from "./session-state";
 
 export interface Env {
   COLLAB_SESSION: DurableObjectNamespace<CollabSession>;
@@ -104,19 +94,6 @@ const SESSION_ENDED_REASON = "The host ended this session.";
 // second), so we don't allocate a new encoder per message.
 const ENCODER = new TextEncoder();
 
-function parseStoredSessionLog(raw: unknown): SessionLogEntry[] {
-  // Accept either the JSON string this code writes or a bare array, so a
-  // value persisted in another shape is kept rather than silently discarded.
-  if (Array.isArray(raw)) return raw as SessionLogEntry[];
-  if (typeof raw !== "string" || !raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as SessionLogEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 // Characters per stored snapshot chunk. A Durable Object caps a SQLite string
 // at 2 MB of UTF-8, and a JS string character can encode to 4 bytes, so this
 // leaves a chunk at half the ceiling even for text that is entirely non-ASCII.
@@ -151,8 +128,7 @@ export class CollabSession extends DurableObject<Env> {
   private presence = new Map<string, PresenceState>();
 
   private maxSnapshotBytes(): number {
-    const configured = Number(this.env.COLLAB_MAX_SNAPSHOT_BYTES);
-    return Number.isSafeInteger(configured) && configured > 0 ? configured : MAX_SNAPSHOT_BYTES;
+    return snapshotByteLimit(this.env.COLLAB_MAX_SNAPSHOT_BYTES);
   }
 
   private ensureTables(): void {

@@ -10,6 +10,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import type { FeatureCollection } from "geojson";
 import i18next from "i18next";
+import { isImdfZipBlob, isImdfZipRange } from "@geolibre/core";
+import { readImdfZip } from "../imdf";
+import { imdfLoadedLayers } from "../imdf-layers";
 import { IS_MAS_BUILD } from "../build-flags";
 import {
   confirmLargeDataset,
@@ -35,7 +38,12 @@ import {
   type LoadedLayer,
   type LoadedVectorLayer,
 } from "./loaded-layer";
-import { localFileSizeBytes, readLocalFileBytes, readLocalFileText } from "./local-fs";
+import {
+  localFileSizeBytes,
+  readLocalFileBytes,
+  readLocalFileRange,
+  readLocalFileText,
+} from "./local-fs";
 import {
   browserSafeFileName,
   fileExtension,
@@ -220,7 +228,10 @@ async function loadBrowserVectorFile(
         data: await parseGeoJsonText(await file.text()),
         path: file.name,
       };
-    } catch {
+    } catch (error) {
+      // A malformed .geojson cannot be repaired by GDAL. Surface its parse
+      // error immediately instead of loading DuckDB and its spatial extension.
+      if (extension === "geojson" && error instanceof SyntaxError) throw error;
       // Some GDAL-backed vector formats use .json but are not GeoJSON
       // FeatureCollections. Let DuckDB Spatial try them before failing.
     }
@@ -476,7 +487,9 @@ async function loadTauriVectorFile(
         data: await parseGeoJsonText(await readLocalFileText(path)),
         path,
       };
-    } catch {
+    } catch (error) {
+      // Match the browser path: malformed GeoJSON needs no DuckDB fallback.
+      if (extension === "geojson" && error instanceof SyntaxError) throw error;
       // Some GDAL-backed vector formats use .json but are not GeoJSON
       // FeatureCollections. Let DuckDB Spatial try them before failing.
     }
@@ -671,6 +684,20 @@ export async function loadDroppedVectorFiles(
         continue;
       }
 
+      if (extension === "zip") {
+        // An IMDF venue is a zip of GeoJSON, not a shapefile: it becomes a
+        // group of stacked, floor-picker-linked layers.
+        // Only the zip's central directory is read to decide, so a shapefile
+        // zip is read once, by the shapefile loader below.
+        if (await isImdfZipBlob(file)) {
+          const imdf = readImdfZip(new Uint8Array(await file.arrayBuffer()));
+          if (imdf) {
+            layers.push(...imdfLoadedLayers(imdf, file.name));
+            continue;
+          }
+        }
+      }
+
       if (extension === "kmz") {
         try {
           layers.push(...(await loadKmzLayers(await file.arrayBuffer(), file.name, options)));
@@ -780,6 +807,19 @@ export async function loadDroppedVectorPaths(
           throw new Error(`Could not read this Polyline file. ${detail}`);
         }
         continue;
+      }
+      if (extension === "zip") {
+        const size = await localFileSizeBytes(path);
+        if (
+          size !== undefined &&
+          (await isImdfZipRange(size, (offset, length) => readLocalFileRange(path, offset, length)))
+        ) {
+          const imdf = readImdfZip(await readLocalFileBytes(path));
+          if (imdf) {
+            layers.push(...imdfLoadedLayers(imdf, path));
+            continue;
+          }
+        }
       }
       if (extension === "kmz") {
         try {

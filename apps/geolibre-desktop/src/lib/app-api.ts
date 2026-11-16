@@ -28,12 +28,18 @@ import type {
   GeoLibreActiveMapTool,
   GeoLibreCogLayerOptions,
   GeoLibreCogRenderEngine,
+  GeoLibreControlPanelId,
+  GeoLibreMeasureOptions,
+  GeoLibreMinimapOptions,
   GeoLibreDeckGL,
   GeoLibreDownloadFolder,
+  GeoLibreEditSessionChange,
   GeoLibreExternalNativeLayerRegistration,
   GeoLibreFileDialogOptions,
+  GeoLibrePointCloudLayerOptions,
   GeoLibreRasterWindowOptions,
   GeoLibreTileLayerOptions,
+  GeoLibreVectorTileLayerOptions,
   GeoLibreWmsLayerOptions,
   GeoLibreZarrLayerOptions,
   GeoLibreZarrQueryGeometry,
@@ -47,6 +53,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readDir, readFile } from "@tauri-apps/plugin-fs";
 import type { RefObject } from "react";
+import type { FeatureCollection } from "geojson";
 import {
   createWmsTileUrl,
   normalizeWmsCrs,
@@ -54,10 +61,16 @@ import {
 } from "../components/layout/add-data/helpers";
 import { ensureFileExtension, useFileNamePrompt } from "../hooks/useFileNamePrompt";
 import type { buildProjectEgressSnapshot } from "./build-project-snapshot";
+import { abortReason, untilAborted } from "./abortable";
 import { cogEngineDefaults } from "./cog-render-engine";
 import { appendDiagnostic } from "./diagnostics";
 import { createExternalNativeStoreLayer } from "./external-native-layer";
-import { resolvePluginAssetUrlForLoadedPlugin } from "./external-plugins";
+import {
+  readPluginAssetForLoadedPlugin,
+  resolvePluginAssetUrlForLoadedPlugin,
+} from "./external-plugins";
+import { startGeometryEditSession } from "./geometry-edit-session";
+import { setPluginUrlParameters } from "./live-url";
 import { isDesktopRuntime } from "./is-mobile";
 import { fetchNativeWithWebviewFallback } from "./native-fetch-fallback";
 import { fetchUrlBytes } from "./native-http";
@@ -68,10 +81,24 @@ import { createPluginLayerGroupActions } from "./plugin-layer-groups";
 import { pluginLayerMetadata } from "./plugin-layer-metadata";
 import { createPluginLayerQueries } from "./plugin-layer-queries";
 import { createPluginLayerStyleActions } from "./plugin-layer-style";
+import { createPluginLayerVisibilityActions } from "./plugin-layer-visibility";
 import { createPluginLocaleApi, type PluginLocaleI18n } from "./plugin-locale";
+import { createPluginMapCrsApi } from "./plugin-map-crs";
 import { createPluginHttpSend, createPluginNativeFetch } from "./plugin-native-fetch";
+import { authorizeInPopup, getPluginOAuthRedirectUri } from "./plugin-oauth";
 import { openProjectFromUrlForPlugin } from "./plugin-open-project";
-import { createRemoteDownload, type RemoteDownloadProgress } from "./remote-download";
+import { addPluginPointCloudLayer } from "./plugin-point-cloud-layer";
+import {
+  clearLayerRequestHeaders,
+  setPluginLayerRequestHeaders,
+  setPluginUrlRequestHeaders,
+} from "./plugin-tile-request-headers";
+import { addPluginVectorTileLayer } from "./plugin-vector-tile-layer";
+import {
+  createRemoteDownload,
+  createWriteFileToFolder,
+  type RemoteDownloadProgress,
+} from "./remote-download";
 import { requestSpaceborneLidarGranule } from "./spaceborne-lidar-handoff";
 import { addPluginWfsLayer } from "./plugin-wfs-layer";
 import {
@@ -100,6 +127,9 @@ type PluginsModule = typeof GeoLibrePlugins;
 export interface AppApiHost extends Pick<
   PluginsModule,
   | "addRasterToMap"
+  | "openControlPanel"
+  | "closeControlPanel"
+  | "isControlPanelVisible"
   | "readRasterWindow"
   | "setRasterRenderEngine"
   | "addZarrRasterLayer"
@@ -123,12 +153,21 @@ export interface AppApiHost extends Pick<
   | "unregisterToolbarMenu"
   | "registerMenuContribution"
   | "unregisterMenuContribution"
+  | "registerFileHandler"
+  | "unregisterFileHandler"
   | "registerFloatingPanel"
   | "unregisterFloatingPanel"
   | "openFloatingPanel"
   | "closeFloatingPanel"
   | "getOpenFloatingPanels"
   | "getGeometryEditTargetLayerId"
+  | "getLastGeometryEditEnd"
+  | "subscribeGeometryEdit"
+  | "isPluginEngineSupported"
+  | "maplibreGeoEditorPlugin"
+  | "startLayerGeometryEdit"
+  | "addLidarLayerFromUrl"
+  | "addLidarLayerFromBytes"
 > {
   /** The shared plugin manager, for `activatePlugin`/`deactivatePlugin`. */
   plugins: Pick<
@@ -243,6 +282,7 @@ export function createAppAPI(
   // itself (e.g. addCogLayer -> addRasterToMap) can pass `api`. Only read
   // when those methods are called, which is always after assignment.
   const api = {
+    setUrlParameters: setPluginUrlParameters,
     setBasemap: (url: string) => {
       const state = useAppStore.getState();
       // eslint-disable-next-line local/no-renderer-kind-checks -- Mapbox keeps its own persisted style URL
@@ -273,8 +313,10 @@ export function createAppAPI(
     removeLayer: (layerId: string) => {
       const state = useAppStore.getState();
       if (state.layers.some((layer) => layer.id === layerId)) {
-        // A plugin-painted native layer's bridge lives outside the store.
+        // A plugin-painted native layer's bridge and a tile layer's request
+        // headers live outside the store.
         clearExternalNativePaintBridge(layerId);
+        clearLayerRequestHeaders(layerId);
         state.removeLayer(layerId);
       }
     },
@@ -299,6 +341,50 @@ export function createAppAPI(
         unsubscribePlugins();
       };
     },
+    getEditSessionLayerId: () => host.getGeometryEditTargetLayerId(),
+    onEditSessionChange: (callback: (change: GeoLibreEditSessionChange) => void) => {
+      let previousLayerId = host.getGeometryEditTargetLayerId();
+      let previousEnd = host.getLastGeometryEditEnd();
+      // A switch delivers an end and a start together; a callback that throws
+      // on the end must still get the start.
+      const deliver = (change: GeoLibreEditSessionChange) => {
+        try {
+          callback(change);
+        } catch (error) {
+          console.error("An onEditSessionChange callback failed:", error);
+        }
+      };
+      return host.subscribeGeometryEdit(() => {
+        const layerId = host.getGeometryEditTargetLayerId();
+        const end = host.getLastGeometryEditEnd();
+        // A new end record with the same layer still active means the session
+        // ended and restarted on that layer between two notifications.
+        if (layerId === previousLayerId && end === previousEnd) return;
+        // Remember the delivered state first, so a callback that changes the
+        // session (or a nested notification) cannot emit it twice.
+        const endedLayerId = previousLayerId;
+        // Only an end recorded since the last notification describes this
+        // session; an older record for the same layer belongs to an earlier one.
+        const endIsNew = end !== previousEnd;
+        previousLayerId = layerId;
+        previousEnd = end;
+        if (endedLayerId) {
+          deliver({
+            layerId: endedLayerId,
+            state: "ended",
+            saved: endIsNew && end?.layerId === endedLayerId && end.saved,
+          });
+        }
+        if (layerId) deliver({ layerId, state: "started" });
+      });
+    },
+    startEditSession: async (layerId: string) =>
+      (await startGeometryEditSession(layerId, {
+        app: api,
+        manager,
+        map: mapControllerRef?.current,
+        geoEditor: host,
+      })) === "started",
     addTileLayer: (name: string, url: string, options?: GeoLibreTileLayerOptions) =>
       store.addTileLayer(
         name,
@@ -315,6 +401,12 @@ export function createAppAPI(
         { type: "wmts", tiles: [url], url, ...tileLayerStoreOptions("addWmtsLayer", options) },
         options?.beforeLayerId ?? null,
       ),
+    addVectorTileLayer: (name: string, url: string, options: GeoLibreVectorTileLayerOptions) =>
+      addPluginVectorTileLayer(name, url, options),
+    setLayerRequestHeaders: (layerId: string, headers: Record<string, string> | null) =>
+      setPluginLayerRequestHeaders(layerId, headers),
+    setUrlRequestHeaders: (urlPrefix: string, headers: Record<string, string> | null) =>
+      setPluginUrlRequestHeaders(urlPrefix, headers),
     addWmsLayer: (name: string, options: GeoLibreWmsLayerOptions) => {
       const {
         beforeLayerId,
@@ -492,18 +584,51 @@ export function createAppAPI(
         }
       }),
     fetchArrayBuffer: fetchRemoteArrayBuffer,
+    // The host's own URL resolution, so a plugin reads private S3 objects
+    // through a configured connection without ever seeing its credentials.
+    resolveReadableUrl: (url: string, signal?: AbortSignal) => {
+      // External plugins call through a JS boundary TypeScript cannot check.
+      if (typeof url !== "string" || !url.trim()) {
+        return Promise.reject(new TypeError("resolveReadableUrl: url must be a non-empty string."));
+      }
+      if (signal != null && !isAbortSignalLike(signal)) {
+        return Promise.reject(new TypeError("resolveReadableUrl: signal must be an AbortSignal."));
+      }
+      const abort = signal ?? undefined;
+      // Skip the lookup once aborted, and never return a URL after an abort.
+      if (abort?.aborted) return Promise.reject(abortReason(abort));
+      return untilAborted(resolveReadableUrl(url.trim(), abort), abort);
+    },
     nativeFetch: isTauriRuntime() ? pluginNativeFetch() : undefined,
+    // The public signature is path-only; the plugin manager's scoped API
+    // appends the owner id (as it does for `credentials`), so a plugin cannot
+    // name another plugin's allowlist.
+    readAllowedFile: isTauriRuntime()
+      ? (((path: string, ownerPluginId: string) =>
+          invoke<string>("read_allowed_file", {
+            pluginId: ownerPluginId,
+            path,
+          })) as unknown as GeoLibrePlugins.GeoLibreAppAPI["readAllowedFile"])
+      : undefined,
     downloadRemoteFile: isDesktopRuntime()
       ? createRemoteDownload(invoke, () => new Channel<RemoteDownloadProgress>())
       : undefined,
     pickDownloadFolder: isDesktopRuntime()
       ? () => invoke<GeoLibreDownloadFolder | null>("pick_download_folder")
       : undefined,
+    writeFileToFolder: isDesktopRuntime() ? createWriteFileToFolder(invoke) : undefined,
     openSpaceborneLidarUrl: (url: string, fileName: string, headers?: Record<string, string>) =>
       requestSpaceborneLidarGranule({ url, fileName, ...(headers ? { headers } : {}) }),
     openSpaceborneLidarGranule: (data: ArrayBuffer, fileName: string) =>
       requestSpaceborneLidarGranule({ data, fileName }),
+    // Point clouds go through the components plugin's shared LiDAR control,
+    // like Add Data → LiDAR, so the layer is listed, styled and saved as usual.
+    addPointCloudLayer: (
+      source: string | File | ArrayBuffer | Uint8Array,
+      options?: GeoLibrePointCloudLayerOptions,
+    ) => addPluginPointCloudLayer(api, host, source, options),
     resolvePluginAssetUrl: resolvePluginAssetUrlForLoadedPlugin,
+    readPluginAsset: readPluginAssetForLoadedPlugin,
     activatePlugin: async (pluginId: string, state?: unknown) => {
       const activated = await manager.activate(pluginId, api);
       if (!activated || !manager.isActive(pluginId)) return false;
@@ -529,13 +654,33 @@ export function createAppAPI(
     queryOvertureFeatures: host.queryOvertureFeatures,
     ...createPluginLayerGroupActions(),
     ...createPluginLayerStyleActions(),
+    ...createPluginLayerVisibilityActions(),
     fitBounds: (bounds: [number, number, number, number]) =>
       mapControllerRef?.current?.fitBounds(bounds),
+    fitLayer: (layerId: string) => {
+      const layer = useAppStore.getState().layers.find((item) => item.id === layerId);
+      return Boolean(layer && mapControllerRef?.current?.fitLayer(layer));
+    },
     getViewBounds: () => mapControllerRef?.current?.getViewBounds() ?? null,
     getMap: () => mapControllerRef?.current?.getMap() ?? null,
     readRasterWindow: (layerId: string, options: GeoLibreRasterWindowOptions) =>
       host.readRasterWindow(layerId, options),
     getMapRenderer: () => useAppStore.getState().primaryRenderer,
+    ...createPluginMapCrsApi({
+      getEngine: () => mapControllerRef?.current,
+      eventTarget: typeof window === "undefined" ? undefined : window,
+      canResolve: async (mapCrs) => {
+        const { resolveMapCrs } = await import("@geolibre/map");
+        return (await resolveMapCrs(mapCrs)) !== null;
+      },
+      applyPreferences: (patch) => {
+        const state = useAppStore.getState();
+        state.setPreferences({
+          ...state.preferences,
+          map: { ...state.preferences.map, ...patch },
+        });
+      },
+    }),
     getArcgisView: () => {
       const engine = mapControllerRef?.current;
       // eslint-disable-next-line local/no-renderer-kind-checks -- reaches that engine's own handle
@@ -724,6 +869,10 @@ export function createAppAPI(
         console.error(`Could not export ${filename}.`, error);
       });
     },
+    exportGeoParquetFile: async (filename: string, data: FeatureCollection) => {
+      const { exportVectorLayer } = await import("./vector-export");
+      return exportVectorLayer(data, "geoparquet", filename);
+    },
     importTextFile: (options?: GeoLibreFileDialogOptions) => {
       const extensions = options?.extensions ?? ["json"];
       return openLocalDataFileWithFallback({
@@ -753,6 +902,12 @@ export function createAppAPI(
         state.removeLayer(id);
       }
     },
+    openControlPanel: (
+      id: GeoLibreControlPanelId,
+      options?: GeoLibreMinimapOptions | GeoLibreMeasureOptions,
+    ): void => host.openControlPanel(api, id, options),
+    closeControlPanel: (id: GeoLibreControlPanelId): void => host.closeControlPanel(api, id),
+    isControlPanelVisible: host.isControlPanelVisible,
     addMapControl: (
       control: Parameters<MapEngine["addControl"]>[0],
       position?: Parameters<MapEngine["addControl"]>[1],
@@ -818,6 +973,16 @@ export function createAppAPI(
           throw error;
         }));
     })(),
+    // Same for maplibre-gl-lidar: its loaders decode LAZ with the WebAssembly
+    // the host serves, and its layers render on the host's deck.gl instance.
+    getMaplibreGlLidar: (() => {
+      let cached: Promise<typeof import("maplibre-gl-lidar")> | undefined;
+      return () =>
+        (cached ??= import("maplibre-gl-lidar").catch((error) => {
+          cached = undefined;
+          throw error;
+        }));
+    })(),
     // Share the host's proj4 instance; memoize loads but allow retry after failure.
     getProj4: (() => {
       let cached: Promise<typeof Proj4> | undefined;
@@ -865,6 +1030,9 @@ export function createAppAPI(
     getActiveRightPanelDock: host.getActiveRightPanelDock,
     ...createPluginLocaleApi(host.i18n),
     credentials: host.credentials,
+    getOAuthRedirectUri: () => getPluginOAuthRedirectUri(),
+    authorizeInPopup: (authorizationUrl: string, options?: { timeoutMs?: number }) =>
+      authorizeInPopup(authorizationUrl, options),
     registerAssistantTool: host.registerAssistantTool,
     registerAssistantToolSpec: host.registerAssistantToolSpec,
     registerAssistantGuidance: host.registerAssistantGuidance,
@@ -872,6 +1040,8 @@ export function createAppAPI(
     unregisterToolbarMenu: host.unregisterToolbarMenu,
     registerMenuContribution: host.registerMenuContribution,
     unregisterMenuContribution: host.unregisterMenuContribution,
+    registerFileHandler: host.registerFileHandler,
+    unregisterFileHandler: host.unregisterFileHandler,
     registerFloatingPanel: host.registerFloatingPanel,
     unregisterFloatingPanel: host.unregisterFloatingPanel,
     openFloatingPanel: host.openFloatingPanel,
@@ -904,6 +1074,17 @@ export async function fetchRemoteArrayBuffer(url: string): Promise<ArrayBuffer> 
     );
   }
   return fetchWebviewArrayBuffer(url);
+}
+
+/** Whether `value` quacks like an `AbortSignal` (it may come from another realm). */
+function isAbortSignalLike(value: unknown): value is AbortSignal {
+  const signal = value as AbortSignal | null;
+  return (
+    typeof signal === "object" &&
+    signal !== null &&
+    typeof signal.aborted === "boolean" &&
+    typeof signal.addEventListener === "function"
+  );
 }
 
 /** The webview's own fetch, through the dev raster proxy in local development. */

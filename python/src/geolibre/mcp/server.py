@@ -14,6 +14,7 @@ keeps working without it.
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import functools
 import inspect
@@ -32,7 +33,13 @@ from ..geolibre import render_project_html
 from ..legends import builtin_legend_names
 from . import live
 from .network import PreviewSessions, fetch_resource
-from .workspace import EXPORT_SUFFIXES, PROJECT_SUFFIXES, Workspace, WorkspaceError
+from .workspace import (
+    EXPORT_SUFFIXES,
+    IMAGE_SUFFIXES,
+    PROJECT_SUFFIXES,
+    Workspace,
+    WorkspaceError,
+)
 
 INSTRUCTIONS = """\
 Use these tools whenever someone asks for a **map**: a choropleth, a web map, a
@@ -78,10 +85,14 @@ Pick the layer tool by what the data *is*, not by file extension alone:
   GeoJSON) read in place rather than inlined.
 - `add_raster_layer`   - a Cloud Optimized GeoTIFF (COG).
 - `add_tile_layer`     - a raster XYZ tile template with {z}/{x}/{y}.
+- `add_planetary_computer_layer` - Microsoft Planetary Computer imagery
+  (Sentinel-2, Landsat, NAIP, DEMs) by collection: one STAC item, or a
+  date-range mosaic. Needs no tile URL or credentials.
 - `add_tiles_layer`    - PMTiles or a vector tile service.
 - `add_ogc_layer`      - a WMS or WMTS endpoint.
 - `add_lidar_layer`    - a LAS/LAZ/COPC/EPT point cloud by URL.
-- `add_3d_tiles_layer` - an OGC 3D Tiles tileset (URL or Cesium Ion asset id).
+- `add_3d_tiles_layer` - an OGC 3D Tiles tileset (URL or Cesium Ion asset id),
+  or an ArcGIS I3S scene layer URL.
 - `add_cesium_ion_layer` - a Cesium Ion asset (tileset or imagery) by id, 3D globe only.
 - `add_czml_layer`     - a CZML dynamic 3D scene (orbits, vehicle tracks) by URL or
   inline packets, 3D globe only.
@@ -570,6 +581,73 @@ def build_server(workspace: Workspace) -> MCPServer:
         return add(path, layer, index)
 
     @tool()
+    def add_planetary_computer_layer(
+        path: str,
+        collection: str,
+        item: str | None = None,
+        name: str | None = None,
+        datetime: str | None = None,
+        bbox: list[float] | None = None,
+        preset: str | None = None,
+        assets: list[str] | None = None,
+        expression: str | None = None,
+        rescale: list[float] | None = None,
+        colormap: str | None = None,
+        max_cloud_cover: float | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """Add Microsoft Planetary Computer imagery (Sentinel-2, Landsat, NAIP, DEMs, ...).
+
+        With `item` the layer draws that one STAC item. Without it the layer is
+        a mosaic: every item of the collection matching `datetime` and
+        `max_cloud_cover`, composited into one seamless layer (for example a
+        low-cloud Sentinel-2 summer composite). No credentials are needed and
+        nothing is fetched while authoring: GeoLibre's Planetary Computer panel
+        builds the layer when it opens the project.
+
+        Render it with a named `preset`, or with `assets` / `expression` plus
+        `rescale` and `colormap`. With none of them the collection's default
+        preset applies. Presets: sentinel-2-l2a has true-color, false-color,
+        ndvi, ndwi, nbr, ndbi, swir; landsat-c2-l2 has true-color, false-color,
+        ndvi, ndwi, nbr, thermal; naip has rgb, cir, ndvi; cop-dem-glo-30 and
+        cop-dem-glo-90 have elevation, hillshade.
+
+        Args:
+            path: Path to the `.geolibre.json` file.
+            collection: STAC collection id, e.g. `sentinel-2-l2a`.
+            item: STAC item id to draw; omit for a mosaic of the collection.
+            name: The layer's display name; defaults to the item id or collection.
+            datetime: Mosaic only. Date range as `start/end`, e.g.
+                `2024-06-01/2024-08-31`.
+            bbox: `[west, south, east, north]` extent of the layer.
+            preset: A render preset name for the collection, e.g. `ndvi`.
+            assets: Asset names to render, e.g. `["B08", "B04", "B03"]`.
+            expression: Band math over assets, e.g. `(B08-B04)/(B08+B04)`.
+            rescale: `[min, max]` value range stretched to the output colors.
+            colormap: Named colormap for a single-band or expression render.
+            max_cloud_cover: Mosaic only. Keep items at or below this cloud
+                cover percentage.
+            index: Draw-order position; appended on top when omitted.
+
+        Returns:
+            The new layer's id and the project's updated layer count.
+        """
+        layer = _project.planetary_computer_layer(
+            collection,
+            item,
+            name=name,
+            datetime=datetime,
+            bbox=bbox,
+            preset=preset,
+            assets=assets,
+            expression=expression,
+            rescale=rescale,
+            colormap=colormap,
+            max_cloud_cover=max_cloud_cover,
+        )
+        return add(path, layer, index)
+
+    @tool()
     def add_ogc_layer(
         path: str,
         name: str,
@@ -984,7 +1062,8 @@ def build_server(workspace: Workspace) -> MCPServer:
         Args:
             path: Path to the `.geolibre.json` file.
             name: The layer's display name.
-            url: URL of the tileset's `tileset.json`.
+            url: URL of the tileset's `tileset.json`, or of an ArcGIS I3S
+                scene layer (`.../SceneServer/layers/<n>`).
             ion_asset_id: A Cesium Ion asset id, instead of `url`.
             altitude_offset: Metres to shift the tileset vertically, to correct
                 a tileset that floats above or sinks below the terrain.
@@ -1125,6 +1204,8 @@ def build_server(workspace: Workspace) -> MCPServer:
         """Set style properties on a layer, merging with what is already there.
 
         Common keys: `fillColor`, `fillOpacity`, `strokeColor`, `strokeWidth`,
+        `strokeOpacity` (0-1), `strokeDash` (dash and gap lengths in multiples
+        of the width, `[]` for solid, e.g. `[4, 2]`), `strokeBlur` (px),
         `circleRadius` (point size), `textColor`, `textSize`, `minZoom`,
         `maxZoom`. For a data-driven choropleth use `classify_layer` instead of
         writing the `vectorStyle*` keys by hand.
@@ -1613,6 +1694,38 @@ def build_server(workspace: Workspace) -> MCPServer:
         """
         with edit(path) as (file, project):
             summary = authoring.set_layer_filter(project, layer, expression)
+        return _summarize(file, project, layer=summary)
+
+    @tool()
+    def set_floor_picker(
+        path: str,
+        layer: str,
+        field: str | None = "level",
+        level: str | float | None = None,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        """Link a multi-floor layer to the app's on-map floor picker.
+
+        The picker lists the floors found in `field` across every linked layer
+        and draws one floor, or a floor and the ones below it. It reads
+        OpenStreetMap `level` values ("0", "0;1", "-1-0"), numbers and IMDF
+        ordinals.
+
+        Args:
+            path: Path to the `.geolibre.json` file.
+            layer: The layer's id or display name.
+            field: The property holding the floor. Pass null to unlink the layer.
+            level: The floor to show, e.g. "0" or -1. Applies to every linked
+                layer. Omit it to keep the floor already shown; pass mode "all"
+                to show every floor.
+            mode: "only" (the default for a level), "below" to also show the
+                floors under it, or "all".
+
+        Returns:
+            The layer summary with its `levelFilter`.
+        """
+        with edit(path) as (file, project):
+            summary = authoring.set_floor_picker(project, layer, field, level, mode=mode)
         return _summarize(file, project, layer=summary)
 
     @tool()
@@ -2149,10 +2262,75 @@ def build_server(workspace: Workspace) -> MCPServer:
         return value
 
     @tool()
+    def live_get_layer(layer_id: str) -> dict[str, Any]:
+        """Return metadata for one layer on the map open in GeoLibre Desktop.
+
+        Args:
+            layer_id: The layer id from ``live_list_layers``.
+
+        Returns:
+            The layer dict with ``id``, ``name``, ``type``, ``visible``, and
+            ``opacity``.
+        """
+        layers = live.require().call("listLayers")
+        if not isinstance(layers, list):
+            raise ValueError(f"GeoLibre returned an unexpected layer list: {layers!r}")
+        for layer in layers:
+            if isinstance(layer, dict) and layer.get("id") == layer_id:
+                return layer
+        raise ValueError(f"No layer with id {layer_id!r}")
+
+    @tool()
+    def live_get_view() -> dict[str, Any]:
+        """Return the current camera of the map open in GeoLibre Desktop.
+
+        Returns:
+            A dict with ``center`` (``[lng, lat]``), ``zoom``, ``bearing``,
+            ``pitch``, and ``bbox`` (``[west, south, east, north]``).
+        """
+        value = live.require().call("getView")
+        if not isinstance(value, dict):
+            raise ValueError(f"GeoLibre returned an unexpected view: {value!r}")
+        return value
+
+    @tool()
+    def live_set_view(
+        lng: float,
+        lat: float,
+        zoom: float | None = None,
+        bearing: float | None = None,
+        pitch: float | None = None,
+    ) -> dict[str, Any]:
+        """Jump the camera of the map open in GeoLibre Desktop without animation.
+
+        Args:
+            lng: Target longitude.
+            lat: Target latitude.
+            zoom: Optional zoom level. ``0`` is the world, about ``14`` is a city.
+            bearing: Optional camera bearing in degrees.
+            pitch: Optional camera pitch in degrees.
+
+        Returns:
+            The camera fields that were sent.
+        """
+        params: dict[str, Any] = {"center": [float(lng), float(lat)]}
+        if zoom is not None:
+            params["zoom"] = float(zoom)
+        if bearing is not None:
+            params["bearing"] = float(bearing)
+        if pitch is not None:
+            params["pitch"] = float(pitch)
+        live.require().call("setView", params)
+        return dict(params)
+
+    @tool()
     def live_fly_to(
         lng: float | None = None,
         lat: float | None = None,
         zoom: float | None = None,
+        bearing: float | None = None,
+        pitch: float | None = None,
+        duration: float | None = None,
     ) -> dict[str, Any]:
         """Animate the camera of the map open in GeoLibre Desktop.
 
@@ -2160,9 +2338,12 @@ def build_server(workspace: Workspace) -> MCPServer:
             lng: Longitude. Pass it together with ``lat``.
             lat: Latitude. Pass it together with ``lng``.
             zoom: Zoom level. ``0`` is the world, about ``14`` is a city.
+            bearing: Optional camera bearing in degrees.
+            pitch: Optional camera pitch in degrees.
+            duration: Optional animation duration in milliseconds.
 
         Returns:
-            The center and zoom that were sent.
+            The camera fields that were sent.
         """
         if (lng is None) != (lat is None):
             raise ValueError("Pass both lng and lat, or neither.")
@@ -2171,10 +2352,23 @@ def build_server(workspace: Workspace) -> MCPServer:
             params["center"] = [float(lng), float(lat)]
         if zoom is not None:
             params["zoom"] = float(zoom)
+        if bearing is not None:
+            params["bearing"] = float(bearing)
+        if pitch is not None:
+            params["pitch"] = float(pitch)
+        if duration is not None:
+            params["duration"] = float(duration)
         if not params:
-            raise ValueError("Pass a center, a zoom, or both.")
+            raise ValueError("Pass a center, a zoom, or another camera field.")
         live.require().call("flyTo", params)
-        return {"center": params.get("center"), "zoom": zoom}
+        result: dict[str, Any] = {"center": params.get("center"), "zoom": zoom}
+        if bearing is not None:
+            result["bearing"] = params["bearing"]
+        if pitch is not None:
+            result["pitch"] = params["pitch"]
+        if duration is not None:
+            result["duration"] = params["duration"]
+        return result
 
     @tool()
     def live_fit_bounds(bounds: list[float]) -> dict[str, Any]:
@@ -2222,6 +2416,29 @@ def build_server(workspace: Workspace) -> MCPServer:
         live.require().call("setBasemap", {"url": url})
         return {"basemap": url}
 
+    def add_live_geojson_layer(
+        name: str,
+        collection: dict[str, Any],
+        style: dict[str, Any] | None = None,
+    ) -> str:
+        """Send an ``addGeoJsonLayer`` relay call and validate the returned layer id.
+
+        Args:
+            name: The layer's display name.
+            collection: A GeoJSON FeatureCollection dict.
+            style: Optional style overrides.
+
+        Returns:
+            The non-empty layer id returned by GeoLibre Desktop.
+        """
+        layer_id = live.require().call(
+            "addGeoJsonLayer",
+            {"name": name, "geojson": collection, "style": dict(style or {})},
+        )
+        if not isinstance(layer_id, str) or not layer_id:
+            raise ValueError(f"GeoLibre returned an unexpected layer id: {layer_id!r}")
+        return layer_id
+
     @tool()
     def live_add_geojson(
         data: Any,
@@ -2244,13 +2461,218 @@ def build_server(workspace: Workspace) -> MCPServer:
             The new layer id and name.
         """
         collection, _source = load_geojson(data)
-        layer_id = live.require().call(
-            "addGeoJsonLayer",
-            {"name": name, "geojson": collection, "style": style or {}},
-        )
-        if not isinstance(layer_id, str) or not layer_id:
-            raise ValueError(f"GeoLibre returned an unexpected layer id: {layer_id!r}")
+        layer_id = add_live_geojson_layer(name, collection, style)
         return {"layerId": layer_id, "layerName": name}
+
+    @tool()
+    def live_add_marker(
+        lng: float,
+        lat: float,
+        name: str = "Marker",
+        properties: dict[str, Any] | None = None,
+        style: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add a single point marker layer to the map open in GeoLibre Desktop.
+
+        Args:
+            lng: Point longitude.
+            lat: Point latitude.
+            name: The layer's display name.
+            properties: Optional feature properties dict.
+            style: Optional style overrides such as ``fillColor`` and ``pointRadius``.
+
+        Returns:
+            The new layer id and name.
+        """
+        collection = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": dict(properties or {}),
+                    "geometry": {"type": "Point", "coordinates": [float(lng), float(lat)]},
+                }
+            ],
+        }
+        layer_id = add_live_geojson_layer(name, collection, style)
+        return {"layerId": layer_id, "layerName": name}
+
+    @tool()
+    def live_add_markers(
+        points: list[Any],
+        name: str = "Markers",
+        style: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add multiple point markers as a layer on the map open in GeoLibre Desktop.
+
+        Args:
+            points: A non-empty list of ``[lng, lat]`` coordinate pairs or dicts
+                carrying ``lng``/``lat`` (or ``lon``/``longitude``/``latitude``);
+                any extra keys on a dict become feature properties.
+            name: The layer's display name.
+            style: Optional style overrides such as ``fillColor`` and ``pointRadius``.
+
+        Returns:
+            The new layer id, name, and feature count.
+        """
+        if not points:
+            raise ValueError("points must not be empty.")
+        features: list[dict[str, Any]] = []
+        for point in points:
+            if isinstance(point, dict):
+                lng = point.get("lng", point.get("lon", point.get("longitude")))
+                lat = point.get("lat", point.get("latitude"))
+                if lng is None or lat is None:
+                    raise ValueError("Point dict needs lng/lat (or lon/longitude, latitude).")
+                props = {
+                    key: val
+                    for key, val in point.items()
+                    if key not in {"lng", "lon", "longitude", "lat", "latitude"}
+                }
+                features.append(
+                    {
+                        "type": "Feature",
+                        "properties": props,
+                        "geometry": {"type": "Point", "coordinates": [float(lng), float(lat)]},
+                    }
+                )
+            elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                features.append(
+                    {
+                        "type": "Feature",
+                        "properties": {},
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [float(point[0]), float(point[1])],
+                        },
+                    }
+                )
+            else:
+                raise ValueError(f"Each point must be [lng, lat] or a dict, got {point!r}")
+        collection = {"type": "FeatureCollection", "features": features}
+        layer_id = add_live_geojson_layer(name, collection, style)
+        return {"layerId": layer_id, "layerName": name, "count": len(features)}
+
+    @tool()
+    def live_get_layer_features(layer_id: str) -> list[dict[str, Any]]:
+        """Return the GeoJSON features of a vector layer on the open map.
+
+        Reads the live store in GeoLibre Desktop, including features added or
+        edited in the session. Tiled or remote service layers return an empty
+        list; use ``live_identify`` for those.
+
+        Args:
+            layer_id: The layer id from ``live_list_layers``.
+
+        Returns:
+            A list of GeoJSON Feature dicts.
+        """
+        value = live.require().call("getLayerFeatures", {"layerId": layer_id})
+        if not isinstance(value, list):
+            raise ValueError(f"GeoLibre returned an unexpected feature list: {value!r}")
+        return value
+
+    @tool()
+    def live_get_selected_features() -> list[dict[str, Any]]:
+        """Return the GeoJSON features currently selected in GeoLibre Desktop.
+
+        Returns:
+            A list of zero or more selected GeoJSON Feature dicts.
+        """
+        value = live.require().call("getSelectedFeatures")
+        if not isinstance(value, list):
+            raise ValueError(f"GeoLibre returned an unexpected feature list: {value!r}")
+        return value
+
+    @tool()
+    def live_get_drawn_features() -> list[dict[str, Any]]:
+        """Return the GeoJSON features drawn with the Geo Editor in GeoLibre Desktop.
+
+        Gathers features from the app's Sketches layers so an agent can inspect
+        regions of interest sketched by the user on the live map.
+
+        Returns:
+            A list of drawn GeoJSON Feature dicts.
+        """
+        value = live.require().call("getDrawnFeatures")
+        if not isinstance(value, list):
+            raise ValueError(f"GeoLibre returned an unexpected feature list: {value!r}")
+        return value
+
+    @tool()
+    def live_identify(lng: float, lat: float, layer_id: str | None = None) -> list[dict[str, Any]]:
+        """Query rendered features at ``(lng, lat)`` on the open map.
+
+        Args:
+            lng: Query point longitude.
+            lat: Query point latitude.
+            layer_id: Optional layer id from ``live_list_layers`` to restrict
+                the query to one layer.
+
+        Returns:
+            One dict per matched feature (topmost first).
+        """
+        params: dict[str, Any] = {"lngLat": [float(lng), float(lat)]}
+        if layer_id is not None:
+            params["layerId"] = layer_id
+        value = live.require().call("identify", params)
+        if not isinstance(value, list):
+            raise ValueError(f"GeoLibre returned an unexpected identify result: {value!r}")
+        return value
+
+    @tool()
+    def live_set_identify(layer_id: str | None = None) -> dict[str, Any]:
+        """Set or clear the click-to-identify target on the open map.
+
+        Args:
+            layer_id: A layer id from ``live_list_layers``, a list of layer
+                ids, ``"all"`` for every visible queryable layer, or ``None``
+                to turn click-identify off. An empty string is rejected.
+
+        Returns:
+            The active ``layerId`` target (or ``None`` when disabled).
+        """
+        value = live.require().call("setIdentify", {"layerId": layer_id})
+        return {"layerId": value}
+
+    @tool()
+    def live_get_identify() -> dict[str, Any]:
+        """Return the active click-to-identify target on the open map.
+
+        Returns:
+            A dict with ``layerId`` (a layer id, a list of layer ids,
+            ``"all"``, or ``None``).
+        """
+        value = live.require().call("getIdentify")
+        return {"layerId": value}
+
+    @tool()
+    def live_set_control_visible(
+        control: str,
+        visible: bool = True,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Show or hide a built-in map control or panel in GeoLibre Desktop.
+
+        Args:
+            control: Map control or panel name. Map controls are
+                ``"navigation"``, ``"fullscreen"``, ``"compass"``,
+                ``"geolocate"``, ``"globe"``, ``"scale"``, ``"attribution"``,
+                and ``"logo"``. Panels are ``"bookmark"``, ``"search"``,
+                ``"measure"``, ``"minimap"``, and ``"print"``. Terrain and
+                other names are rejected.
+            visible: Whether the control or panel should be shown.
+            options: Optional configuration object (supported by ``"measure"``
+                and ``"minimap"``).
+
+        Returns:
+            The control name and visibility state that were applied.
+        """
+        params: dict[str, Any] = {"control": control, "visible": bool(visible)}
+        if options is not None:
+            params["options"] = dict(options)
+        live.require().call("setControlVisible", params)
+        return {"control": control, "visible": bool(visible)}
 
     @tool()
     def live_set_visibility(layer_id: str, visible: bool) -> dict[str, Any]:
@@ -2367,6 +2789,104 @@ def build_server(workspace: Workspace) -> MCPServer:
         if not isinstance(value, dict):
             raise ValueError(f"GeoLibre returned an unexpected run result: {value!r}")
         return value
+
+    @tool()
+    def live_list_whitebox_tools(query: str | None = None) -> list[dict[str, Any]]:
+        """List the bundled Whitebox/WASM tools the open GeoLibre Desktop can run.
+
+        Args:
+            query: Case-insensitive text matched against each tool's id, name,
+                category, and description.
+
+        Returns:
+            One dict per Whitebox tool with ``id``, ``name``, ``category``,
+            ``description``, and ``parameters``.
+        """
+        value = live.require().call("listWhiteboxTools")
+        if not isinstance(value, list):
+            raise ValueError(f"GeoLibre returned an unexpected Whitebox tool list: {value!r}")
+        if query:
+            needle = query.casefold()
+            value = [
+                item
+                for item in value
+                if isinstance(item, dict)
+                and any(
+                    needle in str(item.get(key, "")).casefold()
+                    for key in ("id", "name", "category", "description")
+                )
+            ]
+        return value
+
+    @tool()
+    def live_run_whitebox_tool(
+        tool_id: str, parameters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Run a bundled Whitebox/WASM tool on the map open in GeoLibre Desktop.
+
+        Vector and raster outputs are added to the open map automatically.
+        Input-layer parameters take a layer id from ``live_list_layers``.
+
+        Args:
+            tool_id: An id from ``live_list_whitebox_tools`` (e.g. ``"slope"``).
+            parameters: The tool's parameters, keyed by parameter name.
+
+        Returns:
+            The tool's ``logs`` and the ``resultLayerIds`` it added.
+        """
+        value = live.require().call(
+            "runWhiteboxTool", {"id": str(tool_id), "params": dict(parameters or {})}
+        )
+        if not isinstance(value, dict):
+            raise ValueError(f"GeoLibre returned an unexpected Whitebox run result: {value!r}")
+        return value
+
+    @tool()
+    def live_run_model_builder(graph: dict[str, Any]) -> dict[str, Any]:
+        """Run a Model Builder graph on the map open in GeoLibre Desktop.
+
+        Args:
+            graph: A serialized GeoLibre Model Builder graph dict containing
+                ``nodes`` and ``edges``.
+
+        Returns:
+            A dict with ``outputLayerIds`` added to the open map.
+        """
+        if not isinstance(graph, dict) or not graph:
+            raise ValueError("graph must be a non-empty Model Builder graph dict.")
+        value = live.require().call("runModelBuilder", {"graph": dict(graph)})
+        if not isinstance(value, dict):
+            raise ValueError(f"GeoLibre returned an unexpected Model Builder result: {value!r}")
+        return value
+
+    @tool()
+    def live_to_image(out_path: str | None = None, overwrite: bool = False) -> dict[str, Any]:
+        """Capture the current view of the open GeoLibre Desktop map as a PNG.
+
+        Args:
+            out_path: Optional workspace path ending in ``.png`` to write the
+                captured image to. When omitted, returns the PNG data URL.
+            overwrite: Replace ``out_path`` if it already exists.
+
+        Returns:
+            ``{"path", "bytes"}`` when written to ``out_path``, or
+            ``{"dataUrl", "bytes"}`` when ``out_path`` is omitted.
+        """
+        destination = (
+            workspace.resolve_output(out_path, suffixes=IMAGE_SUFFIXES, overwrite=overwrite)
+            if out_path is not None
+            else None
+        )
+        data_url = live.require().call("toImage")
+        header, sep, encoded = str(data_url).partition(",")
+        if header != "data:image/png;base64" or not sep or not encoded:
+            raise ValueError(f"GeoLibre returned an unexpected image data URL: {data_url!r}")
+        png = base64.b64decode(encoded)
+        if destination is not None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(png)
+            return {"path": str(destination), "bytes": len(png)}
+        return {"dataUrl": str(data_url), "bytes": len(png)}
 
     return server
 

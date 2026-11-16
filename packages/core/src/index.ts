@@ -1,14 +1,17 @@
 export * from "./types";
+export * from "./tile-address";
 export * from "./diagram";
 export * from "./marker-shape";
 export * from "./hyperlink";
 export * from "./photo";
 export * from "./ellipsoids";
+export * from "./geodesic";
 export * from "./regional-basemaps";
 export * from "./imagery-basemaps";
 export * from "./basemap-policy";
 export * from "./cesium-imagery";
 export * from "./arcgis-projection";
+export * from "./map-crs";
 export * from "./geojson-z";
 export * from "./color-ramp";
 export * from "./paths";
@@ -21,12 +24,17 @@ export * from "./document-locale";
 export * from "./label-number-format";
 export * from "./external-native-paint";
 export * from "./attribute-form";
+export * from "./qgis-expression";
 export * from "./layer-descriptive-metadata";
+export * from "./map-click-claims";
 export * from "./popup";
 export * from "./joins";
 export * from "./virtual-fields";
 export * from "./quick-filters";
 export * from "./layer-filters";
+export * from "./level-filter";
+export * from "./zip-directory";
+export * from "./imdf-detect";
 export * from "./capabilities";
 export * from "./deployment-capabilities";
 export * from "./selection";
@@ -35,6 +43,7 @@ export * from "./scale-units";
 export * from "./elevation";
 export * from "./camera-altitude";
 export * from "./project";
+export * from "./i3s-building-state";
 export * from "./project-diff";
 export * from "./style-library";
 export * from "./layer-library";
@@ -47,6 +56,7 @@ export * from "./pixel-format";
 export * from "./s3";
 export * from "./print-layout-config";
 export { createSampleStoryMap } from "./storymap-sample";
+export * from "./storymap-duration";
 export {
   applyStoryLayerOpacity,
   isStoryHiddenLayer,
@@ -125,6 +135,7 @@ export {
   GEOCODE_SCORE_KEY,
   GEOCODE_PROVIDER_KEY,
   GEOCODE_STATUS_KEY,
+  GEOCODE_ATTRIBUTE_PREFIX,
   DEFAULT_GEOCODING_PROVIDER_ID,
   GEOCODING_PROVIDERS,
   getGeocoderConfig,
@@ -144,13 +155,31 @@ export {
   nominatimReverseResultToDisplay,
   csvRowsToGeocodeRequests,
   geocodeForward,
+  geocodeSuggest,
+  parseArcGISSuggestions,
+  arcgisLocatorInputField,
   geocodeReverse,
   setGeocodingFetch,
+  setGeocodingTokenProvider,
+  geocoderSupportsReverse,
+  geocoderSupportsSuggest,
+  selectedGeocodingLocator,
+  normalizeArcGISLocatorUrl,
+  normalizeGeocodingLocator,
+  parseArcGISLocatorInfo,
+  fetchArcGISLocatorInfo,
+  GeocoderServiceError,
+  GeocoderUnsupportedError,
+  type ArcGISLocatorCapabilities,
+  type GeocodingTokenProvider,
   type GeocoderConfig,
   type GeocodingProvider,
   type GeocodingProviderId,
   type GeocodingPreferenceInput,
+  normalizeGeocodeBbox,
+  type GeocodeBbox,
   type GeocodeMatch,
+  type GeocodeSuggestion,
   type GeocodeStatus,
   type NominatimForwardResult,
   type NominatimReverseResult,
@@ -271,6 +300,7 @@ export {
   installCogTilerDatumShift,
   withDatumShift,
   withGeoKeysDatumShift,
+  withWktDatumShift,
 } from "./datum-shift";
 
 export {
@@ -286,3 +316,5 @@ export {
   resolveRenderedFeature,
   PROGRESS_DASHBOARD_INDEX_PROPERTY,
 } from "./progress-dashboard-view";
+
+export * from "./geoarrow";

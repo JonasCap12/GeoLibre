@@ -51,7 +51,6 @@ export function useStylePanelDrafts(
   const [showBasemapStyleLayers, setShowBasemapStyleLayers] = useState(false);
   const [draftColorExpression, setDraftColorExpression] = useState("");
   const [draftHeightExpression, setDraftHeightExpression] = useState("");
-  const [draftBaseExpression, setDraftBaseExpression] = useState("");
   const [draftVectorStyleMode, setDraftVectorStyleMode] = useState<VectorStyleMode>(
     DEFAULT_LAYER_STYLE.vectorStyleMode,
   );
@@ -93,6 +92,18 @@ export function useStylePanelDrafts(
     DEFAULT_LAYER_STYLE.extrusionHeightScale,
   );
   const [draftExtrusionBase, setDraftExtrusionBase] = useState(DEFAULT_LAYER_STYLE.extrusionBase);
+  const [draftExtrusionBaseProperty, setDraftExtrusionBaseProperty] = useState(
+    DEFAULT_LAYER_STYLE.extrusionBaseProperty,
+  );
+  const [draftExtrusionBaseScale, setDraftExtrusionBaseScale] = useState(
+    DEFAULT_LAYER_STYLE.extrusionBaseScale,
+  );
+  const [draftExtrusionFloorHeight, setDraftExtrusionFloorHeight] = useState(
+    DEFAULT_LAYER_STYLE.extrusionFloorHeight,
+  );
+  const [draftBaseExpression, setDraftBaseExpression] = useState(
+    DEFAULT_LAYER_STYLE.extrusionBaseExpression,
+  );
   const [draftAdvancedExtrusionEnabled, setDraftAdvancedExtrusionEnabled] = useState(
     DEFAULT_LAYER_STYLE.extrusionAdvancedStyleEnabled,
   );
@@ -119,7 +130,6 @@ export function useStylePanelDrafts(
       setDraftBeforeId("");
       setDraftColorExpression("");
       setDraftHeightExpression("");
-      setDraftBaseExpression("");
       setDraftVectorStyleMode(DEFAULT_LAYER_STYLE.vectorStyleMode);
       setDraftVectorStyleProperty(DEFAULT_LAYER_STYLE.vectorStyleProperty);
       setDraftVectorStyleClassCount(DEFAULT_LAYER_STYLE.vectorStyleClassCount);
@@ -133,6 +143,10 @@ export function useStylePanelDrafts(
       setDraftExtrusionHeightProperty(DEFAULT_LAYER_STYLE.extrusionHeightProperty);
       setDraftExtrusionHeightScale(DEFAULT_LAYER_STYLE.extrusionHeightScale);
       setDraftExtrusionBase(DEFAULT_LAYER_STYLE.extrusionBase);
+      setDraftExtrusionBaseProperty(DEFAULT_LAYER_STYLE.extrusionBaseProperty);
+      setDraftExtrusionBaseScale(DEFAULT_LAYER_STYLE.extrusionBaseScale);
+      setDraftBaseExpression(DEFAULT_LAYER_STYLE.extrusionBaseExpression);
+      setDraftExtrusionFloorHeight(DEFAULT_LAYER_STYLE.extrusionFloorHeight);
       setDraftAdvancedExtrusionEnabled(DEFAULT_LAYER_STYLE.extrusionAdvancedStyleEnabled);
       setVectorStyleError(null);
       setExtrusionError(null);
@@ -142,7 +156,6 @@ export function useStylePanelDrafts(
     setDraftBeforeId(layer.beforeId ?? "");
     setDraftColorExpression(styleValue(layer.style, "extrusionColorExpression"));
     setDraftHeightExpression(styleValue(layer.style, "extrusionHeightExpression"));
-    setDraftBaseExpression(styleValue(layer.style, "extrusionBaseExpression"));
     const vectorStyleMode = styleValue(layer.style, "vectorStyleMode");
     setDraftVectorStyleMode(vectorStyleMode);
     const vectorStyleProperty = styleValue(layer.style, "vectorStyleProperty");
@@ -175,6 +188,10 @@ export function useStylePanelDrafts(
     setDraftExtrusionHeightProperty(styleValue(layer.style, "extrusionHeightProperty"));
     setDraftExtrusionHeightScale(styleValue(layer.style, "extrusionHeightScale"));
     setDraftExtrusionBase(styleValue(layer.style, "extrusionBase"));
+    setDraftExtrusionBaseProperty(styleValue(layer.style, "extrusionBaseProperty"));
+    setDraftExtrusionBaseScale(styleValue(layer.style, "extrusionBaseScale"));
+    setDraftBaseExpression(styleValue(layer.style, "extrusionBaseExpression"));
+    setDraftExtrusionFloorHeight(styleValue(layer.style, "extrusionFloorHeight"));
     setDraftAdvancedExtrusionEnabled(styleValue(layer.style, "extrusionAdvancedStyleEnabled"));
     setVectorStyleError(null);
     setExtrusionError(null);
@@ -183,11 +200,14 @@ export function useStylePanelDrafts(
     layer?.id,
     layer?.style.extrusionAdvancedStyleEnabled,
     layer?.style.extrusionBase,
+    layer?.style.extrusionBaseExpression,
+    layer?.style.extrusionBaseProperty,
+    layer?.style.extrusionBaseScale,
+    layer?.style.extrusionFloorHeight,
     layer?.style.extrusionColor,
     layer?.style.extrusionColorExpression,
     layer?.style.extrusionHeightProperty,
     layer?.style.extrusionHeightExpression,
-    layer?.style.extrusionBaseExpression,
     layer?.style.extrusionHeightScale,
     layer?.style.extrusionOpacity,
     layer?.style.vectorStyleExpression,
@@ -500,8 +520,6 @@ export function useStylePanelDrafts(
     setDraftColorExpression,
     draftHeightExpression,
     setDraftHeightExpression,
-    draftBaseExpression,
-    setDraftBaseExpression,
     draftVectorStyleMode,
     setDraftVectorStyleMode,
     draftVectorStyleProperty,
@@ -528,6 +546,14 @@ export function useStylePanelDrafts(
     setDraftExtrusionHeightScale,
     draftExtrusionBase,
     setDraftExtrusionBase,
+    draftExtrusionBaseProperty,
+    setDraftExtrusionBaseProperty,
+    draftExtrusionBaseScale,
+    setDraftExtrusionBaseScale,
+    draftBaseExpression,
+    setDraftBaseExpression,
+    draftExtrusionFloorHeight,
+    setDraftExtrusionFloorHeight,
     draftAdvancedExtrusionEnabled,
     setDraftAdvancedExtrusionEnabled,
     vectorStyleError,

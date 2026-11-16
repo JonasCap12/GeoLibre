@@ -22,6 +22,7 @@ export type KindI18nKey =
   | "ogcVectorTiles"
   | "gpx"
   | "landxml"
+  | "indoorgml"
   | "georss"
   | "geoBoundaries"
   | "delimitedText"
@@ -60,6 +61,7 @@ export const KIND_I18N_KEY: Record<
   "ogc-vector-tiles": "ogcVectorTiles",
   gpx: "gpx",
   landxml: "landxml",
+  indoorgml: "indoorgml",
   georss: "georss",
   geoboundaries: "geoBoundaries",
   "delimited-text": "delimitedText",
@@ -155,6 +157,24 @@ export const LANDXML_SAMPLES: readonly {
     crs: "EPSG:27700",
   },
 ];
+/**
+ * IndoorGML samples (issue #3341). FJK-Haus is STEMLab's IndoorGML 1.0.3 model
+ * of the KIT FZK-Haus (MIT licence), in UTM zone 32N with no `srsName`, so the
+ * CRS is given here.
+ */
+export const INDOORGML_SAMPLES: readonly {
+  label: string;
+  name: string;
+  url: string;
+  crs: string;
+}[] = [
+  {
+    label: "FJK-Haus (IndoorGML 1.0, UTM 32N)",
+    name: "FJK-Haus",
+    url: "https://data.source.coop/giswqs/opengeos/FJK-Haus_IndoorGML.gml",
+    crs: "EPSG:25832",
+  },
+];
 // USGS "Magnitude 2.5+ Earthquakes, Past Day" Atom feed (Simple georss:point).
 export const DEFAULT_GEORSS_URL =
   "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.atom";
@@ -205,6 +225,8 @@ export const WFS_PROXY_PATH = "/__geolibre_wfs_proxy";
 // service-library.ts). Bumping the key would orphan a user's saved services.
 export const SERVICE_LIBRARY_STORAGE_KEY = "geolibre.serviceLibrary";
 export const MAX_SAVED_SERVICES = 200;
+// Ids of built-in presets the user deleted from the service library.
+export const HIDDEN_BUILTIN_SERVICES_STORAGE_KEY = "geolibre.serviceLibrary.hiddenBuiltins";
 // Last File Geodatabase (and feature class) added through the GDB source, so
 // reopening the panel restores the selection instead of starting blank.
 export const LAST_GEODATABASE_STORAGE_KEY = "geolibre.lastGeodatabase";
@@ -355,7 +377,7 @@ export interface ZarrSample {
 export const ZARR_GLOBE_SAMPLES: readonly ZarrSample[] = [
   {
     label: "Sea surface temperature, monthly 1981-2023 (NOAA OISST)",
-    url: "https://data.source.coop/giswqs/opengeos/noaa-oisst-v2-monthly.zarr",
+    url: "https://data.source.coop/opengeos/data/zarr/noaa-oisst-v2-monthly.zarr",
     variable: "sst",
     clim: [-2, 32],
     colormap: "turbo",

@@ -43,13 +43,18 @@ export function turnstileVerdict(
 /**
  * Hostnames a token may have been solved on: the app origins this API already
  * trusts for CORS, plus the viewer. A token from any other page is refused.
+ * The desktop webview origins (`tauri://localhost`, `http://tauri.localhost`)
+ * are skipped: they are in the CORS list so the desktop app can sign in, but no
+ * Turnstile widget is ever solved there (desktop sign-in needs no token).
  */
 export function turnstileHostnames(origins: readonly string[]): string[] {
   const hosts = new Set<string>();
   for (const origin of origins) {
     if (origin === "*") continue;
     try {
-      hosts.add(new URL(origin).hostname);
+      const url = new URL(origin);
+      if (url.protocol === "tauri:" || url.hostname === "tauri.localhost") continue;
+      hosts.add(url.hostname);
     } catch {
       // Not a URL; CORS ignores it too.
     }

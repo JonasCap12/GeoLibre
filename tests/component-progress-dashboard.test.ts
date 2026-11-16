@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, i18n, render, screen, useAppStore, within } from "./helpers/dom";
+﻿import { act, fireEvent, i18n, render, screen, waitFor, useAppStore, within } from "./helpers/dom";
 import assert from "node:assert/strict";
 import { afterEach, it } from "node:test";
 import { createElement } from "react";
@@ -15,6 +15,9 @@ const { ConstructionProgressScreen } =
   await import("../apps/geolibre-desktop/src/components/progress/ConstructionProgressScreen");
 const { ProgressV2Profile } =
   await import("../apps/geolibre-desktop/src/components/progress/ProgressV2Profile");
+const { ProgressV2Dashboard } =
+  await import("../apps/geolibre-desktop/src/components/progress/ProgressV2Dashboard");
+import type { ProgressFeatureTarget } from "../apps/geolibre-desktop/src/lib/progress-colors";
 const { closeProgressScreen, openProgressScreen } =
   await import("../apps/geolibre-desktop/src/lib/progress-screen");
 const { PROGRESS_METADATA_KEY } =
@@ -135,7 +138,7 @@ function current() {
 }
 afterEach(() => closeProgressScreen());
 
-it("opens dashboard, cross-filters charts and map, zooms alerts, and restores the editing view", () => {
+it("opens dashboard, cross-filters charts and map, zooms alerts, and restores the editing view", async () => {
   const { fits, layer, unmount } = mount();
   clearHistory();
   fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
@@ -143,6 +146,7 @@ it("opens dashboard, cross-filters charts and map, zooms alerts, and restores th
   assert.ok(current().progressDashboard);
   assert.equal(useAppStore.getState().isDirty, false);
   const filters = screen.getByText("Filters").closest("aside")!;
+  fireEvent.click(within(filters).getByText("Structure type"));
   fireEvent.click(within(filters).getByRole("checkbox", { name: "Road" }));
   assert.ok(JSON.stringify(current().progressDashboard!.filter).includes("[1]"));
   assert.ok(!JSON.stringify(current().progressDashboard!.filter).includes("[0]"));
@@ -157,6 +161,7 @@ it("opens dashboard, cross-filters charts and map, zooms alerts, and restores th
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   const itemsChart = screen.getByText("Work items · largest delays first").closest("section")!;
   fireEvent.click(within(itemsChart).getByRole("button", { name: /Piles/ }));
+  fireEvent.click(within(filters).getByText("Work items"));
   assert.equal(
     within(filters).getByRole("checkbox", { name: "Piles" }).getAttribute("type"),
     "checkbox",
@@ -165,7 +170,7 @@ it("opens dashboard, cross-filters charts and map, zooms alerts, and restores th
   const delays = screen.getByText("Largest delays and alerts").closest("section")!;
   const before = fits.length;
   fireEvent.click(within(delays).getAllByRole("button")[0]);
-  assert.ok(fits.length > before);
+  await waitFor(() => assert.ok(fits.length > before));
   fireEvent.click(screen.getByRole("button", { name: "Edit progress" }));
   assert.equal(document.documentElement.hasAttribute("data-progress-dashboard"), false);
   assert.equal(current().progressDashboard, undefined);
@@ -266,8 +271,9 @@ it("clears bridge and station selections that belong to the previous package", (
   const packages = screen.getByRole("combobox", { name: "Package" });
   fireEvent.change(packages, { target: { value: "p" } });
   const filters = screen.getByText("Filters").closest("aside")!;
+  fireEvent.click(within(filters).getByText("Structure / section"));
   fireEvent.click(within(filters).getByRole("checkbox", { name: "Bridge A" }));
-  fireEvent.change(within(filters).getByRole("slider", { name: "To" }), {
+  fireEvent.change(screen.getByRole("slider", { name: "To" }), {
     target: { value: "200" },
   });
   fireEvent.change(packages, { target: { value: "p2" } });
@@ -277,4 +283,126 @@ it("clears bridge and station selections that belong to the previous package", (
     false,
   );
   assert.equal(screen.queryByText("No components match these filters."), null);
+});
+
+it("exports the current week through the dashboard download button", async () => {
+  mount();
+  const urls: string[] = [];
+  const originalCreate = URL.createObjectURL,
+    originalRevoke = URL.revokeObjectURL;
+  const originalClick = HTMLAnchorElement.prototype.click;
+  URL.createObjectURL = () => "blob:weekly-report";
+  URL.revokeObjectURL = () => {};
+  HTMLAnchorElement.prototype.click = function () {
+    urls.push(this.download);
+  };
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export week (.xlsx)" }));
+    await waitFor(() => assert.equal(urls.length, 1), { timeout: 10000 });
+    assert.equal(urls[0], "progress-all-2020-01-01.xlsx");
+    assert.equal(screen.queryByRole("alert"), null);
+  } finally {
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+    HTMLAnchorElement.prototype.click = originalClick;
+  }
+});
+
+it("opens the correct target from delay summaries and expanded entries, and restores package bars", async () => {
+  const { layer, state, unmount } = mount();
+  unmount();
+  const opened: ProgressFeatureTarget[] = [];
+  const packages: (string | null)[] = [];
+  render(
+    createElement(ProgressV2Dashboard, {
+      layer,
+      state,
+      packageId: null,
+      throughDate: "",
+      onPackage: (id) => packages.push(id),
+      onOpen: (target) => opened.push(target),
+      onFit: () => {},
+    }),
+  );
+  const delays = screen.getByText("Largest delays and alerts").closest("section")!;
+  fireEvent.click(
+    within(delays.querySelector("summary")!).getByRole("button", { name: "Open M1" }),
+  );
+  assert.deepEqual(opened, [{ kind: "support", bridgeId: "b", id: "M1" }]);
+  const details = delays.querySelector("details")!;
+  fireEvent.click(details.querySelector("summary")!);
+  fireEvent.click(
+    within(details.querySelector(".dashboard-alert-entries")!).getAllByRole("button", {
+      name: "Open M1",
+    })[0],
+  );
+  assert.deepEqual(opened[1], opened[0]);
+  const chart = screen.getByRole("region", { name: "Progress by package" });
+  fireEvent.click(within(chart).getByRole("button", { name: /Package A/ }));
+  assert.deepEqual(packages, ["p"]);
+});
+
+it("lands in the Update editor when a delayed component is opened", () => {
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+  fireEvent.click(
+    within(document.querySelector(".dashboard-alert-groups summary")!).getByRole("button", {
+      name: "Open M1",
+    }),
+  );
+  assert.equal(document.documentElement.hasAttribute("data-progress-dashboard"), false);
+  assert.equal(screen.getByRole("button", { name: "Update" }).getAttribute("aria-pressed"), "true");
+  assert.ok(screen.getByRole("heading", { name: "M1 · Bridge A" }));
+  assert.equal(current().progressDashboard, undefined);
+});
+
+it("formats SPI with two decimals while retaining one decimal percentages in each app language", async () => {
+  const { state } = mount();
+  act(() =>
+    useAppStore.getState().updateLayer("progress", {
+      metadata: {
+        [PROGRESS_METADATA_KEY]: {
+          ...state,
+          history: [
+            { week: "2020-W01", date: "2020-01-01", packageId: null, actual: 38.3, planned: 39.7 },
+          ],
+        },
+      },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Reporting week" }), {
+    target: { value: "2020-01-01" },
+  });
+  try {
+    assert.ok(screen.getByText("0.96"));
+    assert.ok(screen.getByText("38.3%"));
+    await act(async () => {
+      await i18n.changeLanguage("vi");
+    });
+    assert.ok(screen.getByText("0,96"));
+    assert.ok(screen.getByText("38,3%"));
+  } finally {
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+  }
+});
+
+it("initially frames the worst structure and keeps the full extent available", async () => {
+  const { fits } = mount();
+  fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+  await waitFor(() =>
+    assert.match(
+      document.querySelector(".dashboard-map-viewing")?.textContent ?? "",
+      /Viewing: Bridge A/,
+    ),
+  );
+  assert.deepEqual(fits.at(-1), [106, 10, 106, 10]);
+  const strip = document.querySelector(".dashboard-chainage svg")!;
+  assert.equal(strip.querySelectorAll("text").length, 0);
+  fireEvent.click(screen.getByRole("button", { name: "View full route" }));
+  assert.deepEqual(fits.at(-1), [106, 10, 106.1, 10.1]);
+  assert.equal(document.querySelector(".dashboard-map-viewing"), null);
 });

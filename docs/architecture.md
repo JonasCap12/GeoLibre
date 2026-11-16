@@ -116,7 +116,7 @@ Two consequences of Iceberg tables being large are wired into the app rather tha
 
 The Add Data surface includes native dialogs for XYZ, WMS, WFS, vector files (via the Add Vector dialog backed by `maplibre-gl-vector`), GeoJSON URLs, vector tile sources, delimited text, raster tile templates, COG and GeoTIFF rasters (via the Add Raster dialog backed by `maplibre-gl-raster`), MBTiles, ArcGIS FeatureServer or VectorTileServer layers, Apache Iceberg tables, and GPX waypoints, tracks, and routes. It also supports 3D Tiles layers, Cesium Ion assets by id (a tileset or imagery layer with `metadata.sourceKind: "cesium-ion"`, offered when the globe is the primary renderer and badged "3D only" on the 2D map; `packages/core/src/cesium-ion.ts`, issue #2290), WFS and GeoJSON URL refresh, text marker labels, and multiple DuckDB SQL query-result layers with identify, selection, and attribute table support. The Components plugin wraps `maplibre-gl-components` panels for FlatGeobuf, PMTiles, Zarr, LiDAR, and Gaussian splats, then mirrors added layers into the GeoLibre store so the Layer panel, project format, and layer control can reason about them. Additional data sources are available through the Planetary Computer and Earth Engine panels, the Overture Maps plugin, and the federal Web Services plugins. The Time Slider plugin, backed by `maplibre-gl-time-slider`, animates time series raster and vector data (COG, XYZ/WMTS, WMS-Time, and time-filtered GeoJSON) through a docked timeline, mirroring each source it adds into the GeoLibre store as an external native layer.
 
-Local MBTiles tiles are read through a custom MapLibre protocol backed by Tauri commands. Remote rasters are fetched through the desktop backend when needed, and the local development server includes a raster proxy for selected release assets that need CORS handling.
+Local MBTiles tiles are read through a custom MapLibre protocol: on desktop it is backed by Tauri commands, and in the browser the file is opened in memory with sql.js (`apps/geolibre-desktop/src/lib/mbtiles-sqljs.ts`) and tiles are served from that database. Remote rasters are fetched through the desktop backend when needed, and the local development server includes a raster proxy for selected release assets that need CORS handling.
 
 ## Python sidecar
 
@@ -145,7 +145,7 @@ Caching is split to keep the first visit light:
 
 So each of these CDN engines needs the network on **first** use, then works offline. To remove even the first-use dependency, build with `GEOLIBRE_PGLITE_CDN=0` and `GEOLIBRE_CEREUS_CDN=0`, which vendor PGlite/PostGIS and the CereusDB wasm back into the build under `/assets/`, where the same-origin rule covers them (PGlite alone re-adds ~22 MB to the Tauri binary).
 
-To strip **all GeoLibre-controlled** external CDN references from the build output — for deployments that cannot load any resource from untrusted CDNs — use `GEOLIBRE_NO_EXTERNAL_CDN=1`. This implies `GEOLIBRE_PGLITE_CDN=0`, `GEOLIBRE_CEREUS_CDN=0`, `GEOLIBRE_GDAL_CDN=0`, and `GEOLIBRE_DUCKDB_WASM_CDN=0`, and additionally disables features whose code references external CDNs: storymap HTML export (which injects `<script>` tags from `unpkg.com`), built-in object detection models (YOLO ONNX weights from `cdn.jsdelivr.net`), Segment Everything, 3D Tiles Draco/KTX2 decoders, and GDAL export. Pyodide remains available when `VITE_PYODIDE_INDEX_URL` points to an approved mirror. Runtime `deployment.json` configures client policy; it does not change this build-time CDN packaging.
+To strip **all GeoLibre-controlled** external CDN references from the build output — for deployments that cannot load any resource from untrusted CDNs — use `GEOLIBRE_NO_EXTERNAL_CDN=1`. This implies `GEOLIBRE_PGLITE_CDN=0`, `GEOLIBRE_CEREUS_CDN=0`, `GEOLIBRE_GDAL_CDN=0`, and `GEOLIBRE_DUCKDB_WASM_CDN=0`, and additionally disables features whose code references external CDNs: storymap HTML export (which injects `<script>` tags from `unpkg.com`), built-in object detection models (YOLO ONNX weights from `cdn.jsdelivr.net`), Segment Everything, 3D Tiles Draco/KTX2 decoders, GDAL export, and the Mapbox renderer (Mapbox GL JS loads from Mapbox's CDN). Pyodide remains available when `VITE_PYODIDE_INDEX_URL` points to an approved mirror. Runtime `deployment.json` configures client policy; it does not change this build-time CDN packaging.
 
 **DuckDB-WASM goes the other way**, because it is on the critical path for opening a local vector file and so is bundled by default. `GEOLIBRE_DUCKDB_WASM_CDN=1` moves it to jsDelivr instead — or `npm run lite:build`, which sets that flag and then _asserts_ no emitted file exceeds the ceiling, so a regression fails the build rather than the upload. It is pinned to the installed version by duckdb-wasm's own `getJsDelivrBundles()`, so the fetched engine cannot drift from the loader compiled into the bundle. The flag exists for one reason: `duckdb-mvp.wasm` (~40 MB) and `duckdb-eh.wasm` (~35 MB) both exceed the **25 MiB per-asset limit on Cloudflare Pages and Workers static assets**, which rejects the upload outright, and nothing else in the build comes close (the next largest is ~22 MB). So this single flag decides whether the web build can be hosted there at all — it takes the output from ~251 MB to ~176 MB with no file over the ceiling. GitHub Pages allows 100 MB per file and needs none of this. The flag is ignored for both targets that ship no service worker: a Tauri build, which must stay offline-capable, and an embed build (`GEOLIBRE_EMBED=1`), where the engine would otherwise be refetched every notebook session with no runtime cache behind it. Neither has the size ceiling this exists for, since a binary and a wheel are not uploaded to Cloudflare. A CDN-hosted worker script cannot be passed to `new Worker` (it must be same-origin), so that variant wraps it in a same-origin blob that `importScripts` the real one; this needs `worker-src blob:` and the CDN in `script-src`, both already in `docker/nginx.conf`. The nested `importScripts` is matched against `script-src` rather than `worker-src` — verified against that policy in Chromium and Firefox, since Firefox has historically checked worker sub-resources against `worker-src`/`child-src`.
 
@@ -153,7 +153,77 @@ Two engines have no such escape hatch. **Pyodide** is always fetched: `VITE_PYOD
 
 The **desktop** build ships no service worker, so none of this runtime caching applies there: it re-fetches every CDN-loaded engine on first use per install, unless PGlite/PostGIS and CereusDB are bundled with the flags above.
 
-A new deploy is picked up via `registerType: "autoUpdate"`: the new service worker installs in the background and takes control (`skipWaiting` + `clientsClaim`), so its fresh precache serves subsequent requests. Workbox's default force-reload-on-activation is deliberately suppressed via `onNeedReload` in `src/main.tsx` — on the relative-base `/demo/` subpath that reload fired spuriously and discarded in-progress map state. Page recovery is delegated to `installStaleChunkReload`, which reloads on-demand only when an orphaned lazy chunk 404s (cooldown-guarded; if `sessionStorage` is blocked it skips the reload and lets the preload error surface). Precached chunks are served from cache and never 404, so the page is no longer reloaded out from under the user.
+A new deploy is picked up via `registerType: "autoUpdate"`: the new service worker installs in the background and takes control (`skipWaiting` + `clientsClaim`), so its fresh precache serves subsequent requests. Workbox's default force-reload-on-activation is deliberately suppressed via `onNeedReload` in `src/main.tsx` — on the relative-base `/demo/` subpath that reload fired spuriously and discarded in-progress map state. Instead, a `controllerchange` listener calls `offerReloadIfNewBuild()`, which offers the user a reload when the deployed `index.html` loads a different build than the running page (screening out the first install and those spurious activations). `installStaleChunkReload` stays the on-demand recovery path, reloading only when an orphaned lazy chunk 404s before the user acts (cooldown-guarded; if `sessionStorage` is blocked it skips the reload and lets the preload error surface). Precached chunks are served from cache and never 404, so the page is no longer reloaded out from under the user.
+
+## WebAssembly Geoprocessing Worker Pool
+
+GeoLibre executes client-side geospatial analysis and Whitebox tools via WebAssembly. The engine architecture supports three execution tiers with automatic capability detection, progressive fallback, and observable diagnostics.
+
+### Toolchain & Runtime Architecture
+
+- **Source & Compiler Target**: The geospatial processing CLI (`geolibre-cli.wasm`, ~24.1 MB) is built from Rust ([`opengeos/geolibre-rust`](https://github.com/opengeos/geolibre-rust), forked from Whitebox Next Gen) targeted at `wasm32-wasip1`.
+- **In-Browser Execution**: Executed via `@bjorn3/browser_wasi_shim` inside dedicated Web Workers (`wasm-tool.worker.ts`) using an in-memory virtual `/work` filesystem for zero-disk, secure file staging and result capture.
+- **Worker Pool**: Managed by `@geolibre/processing` (`wasm-tool-runner.ts`), which maintains an adaptive pool of workers. Every mode runs the same `geolibre-cli.wasm` binary with private (non-shared) memory: the mode only sets how many workers may run at once. Each concurrent run gets its own worker unless the caller explicitly requests `executionMode: "threaded-simd"`, which bounds concurrent runs to the resolved thread count; in `threaded-simd` up to that many workers stay warm, otherwise one. Parked workers are kept warm to avoid repeating the ~24 MB WASM compilation on subsequent jobs. A dead-worker acknowledgement protocol (`REUSED_WORKER_ACK_MS = 10,000 ms`) automatically replaces unresponsive or discarded workers.
+
+### Three Execution Modes
+
+| Execution Mode | Requirements | Concurrent runs | Best Used For |
+|---|---|---|---|
+| `threaded-simd` | Browser SIMD128 + `crossOriginIsolated` (COOP/COEP) + `SharedArrayBuffer` + WebAssembly Shared Memory | One worker per concurrent run; bounded to 1–16 (from `hardwareConcurrency` or `maxThreads`) only when explicitly requested | Multi-tile batch processing via `runParallelWasmTools` |
+| `simd-single-thread` | Browser SIMD128 supported | One worker per concurrent run, one kept warm | Standard non-isolated environments, public web deployments without COOP/COEP |
+| `portable-single-thread` | Baseline WebAssembly support | One worker per concurrent run, one kept warm | Universal fallback for legacy embeds, constrained WebViews, and sandbox iframes |
+
+### Capability Detection & Mode Selection
+
+`packages/processing/src/wasm-capabilities.ts` probes the host environment safely using bytecode validation without triggering runtime exceptions:
+
+1. **SIMD128 Probe**: Validates a minimal 43-byte WebAssembly module containing `v128.const`.
+2. **Shared Memory Probe**: Validates a minimal WebAssembly module declaring shared memory (`memory 1 2 shared`).
+3. **Isolation & Concurrency**: Checks `globalThis.crossOriginIsolated === true`, `typeof SharedArrayBuffer !== "undefined"`, and clamps `navigator.hardwareConcurrency` between 1 and 16.
+4. **Resolution**: `resolveExecutionMode()` resolves the active tier and surfaces exact fallback reasons through structured diagnostics:
+   ```ts
+   import { getWasmDiagnostics, setWasmRuntimeConfig } from "@geolibre/processing";
+
+   const diag = getWasmDiagnostics();
+   console.log(diag.activeMode); // "threaded-simd" | "simd-single-thread" | "portable-single-thread"
+   console.log(diag.activeThreads); // e.g. 4
+   if (diag.fallbackReason) {
+     console.info("WASM Fallback Reason:", diag.fallbackReason);
+   }
+   ```
+
+### Cross-Origin Isolation Deployment (COOP & COEP)
+
+To enable `SharedArrayBuffer` and `threaded-simd` mode in browser deployments, servers must return cross-origin isolation headers. GeoLibre provides an opt-in configuration so that third-party embeds, iframes, and OAuth redirects remain unimpacted by default.
+
+- **Development Server (`vite.config.ts`)**:
+  Set `VITE_CROSS_ORIGIN_ISOLATION=1` in your environment:
+  ```bash
+  VITE_CROSS_ORIGIN_ISOLATION=1 npm run dev
+  ```
+  Vite's dev and preview servers attach:
+  ```http
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  ```
+- **Production Nginx (`docker/nginx.conf`)**:
+  The shipped config does **not** send these headers. To opt in, add:
+  ```nginx
+  add_header Cross-Origin-Opener-Policy "same-origin" always;
+  add_header Cross-Origin-Embedder-Policy "require-corp" always;
+  ```
+  **Warning**: with `VITE_CROSS_ORIGIN_ISOLATION=1` or these headers, COEP `require-corp` is active, so any cross-origin tile, basemap, or font resources fetched by the browser must support CORS or include `Cross-Origin-Resource-Policy: cross-origin`.
+
+### Algorithm Parallelization Classification
+
+`packages/processing/src/wasm-algorithm-audit.ts` classifies selected tools by data dependency. The classification is advisory: the runner does not consume it, and no tool is split across workers today.
+
+- **Tileable Stencil (`tileable-stencil`)**: `slope`, `aspect`, `hillshade`, `gaussian_filter`, `mean_filter`, `focal_statistics` — could be partitioned into strips or tiles with a 1-pixel halo.
+- **Pixel-Independent (`pixel-independent`)**: `raster_calculator` — point-wise, fully partitionable.
+- **Topological DAG (`topological-dag`)**: `d8_flow_accumulation`, `d_inf_flow_accumulation` — cannot be naively partitioned because of global drainage-network ordering.
+- **Priority Queue (`priority-queue`)**: `fill_depressions` — the priority-flood algorithm relies on a global min-heap.
+- **Radial Raymarch (`radial-raymarch`)**: `viewshed` — could be partitioned by angular sector.
+- **Vector Batch (`vector-batch`)**: `buffer_vector` — feature chunks could be distributed across workers; not SIMD-eligible.
 
 ## Container image
 

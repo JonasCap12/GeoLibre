@@ -63,8 +63,11 @@
     // Both hostnames of workers/web: the custom domain the team uses, and the
     // workers.dev one, which still serves the same app. This list also decides
     // which hostnames a Turnstile token may come from (src/turnstile.ts), so
-    // the Turnstile widget must list the same two.
-    "GEOLIBRE_CORS_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev",
+    // the Turnstile widget must list the same two. The last two are the desktop
+    // app's webview (Windows, then macOS/Linux): a self-hosted share URL is not
+    // routed through native HTTP, so the desktop needs CORS here to sign in and
+    // fetch a collaboration identity. turnstile.ts skips them.
+    "GEOLIBRE_CORS_ORIGINS": "https://gis.jonasnguyen.uk,https://geolibre-web.jonasnguyen886.workers.dev,http://tauri.localhost,tauri://localhost",
     // Comma-separated admin usernames. Empty or omitted means nobody can mint
     // invites — an unconfigured deployment must not be seedable by a stranger.
     // Keep it naming only accounts that exist: an unregistered name here could
@@ -100,8 +103,8 @@
     "GEOLIBRE_MFA_GRACE_DAYS": "7"
     // Secrets, set with `wrangler secret put … -c workers/projects-api/wrangler.jsonc`
     // and never written here:
-    //   TURNSTILE_SECRET_KEY  bot check on register / reset. Unset skips it
-    //                         with a warning in the logs.
+    //   TURNSTILE_SECRET_KEY  bot check on register / reset. Unset answers
+    //                         503 (local dev: GEOLIBRE_TURNSTILE_DISABLED=1).
     //   MFA_ENCRYPTION_KEY    base64 of 32 random bytes; encrypts TOTP secrets.
   },
 

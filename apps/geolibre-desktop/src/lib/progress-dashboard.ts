@@ -30,6 +30,8 @@ export type DashboardKind = "bridge" | "road" | "underpass";
 export type DashboardStatus = "empty" | "wip" | "done" | "late";
 export type DashboardColorMode = "status" | "deviation" | "girder";
 export interface DashboardFilters {
+  structureIds?: string[];
+  packageIds?: string[];
   kinds: DashboardKind[];
   items: ProgressV2ItemKey[];
   statuses: DashboardStatus[];
@@ -45,6 +47,9 @@ export const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
   station: null,
   girderTypes: [],
 };
+export function dashboardStructureId(row: DashboardRow): string {
+  return row.bridgeId ? `bridge:${row.bridgeId}` : `${row.kind}:${row.target.id}`;
+}
 export interface DashboardRow {
   id: string;
   componentId: string;
@@ -209,6 +214,8 @@ export function reconcileDashboardFilters(
   const bridgeIds = filters.bridgeIds.filter((id) => bridges.has(id));
   const types = new Set(rows.map((row) => row.girderType));
   const girderTypes = filters.girderTypes.filter((type) => types.has(type));
+  const structures = new Set(rows.map(dashboardStructureId));
+  const structureIds = filters.structureIds?.filter((id) => structures.has(id));
   const extent = dashboardStationExtent(rows);
   let station = filters.station;
   if (station) {
@@ -219,18 +226,24 @@ export function reconcileDashboardFilters(
       if (
         end > start ||
         (end === start &&
-          filterDashboardRows(rows, { ...filters, bridgeIds, girderTypes, station: [start, end] })
-            .length > 0)
+          filterDashboardRows(rows, {
+            ...filters,
+            bridgeIds,
+            girderTypes,
+            structureIds,
+            station: [start, end],
+          }).length > 0)
       ) {
         if (start !== station[0] || end !== station[1]) station = [start, end];
       } else station = null;
     }
   }
   return bridgeIds.length === filters.bridgeIds.length &&
+    structureIds?.length === filters.structureIds?.length &&
     girderTypes.length === filters.girderTypes.length &&
     station === filters.station
     ? filters
-    : { ...filters, bridgeIds, girderTypes, station };
+    : { ...filters, bridgeIds, girderTypes, structureIds, station };
 }
 
 /** Clip road quantities to the selected station interval; never mutate saved state. */
@@ -239,6 +252,13 @@ export function filterDashboardRows(
   filters: DashboardFilters,
 ): DashboardRow[] {
   const selected = rows.flatMap((row) => {
+    if (
+      filters.packageIds?.length &&
+      (!row.packageId || !filters.packageIds.includes(row.packageId))
+    )
+      return [];
+    if (filters.structureIds?.length && !filters.structureIds.includes(dashboardStructureId(row)))
+      return [];
     if (filters.kinds.length && !filters.kinds.includes(row.kind)) return [];
     if (filters.items.length && !filters.items.includes(row.key)) return [];
     if (filters.bridgeIds.length && (!row.bridgeId || !filters.bridgeIds.includes(row.bridgeId)))
@@ -524,6 +544,10 @@ export function dashboardMapView(
   const colors = stateColors(features, state);
   const statuses = dashboardComponentStatuses(rows);
   const indexes: number[] = [];
+  const details = new Map<
+    number,
+    { pct: number; planned: number; status: DashboardStatus; items: ProgressV2ItemKey[] }
+  >();
   const expression: unknown[] = ["match", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY]];
   const byTarget = new Map<string, DashboardRow[]>();
   const byApproach = new Map<string, DashboardRow[]>();
@@ -562,6 +586,12 @@ export function dashboardMapView(
     const pct = matched.reduce((sum, row) => sum + row.pct, 0) / matched.length;
     const plan = matched.reduce((sum, row) => sum + row.planned, 0) / matched.length;
     const status = statuses.get(matched[0].componentId) ?? dashboardStatus(pct, plan);
+    details.set(index, {
+      pct,
+      planned: plan,
+      status,
+      items: [...new Set(matched.map((row) => row.key))],
+    });
     const evaluation = evaluateProgress(pct, plan, true);
     const color =
       mode === "girder"
@@ -574,6 +604,7 @@ export function dashboardMapView(
   expression.push(PROGRESS_V2_COLORS.empty);
   return {
     indexes,
+    details,
     filter: indexes.length
       ? ["match", ["get", PROGRESS_DASHBOARD_INDEX_PROPERTY], indexes, true, false]
       : ["literal", false],

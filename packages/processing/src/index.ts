@@ -76,10 +76,13 @@ export {
   buildA5GridFromBboxSql,
   buildA5GridFromSourceSql,
   buildA5BinSql,
-  buildA5CompactSql,
-  buildA5ExpandSql,
-  buildA5ExpandCountSql,
+  a5CellsFromLayer,
+  a5CellsToFeatureCollection,
   a5RowsToFeatureCollection,
+  compactA5Cells,
+  expandA5Cells,
+  estimateA5ExpandCount,
+  migrateA5V0Hex,
   suggestA5Resolution,
   estimateA5CellCount,
   A5_MAX_TOOL_RES,
@@ -380,6 +383,7 @@ export {
   MAX_BROWSER_COG_CONVERSION_SAMPLES,
   type CogWasmCompression,
   type ConvertGeoTiffToCogOptions,
+  type ConvertRasterDataToCogOptions,
   type GeoTiffInfo,
 } from "./cog-convert";
 export {
@@ -462,11 +466,34 @@ export {
 export {
   INPUT_NODE_PORT,
   OUTPUT_NODE_PORT,
+  ITERATE_FEATURES_INPUT_PORT,
+  ITERATE_FEATURES_OUTPUT_FEATURE,
+  ITERATE_FEATURES_OUTPUT_INDEX,
+  ITERATE_FEATURES_OUTPUT_COUNT,
+  ITERATE_RASTERS_INPUT_PORT,
+  ITERATE_RASTERS_OUTPUT_RASTER,
+  ITERATE_RASTERS_OUTPUT_NAME,
+  ITERATE_RASTERS_OUTPUT_INDEX,
+  ITERATE_RASTERS_OUTPUT_COUNT,
+  COLLECT_RESULTS_INPUT_PORT,
+  COLLECT_RESULTS_OUTPUT_PORT,
+  COLLECT_RESULTS_OUTPUT_COUNT,
+  SWITCH_INPUT_PORT,
+  SWITCH_CONDITION_PORT,
+  SWITCH_TRUE_PORT,
+  SWITCH_FALSE_PORT,
+  MERGE_TRUE_PORT,
+  MERGE_FALSE_PORT,
+  MERGE_OUTPUT_PORT,
+  evaluateCondition,
+  switchSourceLayerId,
+  portsFor,
   graphToLinearSteps,
   portKindsCompatible,
   runModelGraph,
   topologicalOrder,
   validateModelGraph,
+  type ConditionEvaluationOptions,
   type DescriptorResolver,
   type ModelGraphIssue,
   type ModelGraphRunResult,
@@ -547,3 +574,42 @@ export {
   type RegionGrowingParams,
 } from "./obia";
 export { splitGeometryByArea, type AreaSplit } from "./split-by-area";
+
+export {
+  type WasmExecutionMode,
+  type WasmCapabilities,
+  type WasmRuntimeConfig,
+  type WasmDiagnostics,
+  detectSimdSupport,
+  detectSharedMemorySupport,
+  resetWasmCapabilitiesCache,
+  getWasmCapabilities,
+  resolveExecutionMode,
+} from "./wasm-capabilities";
+
+export {
+  setWasmRuntimeConfig,
+  getWasmRuntimeConfig,
+  resetWasmRuntimeConfig,
+  getWasmDiagnostics,
+} from "./wasm-config";
+
+export {
+  runWasmToolInBackground,
+  runParallelWasmTools,
+  releaseIdleWasmToolWorkers,
+  terminateAllWasmToolWorkers,
+  getWasmToolPoolCapacity,
+  getWasmToolWorkerPoolStats,
+  type WasmToolRequest,
+  type WasmToolResponse,
+} from "./wasm-tool-runner";
+
+export {
+  ALGORITHM_PROFILES,
+  auditAlgorithm,
+  isAlgorithmParallelizable,
+  isAlgorithmSimdEligible,
+  type AlgorithmParallelPattern,
+  type AlgorithmProfile,
+} from "./wasm-algorithm-audit";

@@ -239,11 +239,12 @@ Give it a directory meant for maps, not your home directory.
 | `add_vector_layer` | A large remote FlatGeobuf / GeoParquet / GeoJSON read in place. |
 | `add_raster_layer` | A Cloud Optimized GeoTIFF, with band, colormap, and rescale options. |
 | `add_tile_layer` | A raster XYZ tile template. |
+| `add_planetary_computer_layer` | Microsoft Planetary Computer imagery (Sentinel-2, Landsat, NAIP, DEMs) by collection id: one STAC item, or a date-range mosaic. Takes a render preset such as `ndvi`, or assets / band math with a rescale and colormap. Needs no tile URL or credentials. |
 | `add_tiles_layer` | PMTiles archives and vector tile services. |
 | `add_ogc_layer` | WMS and WMTS endpoints. |
 | `add_lidar_layer` | LAS/LAZ/COPC/EPT point clouds by URL. |
 | `add_spaceborne_lidar_layer` | ICESat-2 (ATL06, ATL08) or GEDI (L2A, L2B, L4A) footprints from a local HDF5 granule (needs `geolibre[spaceborne]`). |
-| `add_3d_tiles_layer` | OGC 3D Tiles tilesets, by URL or Cesium Ion asset id. |
+| `add_3d_tiles_layer` | OGC 3D Tiles tilesets, by URL or Cesium Ion asset id, and ArcGIS I3S scene layers (`.../SceneServer/layers/<n>`). |
 | `add_cesium_ion_layer` | Cesium Ion assets (tileset or imagery) by id; rendered by the 3D globe only. |
 | `add_czml_layer` | A CZML (Cesium Language) dynamic 3D scene, by URL or inline packets; rendered by the 3D globe only. |
 | `add_cesium_kml_layer` | Native globe KML/KMZ from a URL, inline XML, or KMZ data URL, preserving document styles and overlays. |
@@ -260,6 +261,7 @@ Give it a directory meant for maps, not your home directory.
 | `classify_layer` | Build a graduated choropleth from a numeric column. |
 | `list_layer_properties` | List a layer's feature properties with sample values. |
 | `set_layer_filter` | Hide the features that do not match a boolean MapLibre expression (the saved filter Select by Expression → Filter layer writes); omit the expression to clear it. |
+| `set_floor_picker` | Link a multi-floor layer (indoor rooms with a `level` field) to the app's on-map floor picker and choose the floor shown, or that floor and the ones below it; `field: null` unlinks. |
 | `set_labels` | Label features from a property or a text expression, with size, colors, halo, zoom range, anchor, and the rarer settings under `options`. Settings left out keep their values. |
 
 Layers are addressed by id **or** by display name, so a client can work from
@@ -297,13 +299,17 @@ is dropped or rewritten.
 | Tool | What it does |
 | --- | --- |
 | `live_status` | Report whether a GeoLibre Desktop window is listening. |
-| `live_list_layers` | List the open map's layers. |
-| `live_fly_to` / `live_fit_bounds` / `live_zoom_to_layer` | Move the camera. |
+| `live_list_layers` / `live_get_layer` | List the open map's layers or fetch one layer's metadata by id. |
+| `live_get_view` / `live_set_view` / `live_fly_to` / `live_fit_bounds` / `live_zoom_to_layer` | Read or move the camera. |
 | `live_set_basemap` | Switch the basemap. |
-| `live_add_geojson` / `live_remove_layer` | Add or remove a layer. |
+| `live_add_geojson` / `live_add_marker` / `live_add_markers` / `live_remove_layer` | Add GeoJSON or point markers, or remove a layer. |
+| `live_get_layer_features` / `live_get_selected_features` / `live_get_drawn_features` / `live_identify` | Read layer, selected, or sketched GeoJSON features, or query rendered features at `(lng, lat)`. |
+| `live_set_identify` / `live_get_identify` / `live_set_control_visible` | Toggle click-to-identify or show/hide a built-in map control or panel. |
 | `live_set_visibility` / `live_set_opacity` / `live_set_style` | Change a layer. |
-| `live_list_algorithms` | List the app's processing algorithms and their parameters, optionally filtered by `query`. |
-| `live_run_algorithm` | Run an algorithm on the open map; returns its logs and the ids of the result layers it added. |
+| `live_list_algorithms` / `live_run_algorithm` | List or run client-side processing algorithms on the open map. |
+| `live_list_whitebox_tools` / `live_run_whitebox_tool` | List or run bundled Whitebox/WASM tools on the open map. |
+| `live_run_model_builder` | Execute a serialized Model Builder graph on the open map. |
+| `live_to_image` | Capture the current viewport as a PNG data URL or save a `.png` in the workspace. |
 
 Processing is live-only. The algorithm catalog and the engines that run it
 (Turf.js, DuckDB-WASM) live in the app, so there is nothing a file tool could

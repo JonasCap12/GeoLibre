@@ -52,6 +52,10 @@ m.add_raster(source, name="Raster", bands=None, colormap=None, rescale=None,
 m.add_tile_layer(url, name, tile_size=256, attribution=None)
 m.add_ee_layer(ee_object, vis_params=None, name="Earth Engine", shown=True,
                opacity=1.0)
+m.add_planetary_computer(collection, item=None, name=None, datetime=None,
+                         bbox=None, preset=None, assets=None, expression=None,
+                         rescale=None, colormap=None, max_cloud_cover=None,
+                         visible=True, opacity=1.0)   # Sentinel-2, Landsat, NAIP, DEMs
 m.add_pmtiles(url, name, tile_type="vector", source_layers=None)
 m.add_vector_tiles(url, name, source_layers=None)
 m.add_wms(endpoint, layers, name, version="1.1.1", crs=None, bounds=None)
@@ -67,7 +71,7 @@ m.point_cloud_annotations()                           # labels, instances, class
 m.set_point_cloud_classes([{"code": 64, "name": "Car", "color": "#e11d48"}])  # custom classes
 m.prelabel_point_cloud(url, "local.copc.laz", tool="ground")  # Whitebox pre-labels -> project labels
 m.write_labeled_point_cloud(url, "local.copc.laz", "labeled.laz")  # full file with labels applied
-m.add_3d_tiles(url, name, altitude_offset=0)          # or ion_asset_id=96188 (3D globe only)
+m.add_3d_tiles(url, name, altitude_offset=0)          # tileset.json or .../SceneServer/layers/<n>; or ion_asset_id=96188 (3D globe only)
 m.add_cesium_ion(asset_id, name, kind="3d-tiles")     # kind="imagery" for an imagery asset
 m.add_czml(url, name)                                  # or data=[...packets] (3D globe only)
 m.add_video(...)
@@ -76,6 +80,16 @@ m.add_video(...)
 Every `add_*` returns the new layer's **id** and accepts style keyword
 arguments inline (`m.add_geojson(url, name="Roads", strokeColor="#ef4444",
 strokeWidth=3)`).
+
+`add_planetary_computer` adds Microsoft Planetary Computer imagery by
+collection id, with no credentials and no network access while authoring. With
+`item` it draws one STAC item; without it, a mosaic of every item matching
+`datetime` (`"2024-06-01/2024-08-31"` or a `(start, end)` pair) and
+`max_cloud_cover`. Pick a `preset` (`"true-color"`, `"false-color"`, `"ndvi"`,
+...; see `add_planetary_computer_layer` in [mcp-tools.md](mcp-tools.md)) or
+give `assets` / `expression` with `rescale=(min, max)` and `colormap`. The app's
+Planetary Computer panel builds the layer when the project opens (MapLibre
+renderer only) and can restyle it.
 
 `add_ee_layer` accepts an authenticated Earth Engine Image, ImageCollection,
 FeatureCollection, Feature, or Geometry. Initialize the Earth Engine Python API
@@ -121,7 +135,10 @@ every visible layer, `m.set_identify("Sites")` on one, `m.set_identify(["Sites",
 "Roads"])` on only those, `m.set_identify(None)` turns it off. Hover tips pause
 while it is armed. `m.show_control("bookmark")`,
 `m.show_control("search")` and `m.hide_control("globe")` toggle panels and map
-controls, and `m.set_projection("mercator")` draws a flat map instead of a globe.
+controls; `m.show_control("measure", collapsed=True, distance_unit="feet",
+area_unit="acres")` shows Measure as just its ruler button (tool idle) in US
+units, and `collapsed=True` does the same for `"minimap"`.
+`m.set_projection("mercator")` draws a flat map instead of a globe.
 `save_project`, `to_project` and `to_html` keep the Identify and control choices
 (the project's `interaction` block).
 
@@ -277,6 +294,7 @@ These write the project, so they work headless too:
 ```python
 m.set_labels("Cities", "name", size=14, halo_width=2, anchor="top")
 m.set_layer_filter("Cities", [">=", ["get", "pop"], 100000])   # None clears
+m.set_floor_picker("Rooms", "level", "0", mode="below")  # on-map floor picker
 m.set_plugin_state("maplibre-gl-graticule", {...})  # a plugin's own saved state
 
 m.set_story_map(title="A tour", theme="light", start_slide="global")

@@ -42,6 +42,7 @@ export const WEB_SERVICE_PLUGIN_IDS = [
   "geolibre-us-federal-gis",
   "geolibre-us-state-gis",
   "geolibre-us-local-gis",
+  "geolibre-india-gis",
   "maplibre-gl-socrata",
   "maplibre-gl-ckan",
   "geolibre-stac-catalogs",
@@ -55,6 +56,7 @@ export const WEB_SERVICE_PLUGIN_IDS = [
   "geolibre-sentinel2-explorer",
   "geolibre-ocean-data-platform",
   "geolibre-dynamical",
+  "geolibre-jaxa-earth",
   "maplibre-gl-geolens",
   "maplibre-gl-usgs-lidar",
 ] as const;

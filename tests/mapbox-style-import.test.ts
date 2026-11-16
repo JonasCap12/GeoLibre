@@ -407,6 +407,110 @@ describe("parseMapboxStyle round-trips exported symbology", () => {
     assert.equal(result.extrusionBase, 5);
   });
 
+  it("recovers a data-driven extrusion base property, scale, and offset", () => {
+    const { style: result } = roundTrip(
+      style({
+        extrusionEnabled: true,
+        extrusionBase: 2,
+        extrusionBaseProperty: "level",
+        extrusionBaseScale: 3.5,
+      }),
+      polygons(),
+    );
+    assert.equal(result.extrusionBase, 2);
+    assert.equal(result.extrusionBaseProperty, "level");
+    assert.equal(result.extrusionBaseScale, 3.5);
+  });
+
+  it("round-trips a floor height on a data-driven base", () => {
+    const { style: result } = roundTrip(
+      style({
+        extrusionEnabled: true,
+        extrusionBase: 5,
+        extrusionBaseProperty: "level",
+        extrusionBaseScale: 5,
+        extrusionFloorHeight: 4,
+      }),
+      polygons(),
+    );
+    assert.equal(result.extrusionFloorHeight, 4);
+    assert.equal(result.extrusionBaseProperty, "level");
+    assert.equal(result.extrusionBaseScale, 5);
+    assert.equal(result.extrusionBase, 5);
+  });
+
+  it("keeps base expressions that only resemble the exporter's shape", () => {
+    const extrusion = (base: unknown) =>
+      parseMapboxStyle({
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: "floors",
+            type: "fill-extrusion",
+            source: "s",
+            paint: { "fill-extrusion-base": base },
+          },
+        ],
+      }).style;
+    // A non-zero fallback and an object-qualified `get` change the meaning,
+    // so they stay expressions rather than becoming a base property.
+    for (const base of [
+      ["*", ["to-number", ["get", "level"], 10], 3],
+      ["*", ["to-number", ["get", "level", ["properties"]], 0], 3],
+    ]) {
+      const result = extrusion(base);
+      assert.equal(result.extrusionBaseProperty, "");
+      assert.deepEqual(JSON.parse(result.extrusionBaseExpression ?? ""), base);
+    }
+    // The exporter's shape clears a competing advanced base; a flat base
+    // clears both.
+    const property = extrusion(["*", ["to-number", ["get", "level"], 0], 3]);
+    assert.equal(property.extrusionBaseProperty, "level");
+    assert.equal(property.extrusionBaseExpression, "");
+    const flat = extrusion(4);
+    assert.equal(flat.extrusionBase, 4);
+    assert.equal(flat.extrusionBaseProperty, "");
+    assert.equal(flat.extrusionBaseExpression, "");
+  });
+
+  it("does not wake dormant height or colour expressions for an advanced base", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      sources: {},
+      layers: [
+        {
+          id: "floors",
+          type: "fill-extrusion",
+          source: "s",
+          paint: {
+            "fill-extrusion-height": ["*", ["to-number", ["get", "top"], 0], 1],
+            "fill-extrusion-base": ["match", ["get", "floor"], "B1", 0, 10],
+          },
+        },
+      ],
+    }).style;
+    assert.equal(result.extrusionAdvancedStyleEnabled, true);
+    assert.equal(result.extrusionHeightProperty, "top");
+    assert.equal(result.extrusionHeightExpression, "");
+    assert.equal(result.extrusionColorExpression, "");
+  });
+
+  it("round-trips an advanced extrusion base expression", () => {
+    const expression = ["match", ["get", "floor"], "B1", 0, 10];
+    const { style: result } = roundTrip(
+      style({
+        extrusionEnabled: true,
+        extrusionAdvancedStyleEnabled: true,
+        extrusionBaseExpression: JSON.stringify(expression),
+      }),
+      polygons(),
+    );
+    assert.equal(result.extrusionAdvancedStyleEnabled, true);
+    assert.deepEqual(JSON.parse(result.extrusionBaseExpression ?? ""), expression);
+    assert.equal(result.extrusionBaseProperty, "");
+  });
+
   it("does not write a line-only renderer's stroke fallback into fillColor", () => {
     const original = style({
       vectorStyleMode: "categorized",
@@ -513,6 +617,688 @@ describe("parseMapboxStyle imports hand-written styles", () => {
     assert.equal(result.style.strokeColor, "#004400");
     assert.equal(result.style.strokeWidth, 4);
     assert.equal(result.style.vectorStyleMode, "single");
+  });
+
+  it("imports line opacity, dashes and blur, and names the line paint the layer style cannot hold", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "rivers",
+          type: "line",
+          source: "s",
+          paint: {
+            "line-color": "#8be6ff",
+            "line-width": 1.2,
+            "line-opacity": 0.6,
+            "line-dasharray": [2, 1],
+            "line-blur": 3,
+            "line-gap-width": 2,
+            "line-offset": 4,
+            "line-translate": [2, -2],
+            "line-pattern": "hatch",
+            "line-gradient": ["interpolate", ["linear"], ["line-progress"], 0, "blue", 1, "red"],
+          },
+        },
+      ],
+    });
+    assert.equal(result.style.strokeColor, "#8be6ff");
+    assert.equal(result.style.strokeWidth, 1.2);
+    assert.equal(result.style.strokeOpacity, 0.6);
+    assert.deepEqual(result.style.strokeDash, [2, 1]);
+    assert.equal(result.style.strokeBlur, 3);
+    // The rest is reported, one note per property.
+    assert.deepEqual(result.warnings, [
+      "The line gap width (a casing around a gap) cannot be represented; the lines import as single strokes.",
+      "The line offset cannot be represented; the lines import centered on the geometry.",
+      "The line translation cannot be represented; the lines import in place on the geometry.",
+      "The line pattern image cannot be represented; the lines import as a flat color.",
+      "The line gradient cannot be represented; the lines import with a single flat color.",
+    ]);
+  });
+
+  it("resets line opacity, dashes and blur a line layer leaves at the spec default", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [{ id: "rivers", type: "line", paint: { "line-color": "#8be6ff" } }],
+    });
+    const imported = applyMapboxStyleImport(
+      style({ strokeOpacity: 0.3, strokeDash: [4, 2], strokeBlur: 5 }),
+      result,
+    );
+    assert.equal(imported.strokeOpacity, 1);
+    assert.deepEqual(imported.strokeDash, []);
+    assert.equal(imported.strokeBlur, 0);
+  });
+
+  it("reads a literal-wrapped dash pattern and an empty one as solid", () => {
+    const read = (dash: unknown) =>
+      parseMapboxStyle({
+        version: 8,
+        layers: [{ id: "l", type: "line", paint: { "line-dasharray": dash } }],
+      });
+    assert.deepEqual(read(["literal", [3, 1, 1, 1]]).style.strokeDash, [3, 1, 1, 1]);
+    assert.deepEqual(read([]).style.strokeDash, []);
+    assert.deepEqual(read(["literal", []]).style.strokeDash, []);
+  });
+
+  it("reports a zoom-driven or malformed dash pattern and keeps the layer's own", () => {
+    const zoomed = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "l",
+          type: "line",
+          paint: {
+            "line-dasharray": ["step", ["zoom"], ["literal", [1, 1]], 10, ["literal", [3, 1]]],
+          },
+        },
+      ],
+    });
+    assert.equal(zoomed.style.strokeDash, undefined);
+    assert.deepEqual(zoomed.warnings, [
+      "The line dash pattern changes with zoom, which the layer style cannot hold; the lines keep their current dash pattern.",
+    ]);
+    for (const dash of [[-1, 2], [0, 0], "2 1", ["literal", ["a"]]]) {
+      const result = parseMapboxStyle({
+        version: 8,
+        layers: [{ id: "l", type: "line", paint: { "line-dasharray": dash } }],
+      });
+      assert.equal(result.style.strokeDash, undefined, JSON.stringify(dash));
+      assert.deepEqual(result.warnings, [
+        "The line dash pattern is not a list of non-negative lengths and was not applied.",
+      ]);
+    }
+  });
+
+  it("reports an expression-valued line translation", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "rivers",
+          type: "line",
+          paint: {
+            "line-translate": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              5,
+              ["literal", [0, 0]],
+              10,
+              ["literal", [3, 3]],
+            ],
+          },
+        },
+      ],
+    });
+    assert.deepEqual(result.warnings, [
+      "The line translation cannot be represented; the lines import in place on the geometry.",
+    ]);
+  });
+
+  it("does not report line paint left at its spec default", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "rivers",
+          type: "line",
+          source: "s",
+          paint: {
+            "line-color": "#8be6ff",
+            "line-opacity": 1,
+            "line-blur": 0,
+            "line-gap-width": 0,
+            "line-offset": 0,
+            "line-translate": [0, 0],
+          },
+        },
+      ],
+    });
+    assert.deepEqual(result.warnings, []);
+  });
+
+  it("does not report spec defaults wrapped in a literal", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "rivers",
+          type: "line",
+          paint: {
+            "line-opacity": ["literal", 1],
+            "line-blur": ["literal", 0],
+            "line-gap-width": ["literal", 0],
+            "line-offset": ["literal", 0],
+            "line-translate": ["literal", [0, 0]],
+          },
+        },
+      ],
+    });
+    assert.deepEqual(result.warnings, []);
+  });
+
+  it("reports a data-driven or negative line blur and reads the simplestyle line opacity", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "rivers",
+          type: "line",
+          source: "s",
+          paint: {
+            "line-color": "#8be6ff",
+            // The shape the exporter writes for simplestyle `stroke-opacity`.
+            "line-opacity": ["to-number", ["coalesce", ["get", "stroke-opacity"], 0.7], 0.7],
+            "line-blur": ["get", "blur"],
+          },
+        },
+      ],
+    });
+    assert.equal(result.style.strokeOpacity, 0.7);
+    assert.equal(result.style.simpleStyleEnabled, true);
+    assert.equal(result.style.strokeBlur, undefined);
+    assert.deepEqual(result.warnings, [
+      "The line blur varies by zoom or by feature, which the layer style cannot hold; the lines keep their current blur.",
+    ]);
+    const negative = parseMapboxStyle({
+      version: 8,
+      layers: [{ id: "l", type: "line", paint: { "line-blur": -1 } }],
+    });
+    assert.deepEqual(negative.warnings, ["The line blur is negative and was not applied."]);
+  });
+
+  it("round-trips an exported line layer without line paint warnings", () => {
+    const { warnings } = roundTrip(style({ strokeColor: "#336699", strokeWidth: 3 }), lines());
+    assert.deepEqual(warnings, []);
+  });
+
+  it("round-trips stroke opacity, dashes and blur through a Mapbox GL export", () => {
+    for (const simpleStyleEnabled of [false, true]) {
+      for (const [name, geojson] of [
+        ["lines", lines()],
+        ["polygons", polygons()],
+        ["points", points()],
+      ] as const) {
+        const source = style({
+          strokeOpacity: 0.4,
+          strokeDash: [4, 2, 1, 2],
+          strokeBlur: 2,
+          simpleStyleEnabled,
+        });
+        const { style: imported, warnings } = roundTrip(source, geojson);
+        const label = `${name}, simpleStyleEnabled=${simpleStyleEnabled}`;
+        assert.deepEqual(warnings, [], label);
+        assert.equal(imported.strokeOpacity, 0.4, label);
+        // Circle strokes have no dash or blur, so only lines carry them.
+        if (name !== "points") {
+          assert.deepEqual(imported.strokeDash, [4, 2, 1, 2], label);
+          assert.equal(imported.strokeBlur, 2, label);
+        }
+      }
+    }
+  });
+
+  it("reads only a stroke-opacity lookup as the line opacity", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "l",
+          type: "line",
+          paint: { "line-opacity": ["to-number", ["coalesce", ["get", "stroke-width"], 0.5], 0.5] },
+        },
+      ],
+    });
+    assert.equal(result.style.strokeOpacity, undefined);
+    assert.deepEqual(result.warnings, [
+      "The line opacity varies by zoom or by feature, which the layer style cannot hold; the lines keep their current stroke opacity.",
+    ]);
+  });
+
+  it("reports a point outline opacity beside lines that cannot be one number", () => {
+    for (const circleStrokeOpacity of [["get", "alpha"], 5]) {
+      const result = parseMapboxStyle({
+        version: 8,
+        layers: [
+          { id: "l", type: "line", paint: { "line-opacity": 0.5 } },
+          { id: "c", type: "circle", paint: { "circle-stroke-opacity": circleStrokeOpacity } },
+        ],
+      });
+      assert.deepEqual(
+        result.warnings.filter((warning) => warning.includes("point outline")),
+        [
+          "The point outline opacity could not be read as one number between 0 and 1; the point outlines import at the line opacity.",
+        ],
+        JSON.stringify(circleStrokeOpacity),
+      );
+    }
+  });
+
+  it("says when point outlines ask for another opacity than the lines", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "l", type: "line", paint: { "line-opacity": 0.5 } },
+        { id: "c", type: "circle", paint: { "circle-stroke-opacity": 0.2 } },
+      ],
+    });
+    assert.equal(result.style.strokeOpacity, 0.5);
+    assert.ok(
+      result.warnings.includes(
+        "The point outlines use a different opacity from the lines, which the layer style cannot hold; both import at the line opacity.",
+      ),
+      JSON.stringify(result.warnings),
+    );
+  });
+
+  it("reports a zoom- or data-driven line opacity", () => {
+    for (const lineOpacity of [
+      {
+        stops: [
+          [0, 0.2],
+          [10, 1],
+        ],
+      },
+      ["interpolate", ["linear"], ["zoom"], 0, 0.2, 10, 1],
+      ["get", "opacity"],
+      // Author expressions that read `stroke-opacity` but are not the simplestyle lookup.
+      ["case", ["has", "stroke-opacity"], ["get", "stroke-opacity"], 0.4],
+      ["interpolate", ["linear"], ["get", "stroke-opacity"], 0, 0.2, 1, 1],
+    ]) {
+      const result = parseMapboxStyle({
+        version: 8,
+        layers: [{ id: "rivers", type: "line", paint: { "line-opacity": lineOpacity } }],
+      });
+      assert.equal(result.style.strokeOpacity, undefined);
+      assert.deepEqual(result.warnings, [
+        "The line opacity varies by zoom or by feature, which the layer style cannot hold; the lines keep their current stroke opacity.",
+      ]);
+    }
+  });
+
+  it("reads the layer opacity a semi-transparent line export folds in as the stroke opacity", () => {
+    // The exporter folds the layer opacity into `line-opacity`, as it does into
+    // `fill-opacity`; the import reads the product back into the layer style.
+    for (const simpleStyleEnabled of [false, true]) {
+      const exported = buildMapboxStyle(
+        layer({
+          style: style({ strokeColor: "#336699", strokeOpacity: 0.8, simpleStyleEnabled }),
+          opacity: 0.5,
+        }),
+        lines(),
+      );
+      const { style: patch, warnings } = parseMapboxStyle(exported.style);
+      assert.equal(patch.strokeOpacity, 0.4, `simpleStyleEnabled=${simpleStyleEnabled}`);
+      assert.deepEqual(warnings, [], `simpleStyleEnabled=${simpleStyleEnabled}`);
+    }
+  });
+
+  it("checks every drawn class of a combined line stack and names each property once", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "minor",
+          type: "line",
+          filter: ["==", ["get", "rank"], "minor"],
+          paint: { "line-color": "#0b3a57", "line-width": 1, "line-blur": 2, "line-offset": 1 },
+        },
+        {
+          id: "major",
+          type: "line",
+          filter: ["==", ["get", "rank"], "major"],
+          paint: {
+            "line-color": "#8be6ff",
+            "line-width": 3,
+            "line-blur": 1,
+            "line-dasharray": [2, 1],
+            "line-offset": 2,
+          },
+        },
+        {
+          id: "hidden",
+          type: "line",
+          filter: ["==", ["get", "rank"], "other"],
+          layout: { visibility: "none" },
+          paint: { "line-color": "#ffffff", "line-gap-width": 3 },
+        },
+      ],
+    });
+    // The stack became rules, so both drawn classes are read; the hidden one is not.
+    assert.equal(result.style.vectorStyleMode, "rule-based");
+    // Dash and blur come from the bottom-most class, and the difference is named.
+    assert.deepEqual(result.style.strokeDash, []);
+    assert.equal(result.style.strokeBlur, 2);
+    const lineNotes = result.warnings.filter((warning) =>
+      /^The (line|stacked line) /.test(warning),
+    );
+    assert.deepEqual(lineNotes, [
+      "The stacked line layers use different dash patterns, which the layer style cannot hold; the lines import with the bottom-most layer's pattern.",
+      "The stacked line layers use different blurs, which the layer style cannot hold; the lines import with the bottom-most layer's blur.",
+      "The line offset cannot be represented; the lines import centered on the geometry.",
+    ]);
+  });
+
+  it("checks only the line layer it imports when unfiltered layers are not combined", () => {
+    // Without filters the layers do not combine into rules: only the first drawn line is
+    // imported, so the second one's dashes neither apply nor are reported.
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "casing", type: "line", paint: { "line-color": "#0b3a57", "line-width": 6 } },
+        {
+          id: "stroke",
+          type: "line",
+          paint: { "line-color": "#8be6ff", "line-width": 1, "line-dasharray": [2, 1] },
+        },
+      ],
+    });
+    assert.equal(result.style.strokeColor, "#0b3a57");
+    assert.deepEqual(result.style.strokeDash, []);
+    assert.equal(
+      result.warnings.some((warning) => warning.includes("dash")),
+      false,
+    );
+  });
+
+  it("reports a malformed or out-of-range line opacity as unreadable, not as zoom- or data-driven", () => {
+    for (const lineOpacity of [
+      "0.5",
+      true,
+      {},
+      ["literal", "bad"],
+      ["literal", []],
+      // A bare array is not an expression: it has no operator name.
+      [],
+      [1, 2],
+      1.2,
+      -0.2,
+      // The simplestyle lookup scaled by something that is not a number.
+      ["*", ["to-number", ["coalesce", ["get", "stroke-opacity"], 1], 1], "0.5"],
+    ]) {
+      const result = parseMapboxStyle({
+        version: 8,
+        layers: [{ id: "rivers", type: "line", paint: { "line-opacity": lineOpacity } }],
+      });
+      assert.equal(result.style.strokeOpacity, undefined, JSON.stringify(lineOpacity));
+      assert.deepEqual(result.warnings, [
+        "The line opacity is not a valid number between 0 and 1 and was not applied; the lines keep their current stroke opacity.",
+      ]);
+    }
+  });
+
+  it("reads the line layer a hidden-only style imports, and skips hidden layers beside drawn ones", () => {
+    const dashed = { "line-color": "#8be6ff", "line-dasharray": [2, 1] };
+    // Every layer hidden: the importer still reads this line, dashes included.
+    const hiddenOnly = parseMapboxStyle({
+      version: 8,
+      layers: [{ id: "rivers", type: "line", layout: { visibility: "none" }, paint: dashed }],
+    });
+    assert.deepEqual(hiddenOnly.style.strokeDash, [2, 1]);
+    // A hidden dashed line beside a drawn solid one is not imported.
+    const besideDrawn = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "solid", type: "line", paint: { "line-color": "#336699" } },
+        { id: "rivers", type: "line", layout: { visibility: "none" }, paint: dashed },
+      ],
+    });
+    assert.deepEqual(besideDrawn.style.strokeDash, []);
+  });
+
+  it("names the opacity once when stacked line classes differ, and keeps one shared value", () => {
+    const opacityPaint = (color: string, opacity: unknown) =>
+      opacity === undefined
+        ? { "line-color": color }
+        : { "line-color": color, "line-opacity": opacity };
+    const stack = (first: unknown, second: unknown) =>
+      parseMapboxStyle({
+        version: 8,
+        layers: [
+          {
+            id: "minor",
+            type: "line",
+            filter: ["==", ["get", "rank"], "minor"],
+            paint: opacityPaint("#0b3a57", first),
+          },
+          {
+            id: "major",
+            type: "line",
+            filter: ["==", ["get", "rank"], "major"],
+            paint: opacityPaint("#8be6ff", second),
+          },
+        ],
+      });
+    const notes = (result: ReturnType<typeof stack>) =>
+      result.warnings.filter((warning) => warning.includes("opacit"));
+    const mixed = [
+      "The stacked line layers use different opacities, which the layer style cannot hold; the lines import at the bottom-most layer's opacity.",
+    ];
+    assert.deepEqual(notes(stack(0.5, 0.6)), mixed);
+    assert.equal(stack(0.5, 0.6).style.strokeOpacity, 0.5);
+    // An opaque class beside a translucent one is mixed too, whether its opacity is 1 or unset.
+    assert.deepEqual(notes(stack(1, 0.5)), mixed);
+    assert.deepEqual(notes(stack(undefined, 0.5)), mixed);
+    // A data-driven class beside a flat one keeps the more specific note.
+    assert.deepEqual(notes(stack(["get", "alpha"], 0.5)), [
+      "The line opacity varies by zoom or by feature, which the layer style cannot hold; the lines keep their current stroke opacity.",
+    ]);
+    // When the imported (bottom-most) class applied and another class cannot
+    // be read, the note says which value was used, not that none was.
+    assert.deepEqual(notes(stack(0.5, ["get", "alpha"])), mixed);
+    // The same when the bottom-most class leaves the opacity unset: it resets
+    // to opaque, so the stack is mixed rather than kept.
+    assert.deepEqual(notes(stack(undefined, ["get", "alpha"])), mixed);
+    assert.equal(stack(0.5, ["get", "alpha"]).style.strokeOpacity, 0.5);
+    // A shared translucent opacity imports with nothing to report.
+    assert.deepEqual(notes(stack(0.5, 0.5)), []);
+    assert.equal(stack(0.5, 0.5).style.strokeOpacity, 0.5);
+  });
+
+  it("does not report the line opacity the exporter writes for simplestyle", () => {
+    const { warnings } = roundTrip(
+      style({ strokeColor: "#336699", strokeWidth: 3, simpleStyleEnabled: true }),
+      lines(),
+    );
+    assert.equal(
+      warnings.some((warning) => warning.startsWith("The line opacity")),
+      false,
+    );
+  });
+
+  it("turns simplestyle on and reads the base values of a simplestyle export", () => {
+    // The target layer has simplestyle off (DEFAULT_LAYER_STYLE), so without the
+    // flag the per-feature colors, widths and opacities would not apply (#3351).
+    const source = style({
+      fillColor: "#aa3300",
+      strokeColor: "#336699",
+      strokeWidth: 3,
+      fillOpacity: 0.4,
+      simpleStyleEnabled: true,
+    });
+    for (const [name, geojson] of [
+      ["points", points()],
+      ["lines", lines()],
+      ["polygons", polygons()],
+    ] as const) {
+      const { style: imported, warnings } = roundTrip(source, geojson);
+      assert.equal(imported.simpleStyleEnabled, true, name);
+      assert.deepEqual(warnings, [], name);
+      assert.equal(imported.strokeWidth, 3, name);
+      assert.equal(imported.strokeColor, "#336699", name);
+      if (name !== "lines") {
+        assert.equal(imported.fillColor, "#aa3300", name);
+        assert.equal(imported.fillOpacity, 0.4, name);
+      }
+    }
+  });
+
+  it("folds the layer opacity into a simplestyle fill opacity like a flat one", () => {
+    const exported = buildMapboxStyle(
+      layer({ style: style({ fillOpacity: 0.8, simpleStyleEnabled: true }), opacity: 0.5 }),
+      polygons(),
+    );
+    const { style: patch } = parseMapboxStyle(exported.style);
+    assert.equal(patch.fillOpacity, 0.4);
+  });
+
+  it("does not turn simplestyle on for a style without simplestyle lookups", () => {
+    const { style: imported } = roundTrip(style({ strokeColor: "#336699" }), lines());
+    assert.equal(imported.simpleStyleEnabled, DEFAULT_LAYER_STYLE.simpleStyleEnabled);
+    const external = parseMapboxStyle({
+      version: 8,
+      layers: [
+        // A coalesce over a property that is not a simplestyle key.
+        { id: "l", type: "line", paint: { "line-color": ["coalesce", ["get", "colour"], "#000"] } },
+      ],
+    });
+    assert.equal(external.style.simpleStyleEnabled, undefined);
+  });
+
+  it("turns simplestyle on for a hidden-only style and ignores a hidden class beside drawn ones", () => {
+    const lookup = ["coalesce", ["get", "stroke"], "#112233"];
+    const hiddenOnly = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "l", type: "line", layout: { visibility: "none" }, paint: { "line-color": lookup } },
+      ],
+    });
+    assert.equal(hiddenOnly.style.simpleStyleEnabled, true);
+    const hiddenBesideDrawn = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "f", type: "fill", paint: { "fill-color": "#ffffff" } },
+        { id: "l", type: "line", layout: { visibility: "none" }, paint: { "line-color": lookup } },
+      ],
+    });
+    assert.equal(hiddenBesideDrawn.style.simpleStyleEnabled, undefined);
+  });
+
+  it("does not read an opacity fold on a width, and rejects a folded opacity above 1", () => {
+    const lookup = (key: string, base: number) => [
+      "to-number",
+      ["coalesce", ["get", key], base],
+      base,
+    ];
+    const width = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "l", type: "line", paint: { "line-width": ["*", lookup("stroke-width", 2), 1.5] } },
+      ],
+    });
+    assert.equal(width.style.strokeWidth, undefined);
+    assert.deepEqual(width.warnings, [
+      "A line width expression could not be read; the layer keeps its current stroke width.",
+    ]);
+    const opacity = parseMapboxStyle({
+      version: 8,
+      layers: [
+        { id: "f", type: "fill", paint: { "fill-opacity": ["*", lookup("fill-opacity", 1), 3] } },
+      ],
+    });
+    assert.equal(opacity.style.fillOpacity, undefined);
+    assert.deepEqual(opacity.warnings, [
+      "The fill opacity is not between 0 and 1 and was not applied; the layer keeps its current fill opacity.",
+    ]);
+  });
+
+  it("rejects a flat fill opacity above 1 and reports a simplestyle lookup on a radius", () => {
+    const flat = parseMapboxStyle({
+      version: 8,
+      layers: [{ id: "f", type: "fill", paint: { "fill-opacity": 1.5 } }],
+    });
+    assert.equal(flat.style.fillOpacity, undefined);
+    assert.deepEqual(flat.warnings, [
+      "The fill opacity is not between 0 and 1 and was not applied; the layer keeps its current fill opacity.",
+    ]);
+    const lookup = ["to-number", ["coalesce", ["get", "stroke-width"], 3], 3];
+    const circle = parseMapboxStyle({
+      version: 8,
+      layers: [{ id: "p", type: "circle", paint: { "circle-radius": lookup } }],
+    });
+    assert.equal(circle.style.circleRadius, undefined);
+    assert.ok(
+      circle.warnings.some((w) => /circle radius is data-driven/.test(w)),
+      JSON.stringify(circle.warnings),
+    );
+    const heat = parseMapboxStyle({
+      version: 8,
+      layers: [{ id: "h", type: "heatmap", paint: { "heatmap-radius": lookup } }],
+    });
+    assert.equal(heat.style.heatmapRadius, undefined);
+    assert.ok(
+      heat.warnings.some((w) => /heatmap radius is data-driven/.test(w)),
+      JSON.stringify(heat.warnings),
+    );
+  });
+
+  it("recognizes every simplestyle lookup the exporter writes into paint the import reads", () => {
+    // A drift guard for the importer's list of paint properties: each property
+    // a simplestyle export wraps in a lookup, taken alone, turns the flag on.
+    const checked = new Set<string>();
+    for (const geojson of [points(), lines(), polygons()]) {
+      const exported = buildMapboxStyle(
+        layer({ style: style({ simpleStyleEnabled: true }) }),
+        geojson,
+      );
+      for (const styleLayer of exported.style.layers) {
+        const paint = (styleLayer as { paint?: Record<string, unknown> }).paint ?? {};
+        for (const [property, value] of Object.entries(paint)) {
+          if (!JSON.stringify(value).includes('["get"')) continue;
+          checked.add(property);
+          const alone = parseMapboxStyle({
+            version: 8,
+            layers: [{ id: "x", type: styleLayer.type, paint: { [property]: value } }],
+          });
+          assert.equal(alone.style.simpleStyleEnabled, true, `${styleLayer.type} ${property}`);
+        }
+      }
+    }
+    assert.ok(checked.has("line-width") && checked.has("circle-color"), [...checked].join());
+  });
+
+  it("turns simplestyle on only for lookups in paint the import reads", () => {
+    const blurOnly = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "l",
+          type: "line",
+          paint: {
+            "line-color": "#112233",
+            "line-blur": ["to-number", ["coalesce", ["get", "stroke-width"], 1], 1],
+          },
+        },
+      ],
+    });
+    assert.equal(blurOnly.style.simpleStyleEnabled, undefined);
+  });
+
+  it("turns simplestyle on for a lookup in any drawn class of a combined stack", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      layers: [
+        {
+          id: "minor",
+          type: "line",
+          filter: ["==", ["get", "rank"], "minor"],
+          paint: { "line-color": "#0b3a57" },
+        },
+        {
+          id: "major",
+          type: "line",
+          filter: ["==", ["get", "rank"], "major"],
+          paint: {
+            "line-color": "#8be6ff",
+            "line-width": ["to-number", ["coalesce", ["get", "stroke-width"], 3], 3],
+          },
+        },
+      ],
+    });
+    assert.equal(result.style.vectorStyleMode, "rule-based");
+    assert.equal(result.style.simpleStyleEnabled, true);
   });
 
   it("warns and imports nothing when there is no layers array", () => {
@@ -814,7 +1600,7 @@ describe("parseMapboxStyle imports hand-written styles", () => {
     assert.equal(result.style.strokeWidthUnit, "pixels");
   });
 
-  it("warns on a constant extrusion height it cannot represent", () => {
+  it("reads a constant extrusion height as a floor height above the base", () => {
     const external = {
       version: 8,
       sources: {},
@@ -829,6 +1615,97 @@ describe("parseMapboxStyle imports hand-written styles", () => {
     };
     const result = parseMapboxStyle(external);
     assert.equal(result.style.extrusionHeightProperty, undefined);
+    assert.equal(result.style.extrusionFloorHeight, 30);
+    assert.ok(!result.warnings.some((w) => /constant extrusion height/.test(w)));
+  });
+
+  it("resets the base when a floor height comes from a style with no base", () => {
+    const layer = style({
+      extrusionEnabled: true,
+      extrusionBase: 5,
+      extrusionBaseProperty: "level",
+      extrusionBaseScale: 5,
+    });
+    const result = applyMapboxStyleImport(
+      layer,
+      parseMapboxStyle({
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: "poly",
+            type: "fill-extrusion",
+            source: "s",
+            paint: { "fill-extrusion-height": 30 },
+          },
+        ],
+      }),
+    );
+    assert.equal(result.extrusionFloorHeight, 30);
+    assert.equal(result.extrusionBase, 0);
+    assert.equal(result.extrusionBaseProperty, "");
+  });
+
+  it("drops a kept base property when the imported style has no base", () => {
+    const layer = style({
+      extrusionEnabled: true,
+      extrusionBaseProperty: "level",
+      extrusionAdvancedStyleEnabled: true,
+      extrusionBaseExpression: '["get", "z"]',
+    });
+    const result = applyMapboxStyleImport(
+      layer,
+      parseMapboxStyle({
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: "poly",
+            type: "fill-extrusion",
+            source: "s",
+            paint: { "fill-extrusion-height": ["*", ["to-number", ["get", "h"], 0], 1] },
+          },
+        ],
+      }),
+    );
+    assert.equal(result.extrusionHeightProperty, "h");
+    assert.equal(result.extrusionBaseProperty, "");
+    assert.equal(result.extrusionBaseExpression, "");
+  });
+
+  it("drops a kept floor height when the imported style has no height", () => {
+    const result = applyMapboxStyleImport(
+      style({ extrusionEnabled: true, extrusionFloorHeight: 4 }),
+      parseMapboxStyle({
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: "poly",
+            type: "fill-extrusion",
+            source: "s",
+            paint: { "fill-extrusion-color": "#888888" },
+          },
+        ],
+      }),
+    );
+    assert.equal(result.extrusionFloorHeight, 0);
+  });
+
+  it("warns on a constant extrusion roof below a constant base", () => {
+    const result = parseMapboxStyle({
+      version: 8,
+      sources: {},
+      layers: [
+        {
+          id: "poly",
+          type: "fill-extrusion",
+          source: "s",
+          paint: { "fill-extrusion-height": 30, "fill-extrusion-base": 40 },
+        },
+      ],
+    });
+    assert.equal(result.style.extrusionFloorHeight, 0);
     assert.ok(result.warnings.some((w) => /constant extrusion height/.test(w)));
   });
 
