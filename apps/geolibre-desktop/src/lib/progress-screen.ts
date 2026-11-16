@@ -35,17 +35,23 @@ export function canTrackProgress(layer: GeoLibreLayer): boolean {
 /**
  * The layer the screen should open on: the given one, else the project's
  * progress drawing, else the active layer when it can carry progress.
+ *
+ * A requested layer with no setup of its own yields to the project's progress
+ * drawing when there is one: opening the screen from a label or reference
+ * layer's menu would otherwise seed an empty setup there and show a blank
+ * dashboard next to the drawing that holds the real progress.
  */
 export function progressScreenTarget(
   layers: readonly GeoLibreLayer[],
   selectedLayerId: string | null,
   requested?: string,
 ): GeoLibreLayer | null {
+  const existing = findProgressLayer(layers);
   if (requested) {
     const layer = layers.find((item) => item.id === requested);
-    return layer && canTrackProgress(layer) ? layer : null;
+    if (!layer || !canTrackProgress(layer)) return null;
+    return readStoredProgressConfig(layer) || !existing ? layer : existing;
   }
-  const existing = findProgressLayer(layers);
   if (existing) return existing;
   const selected = layers.find((item) => item.id === selectedLayerId);
   return selected && canTrackProgress(selected) ? selected : null;

@@ -6,6 +6,16 @@ export interface DashboardCamera {
   fitBounds(bounds: [number, number, number, number]): void;
   getMap?: () => MapLibreMap | null;
 }
+/**
+ * Closest zoom the dashboard frames a selection at. One small structure (a
+ * culvert, a single pier) would otherwise frame at ~z18.6. Esri World Imagery
+ * has no z19 tiles on much of the owner's route (it serves a 2.5 KB "Map data
+ * not yet available" tile instead), and the 55° pitch makes the tiles nearest
+ * the camera load about 1.5 levels deeper than the map zoom, so the frame stays
+ * at 16.5 to keep them at z18. The user can still zoom in further by hand.
+ */
+export const DASHBOARD_MAX_ZOOM = 16.5;
+
 /** Rendering integration stays outside the UI; authored feature data is never patched. */
 export function fitDashboardMap(
   camera: DashboardCamera | null | undefined,
@@ -24,7 +34,7 @@ export function fitDashboardMap(
         [bounds[0], bounds[1]],
         [bounds[2], bounds[3]],
       ],
-      { pitch: 55, padding: 48, maxZoom: 19, duration: 350 },
+      { pitch: 55, padding: 48, maxZoom: DASHBOARD_MAX_ZOOM, duration: 350 },
     );
   } else camera.fitBounds(bounds);
 }

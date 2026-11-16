@@ -4360,8 +4360,8 @@ html
 }
 
 .basemap-control-result[data-geolibre-basemap-preview="pending"]:not(
-  :has(.geolibre-basemap-thumbnail)
-)::before {
+    :has(.geolibre-basemap-thumbnail)
+  )::before {
   content: "";
   width: 56px;
   height: 42px;
@@ -6825,6 +6825,56 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   }
   :root[data-progress-dashboard] .progress-screen-header select {
     width: auto;
+  }
+}
+/* Wide screens: the map is the centre of the dashboard and runs from the KPI
+   row down to the chainage strip, with the structure matrix and S-curve on the
+   left and alerts, package progress and the girder yard on the right. Named
+   areas, so a card that renders nothing (the chainage strip has no stations to
+   draw) leaves its slot empty instead of shifting every card below it up a row
+   and exposing the shell underneath. Screen only: print keeps its own grid. */
+@media screen and (min-width: 900px) {
+  .progress-dashboard-panels.dashboard-v2 {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.9fr) minmax(0, 1fr);
+    grid-template-rows: auto 68px minmax(0, 1.15fr) minmax(0, 0.85fr) minmax(0, 1fr) auto;
+    grid-template-areas:
+      "filters filters filters"
+      "kpis kpis kpis"
+      "matrix map delays"
+      "matrix map items"
+      "history map yard"
+      "strip strip strip";
+  }
+  .progress-dashboard-panels.dashboard-v2 .dashboard-main-row,
+  .progress-dashboard-panels.dashboard-v2 .dashboard-insights {
+    display: contents;
+  }
+  .dashboard-filters {
+    grid-area: filters;
+  }
+  .dashboard-kpis {
+    grid-area: kpis;
+  }
+  .dashboard-matrix {
+    grid-area: matrix;
+  }
+  .dashboard-map-slot {
+    grid-area: map;
+  }
+  .dashboard-delays {
+    grid-area: delays;
+  }
+  .dashboard-items {
+    grid-area: items;
+  }
+  .dashboard-history {
+    grid-area: history;
+  }
+  .dashboard-yard-card {
+    grid-area: yard;
+  }
+  .dashboard-chainage {
+    grid-area: strip;
   }
 }
 @media (max-width: 899px) {

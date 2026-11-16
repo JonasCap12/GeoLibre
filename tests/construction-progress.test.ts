@@ -359,6 +359,32 @@ describe("progress screen", () => {
   });
 });
 
+describe("progress screen target", () => {
+  it("opens the project's progress drawing when the requested layer has no setup", async () => {
+    const screen = await import("../apps/geolibre-desktop/src/lib/progress-screen");
+    const model = { ...layer([feature("COC", point(0))]), id: "model" } as GeoLibreLayer;
+    const tracked = {
+      ...model,
+      ...progressConfigPatch(model, config([item({ cadLayers: ["COC"] })])),
+    } as GeoLibreLayer;
+    const labels = { ...layer([feature("LABEL", point(1))]), id: "labels" } as GeoLibreLayer;
+    // A label layer's own menu still lands on the drawing that carries progress,
+    // instead of seeding an empty setup on the labels.
+    assert.equal(screen.progressScreenTarget([labels, tracked], null, "labels")?.id, "model");
+    // With no tracked drawing in the project, the requested layer is used.
+    assert.equal(screen.progressScreenTarget([labels, model], null, "labels")?.id, "labels");
+    // A requested layer that has its own setup always wins.
+    const trackedLabels = {
+      ...labels,
+      ...progressConfigPatch(labels, config([item({ cadLayers: ["LABEL"] })])),
+    } as GeoLibreLayer;
+    assert.equal(
+      screen.progressScreenTarget([trackedLabels, tracked], null, "labels")?.id,
+      "labels",
+    );
+  });
+});
+
 describe("item features and bounds", () => {
   it("finds an item's features and the box around them", async () => {
     const { itemFeatureIndexes, featuresBounds } =
