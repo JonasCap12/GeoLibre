@@ -294,11 +294,22 @@ export async function requireSession(scope: Scope): Promise<Session> {
   return session;
 }
 
-/** Mints a bearer, records where it was issued, and prunes dead sessions. */
-export async function issueToken(scope: Scope, accountId: string): Promise<string> {
+/**
+ * Mints a bearer, records where it was issued, and prunes dead sessions.
+ *
+ * `expiresAtMs` keeps a replacement session (cookie adoption) on its
+ * predecessor's absolute deadline, so swapping a bearer for a cookie can never
+ * stretch a session past the 30 days its password sign-in earned.
+ */
+export async function issueToken(
+  scope: Scope,
+  accountId: string,
+  expiresAtMs?: number,
+): Promise<string> {
   const token = mintToken();
   const nowMs = Date.now();
   const issued = new Date(nowMs).toISOString();
+  const deadlineMs = Math.min(expiresAtMs ?? Infinity, nowMs + scope.config.session.ttlMs);
   await scope.db
     .prepare(
       `INSERT INTO tokens (digest, account_id, created_at, expires_at, last_used_at, user_agent, created_ip)
@@ -308,7 +319,7 @@ export async function issueToken(scope: Scope, accountId: string): Promise<strin
       await tokenDigest(token),
       accountId,
       issued,
-      new Date(nowMs + scope.config.session.ttlMs).toISOString(),
+      new Date(deadlineMs).toISOString(),
       issued,
       shortUserAgent(scope.request.headers.get("User-Agent")),
       clientIp(scope.request),

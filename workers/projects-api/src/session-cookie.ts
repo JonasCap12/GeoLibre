@@ -1,11 +1,12 @@
 import { mintToken, tokenDigest } from "./auth";
-import { ACCESS_TOKEN_TTL_MS } from "./auth-policy";
+import { ACCESS_TOKEN_TTL_MS, sessionExpiry } from "./auth-policy";
 import {
   background,
   issueToken,
   json,
   loadSessionSecret,
   rateLimit,
+  rateLimitKey,
   recordAuthEvent,
   type Scope,
   type Session,
@@ -60,19 +61,31 @@ export async function tokenResponse(
   accountId: string,
   body: Record<string, unknown> = {},
   status = 200,
+  expiresAtMs?: number,
 ): Promise<Response> {
   // A password change authenticated by an access token cannot downgrade to bearer mode.
   const cookie = cookieRequested(scope) || (await scope.session)?.accessToken === true;
   if (cookie) requireCookieOrigin(scope);
-  const secret = await issueToken(scope, accountId);
+  const secret = await issueToken(scope, accountId, expiresAtMs);
   if (!cookie) return json({ ...body, token: secret }, status);
   const access = await issueAccess(scope, {
     digest: await tokenDigest(secret),
     account: { id: accountId } as Session["account"],
   });
+  const lifetimeMs = Math.min(scope.config.session.ttlMs, (expiresAtMs ?? Infinity) - Date.now());
   return json({ ...body, ...access }, status, {
-    "Set-Cookie": sessionCookie(secret, scope.config.session.ttlMs),
+    "Set-Cookie": sessionCookie(secret, lifetimeMs),
   });
+}
+
+/** The absolute deadline of an existing session row, legacy rows included. */
+async function sessionDeadlineMs(scope: Scope, digest: string): Promise<number> {
+  const row = await scope.db
+    .prepare(`SELECT created_at, expires_at FROM tokens WHERE digest = ?`)
+    .bind(digest)
+    .first<{ created_at: string; expires_at: string | null }>();
+  if (row === null) throw new ApiError(401, "invalid or expired token");
+  return Date.parse(sessionExpiry({ ...row, last_used_at: null }, scope.config.session));
 }
 
 async function cookieSession(scope: Scope): Promise<Session> {
@@ -94,22 +107,25 @@ export async function cookieRoute(scope: Scope): Promise<Response | null> {
   const logout = method === "DELETE" && pathname === "/api/auth/token" && cookieRequested(scope);
   if (!refresh && !adopt && !logout) return null;
   requireCookieOrigin(scope);
-  await rateLimit(
-    scope.env,
-    scope.request,
-    adopt ? "session-adopt" : refresh ? "refresh" : "logout",
-  );
+  // Refresh is limited per session below, not per IP: a whole office behind one
+  // NAT reloading tabs would otherwise share 10 refreshes a minute and see the
+  // app fail to restore. Guessing a 256-bit cookie needs no throttle.
+  if (!refresh) await rateLimit(scope.env, scope.request, adopt ? "session-adopt" : "logout");
   try {
     if (adopt) {
       const header = scope.request.headers.get("Authorization") ?? "";
       if (!header.startsWith("Bearer ")) throw new ApiError(401, "session bearer required");
       const old = await loadSessionSecret(scope, header.slice(7));
-      const response = await tokenResponse(scope, old.account.id);
+      const deadline = await sessionDeadlineMs(scope, old.digest);
+      const response = await tokenResponse(scope, old.account.id, {}, 200, deadline);
       await scope.db.prepare(`DELETE FROM tokens WHERE digest = ?`).bind(old.digest).run();
       return response;
     }
     const session = await cookieSession(scope);
-    if (refresh) return json(await issueAccess(scope, session));
+    if (refresh) {
+      await rateLimitKey(scope.env, `refresh:${session.digest}`);
+      return json(await issueAccess(scope, session));
+    }
     await scope.db.prepare(`DELETE FROM tokens WHERE digest = ?`).bind(session.digest).run();
     recordAuthEvent(scope, "logout", session.account.id);
     return new Response(null, { status: 204, headers: { "Set-Cookie": sessionCookie("", 0) } });

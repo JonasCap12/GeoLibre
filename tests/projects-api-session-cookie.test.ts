@@ -80,7 +80,11 @@ async function fixture() {
   return { ...h, sql, call, login };
 }
 
-async function credentials(response: Response) {
+/**
+ * `inherited`: an adopted session keeps its predecessor's deadline, so its
+ * cookie lives for whatever is left of the 30 days, never longer.
+ */
+async function credentials(response: Response, { inherited = false } = {}) {
   assert.equal(response.status < 300, true, await response.clone().text());
   const body = (await response.json()) as {
     accessToken: string;
@@ -90,8 +94,11 @@ async function credentials(response: Response) {
   assert.equal(body.token, undefined);
   assert.match(body.accessToken, /^[A-Za-z0-9_-]{40,}$/);
   const cookie = response.headers.get("Set-Cookie")!;
-  for (const attribute of ["Path=/", "Secure", "HttpOnly", "SameSite=Strict", "Max-Age=2592000"])
+  for (const attribute of ["Path=/", "Secure", "HttpOnly", "SameSite=Strict"])
     assert.ok(cookie.includes(attribute), attribute);
+  const maxAge = Number(/Max-Age=(\d+)/.exec(cookie)?.[1]);
+  if (inherited) assert.ok(maxAge > 0 && maxAge <= 2592000, `Max-Age=${maxAge}`);
+  else assert.equal(maxAge, 2592000);
   const secret = cookie.split(";")[0].slice(SESSION_COOKIE.length + 1);
   assert.notEqual(body.accessToken, secret);
   const ttl = Date.parse(body.expiresAt) - Date.now();
@@ -221,6 +228,7 @@ describe("cookie session credentials", () => {
     const old = (await (await h.login(false)).json()) as { token: string };
     const c = await credentials(
       await h.call("/api/auth/session/adopt", { token: old.token, body: {} }),
+      { inherited: true },
     );
     assert.notEqual(c.secret, old.token);
     assert.equal(
@@ -228,6 +236,25 @@ describe("cookie session credentials", () => {
       undefined,
     );
     assert.equal((await h.call("/api/account", { token: old.token })).status, 401);
+  });
+
+  it("keeps the adopted session on its predecessor's deadline, so chaining adopt cannot extend it", async () => {
+    const h = await fixture();
+    const old = (await (await h.login(false)).json()) as { token: string };
+    const deadline = new Date(Date.now() + 2 * 86400000).toISOString();
+    h.sql.prepare("UPDATE tokens SET expires_at = ?").run(deadline);
+    const first = await h.call("/api/auth/session/adopt", { token: old.token, body: {} });
+    const c = await credentials(first, { inherited: true });
+    const maxAge = Number(/Max-Age=(\d+)/.exec(first.headers.get("Set-Cookie") ?? "")?.[1]);
+    assert.ok(maxAge > 0 && maxAge <= 2 * 86400, `cookie Max-Age ${maxAge}`);
+    // The cookie secret is itself a session bearer; adopting it again must not
+    // reset the clock either.
+    await credentials(await h.call("/api/auth/session/adopt", { token: c.secret, body: {} }), {
+      inherited: true,
+    });
+    const rows = h.sql.prepare("SELECT expires_at FROM tokens").all() as { expires_at: string }[];
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].expires_at, deadline);
   });
 });
 
@@ -289,14 +316,19 @@ describe("cookie refresh and revocation", () => {
     });
   }
 
-  it("rate limits refresh", async () => {
+  it("rate limits refresh per session, not per IP", async () => {
     const h = await fixture();
+    const c = await credentials(await h.login());
+    const keys: string[] = [];
     h.scope.env.AUTH_RATE_LIMITER = {
-      async limit() {
+      async limit({ key }: { key: string }) {
+        keys.push(key);
         return { success: false };
       },
     };
-    assert.equal((await h.call("/api/auth/refresh", { method: "POST" })).status, 429);
+    const response = await h.call("/api/auth/refresh", { method: "POST", cookie: c.cookie });
+    assert.equal(response.status, 429);
+    assert.deepEqual(keys, [`refresh:${await tokenDigest(c.secret)}`]);
   });
 
   for (const action of ["logout", "revoke", "all", "disable", "password", "expiry"] as const) {
