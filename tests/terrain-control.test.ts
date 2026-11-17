@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it, mock } from "node:test";
 import type * as maplibregl from "maplibre-gl";
-import { TerrainControl } from "../packages/map/src/terrain-control";
+import {
+  TerrainControl,
+  isStyleLoadingError,
+  setTerrainSafely,
+} from "../packages/map/src/terrain-control";
 
 // TerrainControl.onAdd builds DOM nodes; node:test has no DOM, so stand up a
 // minimal element/document just rich enough for the methods the control calls.
@@ -263,5 +267,98 @@ describe("TerrainControl", () => {
     control.setEnabled(false);
     assert.equal(button.classList.has("maplibregl-ctrl-terrain-enabled"), false);
     assert.equal(button.attributes["aria-pressed"], "false");
+  });
+});
+
+// Opening a project applies its saved exaggeration from a React effect; when a
+// style was still loading, MapLibre's setTerrain threw "Style is not done
+// loading" and the app crashed (owner's live-site diagnostics, 2026-11-17).
+describe("terrain changes while a style loads", () => {
+  function loadingMap(initial: maplibregl.TerrainSpecification | null) {
+    let terrain = initial;
+    let loading = true;
+    let idle: Array<() => void> = [];
+    const applied: Array<maplibregl.TerrainSpecification | null> = [];
+    const map = {
+      getTerrain: () => terrain,
+      setTerrain: (spec: maplibregl.TerrainSpecification | null) => {
+        if (loading) throw new Error("Style is not done loading.");
+        terrain = spec;
+        applied.push(spec);
+      },
+      once: (event: string, handler: () => void) => {
+        if (event === "idle") idle.push(handler);
+      },
+      on() {},
+      off() {},
+    };
+    return {
+      map: map as unknown as maplibregl.Map,
+      applied,
+      get terrain() {
+        return terrain;
+      },
+      finishLoading() {
+        loading = false;
+        const handlers = idle;
+        idle = [];
+        for (const handler of handlers) handler();
+      },
+    };
+  }
+
+  function controlOn(map: maplibregl.Map) {
+    (globalThis as { document?: unknown }).document = { createElement: makeFakeElement };
+    const control = new TerrainControl({ source: TERRAIN_SOURCE });
+    control.onAdd(map);
+    return control;
+  }
+
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+  });
+
+  it("recognises MapLibre's style-loading refusal only", () => {
+    assert.equal(isStyleLoadingError(new Error("Style is not done loading.")), true);
+    assert.equal(isStyleLoadingError(new Error("Source not found")), false);
+    assert.equal(isStyleLoadingError("Style is not done loading."), false);
+  });
+
+  it("does not throw on an exaggeration change and applies the newest one once idle", () => {
+    const fake = loadingMap({ source: TERRAIN_SOURCE, exaggeration: 1 });
+    const control = controlOn(fake.map);
+    assert.doesNotThrow(() => control.setExaggeration(2));
+    assert.doesNotThrow(() => control.setExaggeration(3));
+    fake.finishLoading();
+    assert.deepEqual(
+      fake.applied,
+      [{ source: TERRAIN_SOURCE, exaggeration: 3 }],
+      "one apply, newest value",
+    );
+  });
+
+  it("turns terrain off once idle, unless it was turned back on first", () => {
+    const off = loadingMap({ source: TERRAIN_SOURCE, exaggeration: 1 });
+    assert.doesNotThrow(() => controlOn(off.map).setEnabled(false));
+    off.finishLoading();
+    assert.equal(off.terrain, null);
+
+    const again = loadingMap({ source: TERRAIN_SOURCE, exaggeration: 1 });
+    const control = controlOn(again.map);
+    control.setEnabled(false);
+    setTerrainSafely(again.map, () => ({ source: TERRAIN_SOURCE, exaggeration: 2 }));
+    again.finishLoading();
+    assert.deepEqual(again.terrain, { source: TERRAIN_SOURCE, exaggeration: 2 });
+    assert.equal(again.applied.length, 1, "the superseded request does not apply");
+  });
+
+  it("still throws any other error", () => {
+    const map = {
+      setTerrain: () => {
+        throw new Error("Source not found");
+      },
+      once() {},
+    } as unknown as maplibregl.Map;
+    assert.throws(() => setTerrainSafely(map, () => null), /Source not found/);
   });
 });

@@ -95,7 +95,7 @@ import {
 export { defaultBlankBackgroundColor };
 import { ResetBearingControl } from "./reset-bearing-control";
 import { MaptoolkitLogoControl } from "./maptoolkit-logo-control";
-import { TerrainControl, DEFAULT_TERRAIN_EXAGGERATION } from "./terrain-control";
+import { TerrainControl, DEFAULT_TERRAIN_EXAGGERATION, setTerrainSafely } from "./terrain-control";
 import { getDynamicPaintProperty, setDynamicPaintProperty } from "./dynamic-style-property";
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import { installMapTransformCompat } from "./map-transform-compat";
@@ -2907,10 +2907,10 @@ export class MapController implements MapEngine {
       if (this.terrainControl) {
         this.terrainControl.setEnabled(true);
       } else if (!this.isTerrainEnabled()) {
-        this.map.setTerrain({
+        setTerrainSafely(this.map, () => ({
           source: TERRAIN_SOURCE_ID,
           exaggeration: this.terrainExaggeration,
-        });
+        }));
       }
       return this.isTerrainEnabled();
     }
@@ -2918,7 +2918,7 @@ export class MapController implements MapEngine {
       if (this.terrainControl) {
         this.terrainControl.setEnabled(false);
       } else {
-        this.map.setTerrain(null);
+        setTerrainSafely(this.map, () => null);
       }
     }
     return !this.isTerrainEnabled();
