@@ -56,6 +56,7 @@ import { useRasterIdentify } from "../../hooks/useRasterIdentify";
 import { useGlobalRasterIdentify } from "../../hooks/useGlobalRasterIdentify";
 import { useNetcdfIdentify } from "../../hooks/useNetcdfIdentify";
 import { useTerrainRestore } from "../../hooks/useTerrainRestore";
+import { useSharedTerrain } from "../../hooks/useSharedTerrain";
 import { useScriptControlRestore } from "../../hooks/useScriptControlRestore";
 import { useProjectInteractionRestore } from "../../hooks/useProjectInteractionRestore";
 import { useCogSpectralIdentify } from "../../hooks/useCogSpectralIdentify";
@@ -385,6 +386,9 @@ export function DesktopShell({
   useEffect(() => bindNetcdfProfileSamplesToProject(useAppStore), []);
   useRasterViewportStretch(mapControllerRef, mapReadyGeneration);
   useTerrainRestore(mapControllerRef, mapReadyGeneration, projectGeneration);
+  // Fork: after the saved terrain, so a project's shared-library DEM wins over
+  // the reset that opening a project performs.
+  useSharedTerrain(mapControllerRef, mapReadyGeneration, projectGeneration);
   useScriptControlRestore(mapControllerRef, mapReadyGeneration, projectGeneration);
   useProjectInteractionRestore(mapControllerRef, mapReadyGeneration, projectGeneration);
   const [stylePanelOpenRequest, setStylePanelOpenRequest] = useState(0);

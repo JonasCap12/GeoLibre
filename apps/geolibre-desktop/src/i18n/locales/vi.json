@@ -2629,6 +2629,16 @@
     "reset": "Cài lại",
     "done": "Xong"
   },
+  "sharedTerrain": {
+    "useAsTerrain": "Dùng làm địa hình 3D",
+    "clear": "Bỏ dùng làm địa hình",
+    "current": "Địa hình 3D của dự án: {{name}}",
+    "chosen": "“{{name}}” đã là địa hình 3D của dự án. Mọi người đã đăng nhập khi mở dự án hoặc vào phiên làm việc chung đều được tải địa hình này.",
+    "cleared": "Dự án không còn dùng địa hình 3D từ thư viện.",
+    "tiffNotLayer": "File GeoTIFF trong thư viện được dùng làm địa hình 3D của dự án, không thêm thành lớp.",
+    "loadFailed": "Không tải được địa hình 3D “{{name}}” của dự án từ thư viện dùng chung.",
+    "unsupportedRenderer": "Trình kết xuất này dùng địa hình riêng. Địa hình 3D từ thư viện của dự án cần trình kết xuất MapLibre."
+  },
   "pixelTimeSeries": {
     "title": "Chuỗi thời gian pixel",
     "empty": "Nhấp vào một pixel trên bản đồ để vẽ giá trị của nó theo thời gian. Thêm nhiều pixel hơn để so sánh.",
