@@ -14,6 +14,50 @@ const DOUBLE_CLICK_MS = 250;
  */
 export const DEFAULT_TERRAIN_EXAGGERATION = 1;
 
+/** MapLibre's refusal to touch the style while one is loading (Map#_checkLoaded). */
+export function isStyleLoadingError(error: unknown): boolean {
+  return error instanceof Error && /style is not done loading/i.test(error.message);
+}
+
+// Per map: the newest terrain request. A deferred request applies only if no
+// newer one was made meanwhile, so the latest choice always wins.
+const terrainRequests = new WeakMap<object, number>();
+
+/**
+ * `map.setTerrain` that does not throw while a style loads.
+ *
+ * MapLibre refuses with "Style is not done loading" during a style (re)load,
+ * and the terrain is touched from React effects (opening a project applies its
+ * exaggeration) that can land in that window: the throw crashed the app. Here
+ * the request is retried once the map is idle, reading `wanted` then, unless a
+ * newer request was made meanwhile. Any other error still throws.
+ *
+ * Args:
+ *   map: The map.
+ *   wanted: The terrain to set, evaluated now and again on the retry.
+ */
+export function setTerrainSafely(
+  map: maplibregl.Map,
+  wanted: () => maplibregl.TerrainSpecification | null,
+): void {
+  const request = (terrainRequests.get(map) ?? 0) + 1;
+  terrainRequests.set(map, request);
+  try {
+    map.setTerrain(wanted());
+  } catch (error) {
+    if (!isStyleLoadingError(error)) throw error;
+    map.once("idle", () => {
+      if (terrainRequests.get(map) !== request) return;
+      try {
+        map.setTerrain(wanted());
+      } catch (retryError) {
+        // Removed, or loading another style: the next request decides.
+        if (!isStyleLoadingError(retryError)) throw retryError;
+      }
+    });
+  }
+}
+
 export interface TerrainControlOptions {
   /** The raster-DEM source id used to drive terrain. */
   source: string;
@@ -164,13 +208,13 @@ export class TerrainControl implements maplibregl.IControl {
         // long before maxZoom over high terrain, capping zoom and tile loading
         // there (#3409); maplibre-gl 6 holds the center elevation through a
         // zoom gesture, so the snapping it worked around no longer happens.
-        this.map.setTerrain({
+        setTerrainSafely(this.map, () => ({
           source: this.source,
           exaggeration: this.exaggeration,
-        });
+        }));
       }
     } else if (this.isEnabled()) {
-      this.map.setTerrain(null);
+      setTerrainSafely(this.map, () => null);
     }
   }
 
@@ -190,7 +234,9 @@ export class TerrainControl implements maplibregl.IControl {
     const safe = Math.max(0, exaggeration);
     this.exaggeration = safe;
     if (this.map && this.isEnabled()) {
-      this.map.setTerrain({ source: this.source, exaggeration: safe });
+      // Reads the exaggeration when applied, so a retry after a style load
+      // takes the newest value.
+      setTerrainSafely(this.map, () => ({ source: this.source, exaggeration: this.exaggeration }));
     }
   }
 

@@ -2634,6 +2634,65 @@ describe("MapController terrain auto-enable", () => {
   });
 });
 
+describe("MapController terrain removal while a style loads", () => {
+  // MapLibre's setTerrain throws "Style is not done loading" mid style load.
+  // Hiding the Terrain control (or opening a project without terrain) there
+  // threw out of a React effect, and from destroy(), cutting its cleanup short.
+  function loadingMap() {
+    let terrain: maplibregl.TerrainSpecification | null = { source: "geolibre-terrain-dem" };
+    let loading = true;
+    const idle: (() => void)[] = [];
+    const map = {
+      getTerrain: () => terrain,
+      setTerrain: (spec: maplibregl.TerrainSpecification | null) => {
+        if (loading) throw new Error("Style is not done loading.");
+        terrain = spec;
+      },
+      once: (event: string, listener: () => void) => {
+        if (event === "idle") idle.push(listener);
+      },
+      removeControl() {},
+    };
+    return {
+      map,
+      get terrain() {
+        return terrain;
+      },
+      finishLoading() {
+        loading = false;
+        for (const listener of idle.splice(0)) listener();
+      },
+    };
+  }
+
+  it("does not throw when the Terrain control is hidden mid-load, and clears terrain once idle", () => {
+    const fake = loadingMap();
+    const controller = createMapController();
+    const internal = controller as unknown as { map: unknown; removeTerrainControl(): void };
+    internal.map = fake.map;
+    // Both reported traces (hiding the control, destroy) go through here.
+    assert.doesNotThrow(() => internal.removeTerrainControl());
+    assert.equal(fake.terrain?.source, "geolibre-terrain-dem", "left until the style is in");
+    fake.finishLoading();
+    assert.equal(fake.terrain, null);
+  });
+
+  it("keeps terrain that was turned back on before the style finished", () => {
+    const fake = loadingMap();
+    const controller = createMapController();
+    const internal = controller as unknown as {
+      map: unknown;
+      terrainControl: unknown;
+      removeTerrainControl(): void;
+    };
+    internal.map = fake.map;
+    internal.removeTerrainControl();
+    internal.terrainControl = {}; // the control came back while loading
+    fake.finishLoading();
+    assert.equal(fake.terrain?.source, "geolibre-terrain-dem");
+  });
+});
+
 describe("MapController Mapbox descriptor requests", () => {
   const MAPBOX_STREETS = "https://api.mapbox.com/styles/v1/mapbox/streets-v12?access_token=tok";
   const MAPBOX_DARK = "https://api.mapbox.com/styles/v1/mapbox/dark-v11?access_token=tok";
