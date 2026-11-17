@@ -2924,13 +2924,38 @@ export class MapController implements MapEngine {
     return !this.isTerrainEnabled();
   }
 
+  /**
+   * Turn this controller's terrain off without throwing.
+   *
+   * MapLibre's setTerrain refuses while a style is loading ("Style is not done
+   * loading"). Hiding the Terrain control or opening a project without terrain
+   * can land in that window, and so can destroy() on a map mid-load. Throwing
+   * there escaped a React effect and cut destroy() short (its later cleanup never
+   * ran). Instead the terrain is cleared once the map is idle, unless terrain
+   * was turned back on meanwhile or the map was replaced.
+   */
+  private clearTerrainSurface(): void {
+    const map = this.map;
+    if (!map || map.getTerrain()?.source !== TERRAIN_SOURCE_ID) return;
+    try {
+      map.setTerrain(null);
+    } catch {
+      map.once("idle", () => {
+        if (this.map !== map || this.terrainControl) return;
+        try {
+          if (map.getTerrain()?.source === TERRAIN_SOURCE_ID) map.setTerrain(null);
+        } catch {
+          // Removed or still loading: nothing left to clear on this map.
+        }
+      });
+    }
+  }
+
   private removeTerrainControl(): void {
     // Any deferred auto-enable is void once terrain is being turned off, so a
     // late style load can't re-enable a control the user just hid.
     this.terrainEnablePending = false;
-    if (this.map?.getTerrain()?.source === TERRAIN_SOURCE_ID) {
-      this.map.setTerrain(null);
-    }
+    this.clearTerrainSurface();
     if (!this.terrainControl) return;
     this.removeControl(this.terrainControl);
     this.terrainControl = null;
