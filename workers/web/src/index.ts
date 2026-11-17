@@ -113,6 +113,7 @@ const JUPYTERLITE_CSP =
 
 interface Env {
   ASSETS: Fetcher;
+  PROJECTS_API: Fetcher;
 }
 
 /** Serve a JupyterLite asset with the policy that site needs. */
@@ -145,6 +146,9 @@ async function serveJupyterLite(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    // Forward the original request: rate limits, Turnstile and cookie guards
+    // must see the browser's IP, Origin, User-Agent, method and body intact.
+    if (url.pathname.startsWith("/api/")) return env.PROJECTS_API.fetch(request);
 
     // run_worker_first routes this prefix here whether or not the asset exists.
     if (url.pathname.startsWith("/jupyterlite/")) {

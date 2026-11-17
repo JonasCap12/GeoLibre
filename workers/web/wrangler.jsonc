@@ -21,6 +21,7 @@
   "name": "geolibre-web",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-26",
+  "services": [{ "binding": "PROJECTS_API", "service": "geolibre-projects-api" }],
 
   // Built by `npm run lite:build`, NOT `npm run build`. The default build emits
   // duckdb-mvp.wasm (~40 MB) and duckdb-eh.wasm (~35 MB), the only two assets
@@ -56,8 +57,8 @@
     // enforced as a second policy rather than a replacement -- which left
     // JupyterLab's inline bootstrap blocked by the app policy. See
     // src/index.ts for the full explanation.
-    "run_worker_first": ["/jupyterlite/*"]
-  }
+    "run_worker_first": ["/jupyterlite/*", "/api/*"],
+  },
 
   // No "routes": this deploys to geolibre-web.<subdomain>.workers.dev. To bind a
   // custom domain, add the block below and point the zone at this Cloudflare
