@@ -246,6 +246,7 @@ export function loginForAudit(raw: unknown): string {
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_SESSION_TTL_DAYS = 30;
+export const ACCESS_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_SESSION_IDLE_DAYS = 7;
 /** Writing last_used_at on every request would be one D1 write per API call. */
 export const SESSION_TOUCH_INTERVAL_MS = 60 * 60 * 1000;

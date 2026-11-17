@@ -53,6 +53,13 @@ extension.
 
 ## Setup
 
+Before deploying the session-cookie API, apply its additive migration (also on
+existing databases):
+
+```bash
+wrangler d1 execute geolibre-projects --remote --file=workers/projects-api/schema-access-tokens.sql
+```
+
 ```bash
 # 1. Create the database and bucket, then paste the printed ids into wrangler.jsonc
 wrangler d1 create geolibre-projects

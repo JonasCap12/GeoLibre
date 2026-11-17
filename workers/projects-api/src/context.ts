@@ -97,6 +97,8 @@ export interface Scope {
 export interface Session {
   account: AccountRow;
   digest: string;
+  /** Access credentials must never be exchanged for a session bearer. */
+  accessToken?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +190,8 @@ interface SessionJoinRow extends AccountRow {
   t_created_at: string;
   t_expires_at: string | null;
   t_last_used_at: string | null;
+  session_digest?: string;
+  access_expires_at?: string;
 }
 
 export function currentSession(scope: Scope): Promise<Session | null> {
@@ -199,8 +203,17 @@ async function loadSession(scope: Scope): Promise<Session | null> {
   const header = scope.request.headers.get("Authorization");
   if (header === null || header === "") return null;
   if (!header.startsWith("Bearer ")) throw new ApiError(401, "invalid authorization");
-  const digest = await tokenDigest(header.slice(7));
-  const row = await scope.db
+  return loadSessionSecret(scope, header.slice(7), true);
+}
+
+/** Cookie/adopt callers deliberately accept session secrets only. */
+export async function loadSessionSecret(
+  scope: Scope,
+  secret: string,
+  allowAccess = false,
+): Promise<Session> {
+  let digest = await tokenDigest(secret);
+  let row = await scope.db
     .prepare(
       `SELECT a.*, t.created_at AS t_created_at, t.expires_at AS t_expires_at,
               t.last_used_at AS t_last_used_at
@@ -208,6 +221,30 @@ async function loadSession(scope: Scope): Promise<Session | null> {
     )
     .bind(digest)
     .first<SessionJoinRow>();
+  let accessToken = false;
+  if (row === null && allowAccess) {
+    row = await scope.db
+      .prepare(
+        `SELECT a.*, t.digest AS session_digest, t.created_at AS t_created_at,
+                t.expires_at AS t_expires_at, t.last_used_at AS t_last_used_at,
+                x.expires_at AS access_expires_at
+         FROM access_tokens x JOIN tokens t ON t.digest = x.session_digest AND t.account_id = x.account_id
+         JOIN accounts a ON a.id = t.account_id WHERE x.digest = ?`,
+      )
+      .bind(digest)
+      .first<SessionJoinRow>();
+    if (row !== null) {
+      if (
+        !row.access_expires_at ||
+        Date.parse(row.access_expires_at) <= Date.now() ||
+        !Number.isFinite(Date.parse(row.access_expires_at))
+      ) {
+        throw new ApiError(401, "invalid or expired token");
+      }
+      digest = row.session_digest!;
+      accessToken = true;
+    }
+  }
   if (row === null) throw new ApiError(401, "invalid or expired token");
   const times = {
     created_at: row.t_created_at,
@@ -231,8 +268,15 @@ async function loadSession(scope: Scope): Promise<Session | null> {
         .run(),
     );
   }
-  const { t_created_at: _c, t_expires_at: _e, t_last_used_at: _l, ...account } = row;
-  return { account, digest };
+  const {
+    t_created_at: _c,
+    t_expires_at: _e,
+    t_last_used_at: _l,
+    session_digest: _s,
+    access_expires_at: _a,
+    ...account
+  } = row;
+  return { account, digest, ...(accessToken ? { accessToken: true } : {}) };
 }
 
 export async function optionalAccount(scope: Scope): Promise<AccountRow | null> {
@@ -313,6 +357,7 @@ export function credentialChangeStatements(
   at: string,
 ): D1PreparedStatement[] {
   return [
+    db.prepare(`DELETE FROM access_tokens WHERE account_id = ?`).bind(accountId),
     db
       .prepare(
         `UPDATE auth_actions SET used_at = ?

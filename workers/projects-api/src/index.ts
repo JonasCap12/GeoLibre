@@ -58,7 +58,6 @@ import {
   emailFrom,
   emailFromOrNull,
   empty,
-  issueToken,
   json,
   loadAuthAction,
   optionalAccount,
@@ -78,6 +77,7 @@ import {
   type Env,
   type Scope,
 } from "./context";
+import { cookieRequested, cookieRoute, requireCookieOrigin, tokenResponse } from "./session-cookie";
 import { newSignInEmail, passwordChangedEmail, resetEmail } from "./email";
 import {
   issueMfaTicket,
@@ -176,7 +176,7 @@ function corsHeaders(request: Request, config: Config): Record<string, string> {
     return {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+      "Access-Control-Allow-Headers": "Authorization, Content-Type, X-GeoLibre-Session",
       "Access-Control-Expose-Headers": "Retry-After",
     };
   }
@@ -185,7 +185,7 @@ function corsHeaders(request: Request, config: Config): Record<string, string> {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-GeoLibre-Session",
     "Access-Control-Expose-Headers": "Retry-After",
     Vary: "Origin",
   };
@@ -357,6 +357,8 @@ async function route(
   const db = env.DB;
   const objects = objectStorage(env.OBJECTS);
   const scope: Scope = { request, env, ctx, config, db, url };
+  const cookieResponse = await cookieRoute(scope);
+  if (cookieResponse !== null) return cookieResponse;
 
   // A declared Content-Length past the largest thing any route accepts is
   // rejected before the body is read. The factor of six is the worst case, not a
@@ -448,6 +450,13 @@ async function apiRoute(
   method: string,
 ): Promise<Response> {
   const { request, env, config, db, url } = scope;
+  if (
+    method === "POST" &&
+    cookieRequested(scope) &&
+    ((path.length === 1 && path[0] === "accounts") ||
+      (path.length === 2 && path[0] === "auth" && ["token", "mfa", "password"].includes(path[1])))
+  )
+    requireCookieOrigin(scope);
   // --- Identity ----------------------------------------------------------
   if (path.length === 1 && path[0] === "accounts" && method === "POST") {
     await rateLimit(env, request, "accounts");
@@ -524,7 +533,7 @@ async function apiRoute(
       throw new ApiError(403, "invite is invalid or expired");
     }
     recordAuthEvent(scope, "invite_used", account.id, { to: maskEmail(invite.email) });
-    return json({ account: accountJson(account), token: await issueToken(scope, account.id) }, 201);
+    return tokenResponse(scope, account.id, { account: accountJson(account) }, 201);
   }
 
   if (path.length === 1 && path[0] === "invites" && method === "POST") {
@@ -617,6 +626,7 @@ async function apiRoute(
   }
 
   if (path.length === 2 && path[0] === "auth" && path[1] === "password" && method === "POST") {
+    if ((await requireSession(scope)).accessToken) requireCookieOrigin(scope);
     const account = requireAccount(await optionalAccount(scope));
     // A stolen bearer must not become an unlimited oracle for the password.
     await rateLimitKey(env, `password:${account.id}`);
@@ -648,7 +658,6 @@ async function apiRoute(
       db.prepare(`DELETE FROM tokens WHERE account_id = ?`).bind(account.id),
       ...credentialChangeStatements(db, account.id, changedAt),
     ]);
-    const token = await issueToken(scope, account.id);
     recordAuthEvent(scope, "password_changed", account.id);
     const from = emailFromOrNull(env);
     if (accountHasEmail(account) && from !== null) {
@@ -658,7 +667,7 @@ async function apiRoute(
         "password-changed notice",
       );
     }
-    return json({ token });
+    return tokenResponse(scope, account.id);
   }
 
   if (path.length === 2 && path[0] === "auth" && path[1] === "reset-request" && method === "POST") {
@@ -1326,7 +1335,6 @@ async function completeSignIn(scope: Scope, account: AccountRow): Promise<Respon
     )
     .bind(account.id)
     .all<{ user_agent: string | null }>();
-  const token = await issueToken(scope, account.id);
   recordAuthEvent(scope, "login_success", account.id);
   const from = emailFromOrNull(env);
   const agents = (previous.results ?? []).map((row) => row.user_agent ?? "");
@@ -1341,7 +1349,7 @@ async function completeSignIn(scope: Scope, account: AccountRow): Promise<Respon
       "new sign-in notice",
     );
   }
-  return json({ account: accountJson(account), token });
+  return tokenResponse(scope, account.id, { account: accountJson(account) });
 }
 
 /**
