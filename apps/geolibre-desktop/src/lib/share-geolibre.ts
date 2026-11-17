@@ -16,6 +16,7 @@ import { readDeploymentEnvValue, type EnvRecord } from "./deployment-env";
 import { EXPECTED_STATUS_HEADER } from "./diagnostics";
 import { isSerializationTooLargeError } from "./project-serialization-limits";
 import { getShareFetch } from "./share-fetch";
+import { cookieApiOrigin } from "./selfhost-session-mode";
 
 /** `organization` is readable by every signed-in member of the owning organization. */
 export type ShareVisibility = "public" | "unlisted" | "private" | "organization";
@@ -247,6 +248,9 @@ function isSafeShareUrl(url: URL): boolean {
  * @returns The resolved host and why.
  */
 export function resolveShareHost(configured?: unknown, deploymentEnv?: EnvRecord): ShareHost {
+  const cookieOrigin = cookieApiOrigin();
+  if (cookieOrigin)
+    return { status: "configured", baseUrl: cookieOrigin, configured: cookieOrigin };
   const raw =
     configured !== undefined ? configured : readDeploymentEnvValue(SHARE_URL_ENV, deploymentEnv);
   if (typeof raw !== "string" || !raw.trim()) {

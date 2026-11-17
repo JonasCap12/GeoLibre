@@ -2751,6 +2751,8 @@
     "continue": "Continue",
     "loading": "Loading…",
     "sessionEnded": "Your session has ended. Sign in again to continue.",
+    "sessionLoading": "Restoring your session…",
+    "sessionUnavailable": "Could not restore your session. Check your connection and retry.",
     "resetDone": "Password changed. Sign in with your new password.",
     "botCheckPending": "Complete the security check first.",
     "botCheckLoadFailed": "The security check could not be loaded. Check your connection or disable content blockers for this site, then reload.",

@@ -39,6 +39,7 @@ import {
   type AccountAttentionKind,
 } from "../../lib/account-menu";
 import { fetchAccount, signOut, type AccountInfo } from "../../lib/share-account";
+import { sessionCookieMode } from "../../lib/selfhost-session-mode";
 import { AccountCenter, type AccountView } from "./AccountCenter";
 import { AccountAvatar, RoleBadge } from "./account-badges";
 
@@ -98,12 +99,14 @@ export function SelfHostAccountFrame({ token, children }: { token: string; child
   // dies at its idle timeout.
   const revoke = useCallback(async () => {
     setBusy(true);
+    let revoked = false;
     try {
       await signOut({ token });
+      revoked = true;
     } catch (err) {
       console.warn("sign-out could not reach the server; clearing the local session", err);
     } finally {
-      writeShareToken("");
+      if (revoked || !sessionCookieMode()) writeShareToken("");
       setBusy(false);
     }
   }, [token]);

@@ -2690,6 +2690,8 @@
     "continue": "Tiếp tục",
     "loading": "Đang tải…",
     "sessionEnded": "Phiên đăng nhập đã kết thúc. Hãy đăng nhập lại để tiếp tục.",
+    "sessionLoading": "Đang khôi phục phiên đăng nhập…",
+    "sessionUnavailable": "Chưa thể khôi phục phiên đăng nhập. Hãy kiểm tra kết nối rồi thử lại.",
     "resetDone": "Đã đổi mật khẩu. Hãy đăng nhập bằng mật khẩu mới.",
     "botCheckPending": "Hãy hoàn tất bước kiểm tra bảo mật trước.",
     "botCheckLoadFailed": "Không tải được bước kiểm tra bảo mật. Kiểm tra kết nối hoặc tắt trình chặn nội dung cho trang này, rồi tải lại trang.",
