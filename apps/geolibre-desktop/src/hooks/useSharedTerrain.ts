@@ -3,7 +3,11 @@ import type { MapEngine } from "@geolibre/map";
 import { useEffect, useRef } from "react";
 import i18n from "../i18n";
 import { notify } from "../lib/notify";
-import { applySharedTerrain, readSharedTerrain } from "../lib/shared-terrain";
+import {
+  applySharedTerrain,
+  clearSharedTerrainCache,
+  readSharedTerrain,
+} from "../lib/shared-terrain";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
 
 /**
@@ -44,8 +48,15 @@ export function useSharedTerrain(
       }
       return;
     }
-    if (!token) return;
-    const key = `${datasetId}|${projectGeneration}|${token}`;
+    if (!token) {
+      // Signed out: the next member to sign in on this page downloads it themselves.
+      clearSharedTerrainCache();
+      return;
+    }
+    // Not keyed on the token: a refreshed sign-in (the cookie session swaps its
+    // access token every few minutes) must not apply the terrain again. A new
+    // token does retry after a failure, which clears `applied`.
+    const key = `${datasetId}|${projectGeneration}`;
     if (applied.current?.engine === engine && applied.current.key === key) return;
     applied.current = { engine, key };
     const ref = readSharedTerrain(useAppStore.getState().metadata);

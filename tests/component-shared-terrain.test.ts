@@ -167,6 +167,12 @@ it("downloads the project's terrain with the viewer's own sign-in and puts it on
   await waitFor(() => assert.equal(sources.length, 2));
   assert.equal(requests.length, 1, "downloaded once");
 
+  // A refreshed sign-in (new access token) neither downloads nor applies again.
+  setToken("viewer-token-refreshed");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(sources.length, 2);
+  assert.equal(requests.length, 1);
+
   // Removed from the project: back to what the project saves.
   setTerrainRecord(null);
   await waitFor(() => assert.equal(sources.length, 3));

@@ -84,18 +84,23 @@ describe("the project's shared terrain record", () => {
 });
 
 describe("downloading the terrain", () => {
-  it("downloads once per dataset and sign-in, with the caller's token", async () => {
+  it("downloads once per dataset, with the caller's token, even across a refreshed sign-in", async () => {
     const { calls, fetchBytes } = fetcher(TIFF);
     const a = await sharedTerrainBlob("d1", "token-a", fetchBytes);
     const again = await sharedTerrainBlob("d1", "token-a", fetchBytes);
     assert.equal(a, again);
     assert.equal(a.type, "image/tiff");
     assert.deepEqual(new Uint8Array(await a.arrayBuffer()), TIFF);
-    await sharedTerrainBlob("d1", "token-b", fetchBytes);
+    // The cookie session swaps its access token every few minutes: no new download.
+    assert.equal(await sharedTerrainBlob("d1", "token-b", fetchBytes), a);
+    await sharedTerrainBlob("d9", "token-b", fetchBytes);
     assert.deepEqual(calls, [
       { id: "d1", token: "token-a" },
-      { id: "d1", token: "token-b" },
+      { id: "d9", token: "token-b" },
     ]);
+    clearSharedTerrainCache();
+    await sharedTerrainBlob("d1", "token-c", fetchBytes);
+    assert.equal(calls.length, 3, "signed out and in again: downloads with the new sign-in");
   });
 
   it("forgets a failed download so the next attempt retries", async () => {

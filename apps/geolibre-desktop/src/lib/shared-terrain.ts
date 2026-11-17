@@ -57,21 +57,22 @@ export function isTerrainDatasetFile(filename: string): boolean {
 
 type FetchBytes = typeof fetchSharedDatasetBytes;
 
-// One download per dataset and sign-in for the whole page: reopening the
-// project, a renderer switch, or each collaboration snapshot must not pull
-// tens of megabytes again.
+// One download per dataset for the whole page: reopening the project, a
+// renderer switch, each collaboration snapshot, or a refreshed sign-in (the
+// cookie session swaps its 10-minute access token) must not pull tens of
+// megabytes again. Signing out clears it (useSharedTerrain).
 const blobs = new Map<string, Promise<Blob>>();
 
 /**
- * The dataset's bytes as a Blob, downloaded once with `token`. A failed
- * download is forgotten so the next attempt retries.
+ * The dataset's bytes as a Blob, downloaded once (with `token` the first
+ * time). A failed download is forgotten so the next attempt retries.
  */
 export function sharedTerrainBlob(
   datasetId: string,
   token: string,
   fetchBytes: FetchBytes = fetchSharedDatasetBytes,
 ): Promise<Blob> {
-  const key = `${token}\u0000${datasetId}`;
+  const key = datasetId;
   let pending = blobs.get(key);
   if (!pending) {
     pending = fetchBytes(datasetId, { token })
