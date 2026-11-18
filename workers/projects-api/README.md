@@ -43,6 +43,11 @@ extension.
   counted by one `INSERT … ON CONFLICT DO UPDATE`. The reference needs
   read-then-write retries for the same guarantees because SQLAlchemy cannot
   express either portably.
+- **Old versions are deleted.** A project keeps its newest
+  `GEOLIBRE_VERSION_LIMIT` versions (default 10). Each save deletes the older
+  rows and their R2 objects, for good rather than into the trash. The reference
+  keeps every version. Here an autosaving workspace once filled the 5 GB bucket
+  with about 870 copies of one document.
 - **`GEOLIBRE_CORS_ORIGINS` has no wildcard default.** The Python default is
   `*`; here the app and the API are on different hostnames, so an operator must
   name the app origin anyway, and forgetting should fail visibly in the browser

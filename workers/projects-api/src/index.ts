@@ -133,6 +133,7 @@ import {
   versionKey,
   type Objects,
 } from "./storage";
+import { DEFAULT_VERSION_LIMIT, pruneVersions } from "./version-retention";
 
 const VISIBILITIES = new Set(["public", "unlisted", "private"]);
 
@@ -147,6 +148,7 @@ function readConfig(env: Env): Config {
     // viewerUrl reads https://host/?project=… rather than https://host?project=…
     viewerUrl: `${(env.GEOLIBRE_VIEWER_URL ?? "https://app.geolibre.org").replace(/\/+$/, "")}/`,
     maxProjectBytes: integer(env.GEOLIBRE_MAX_PROJECT_BYTES, 50 * 1024 * 1024),
+    versionLimit: integer(env.GEOLIBRE_VERSION_LIMIT, DEFAULT_VERSION_LIMIT),
     maxThumbnailBytes: integer(env.GEOLIBRE_MAX_THUMBNAIL_BYTES, 5 * 1024 * 1024),
     // Cloudflare caps a Worker request body at 100 MiB, so a larger value here
     // could never be reached; the default leaves room under that for headers.
@@ -1044,6 +1046,11 @@ async function apiRoute(
           version: number,
         }),
       ]);
+      // After the save, not before: a failed write must never cost an old
+      // version. Backgrounded, so the client is not kept waiting on R2.
+      background(scope, "version prune", () =>
+        pruneVersions(db, objects, project.id, number, config.versionLimit),
+      );
       return json(
         {
           project: projectJson((await projectById(db, project.id)) as ProjectRow, config),

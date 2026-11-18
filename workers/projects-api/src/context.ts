@@ -38,6 +38,8 @@ export interface Env {
   GEOLIBRE_VIEWER_URL?: string;
   GEOLIBRE_CORS_ORIGINS?: string;
   GEOLIBRE_MAX_PROJECT_BYTES?: string;
+  // Saved versions kept per project (src/version-retention.ts). Default 10.
+  GEOLIBRE_VERSION_LIMIT?: string;
   GEOLIBRE_MAX_THUMBNAIL_BYTES?: string;
   GEOLIBRE_MAX_DATASET_BYTES?: string;
   GEOLIBRE_ACTIVITY_RETENTION_DAYS?: string;
