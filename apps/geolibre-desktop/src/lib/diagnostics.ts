@@ -78,8 +78,14 @@ const TAURI_IPC_FALLBACK_WARNING =
 // warning is cosmetic — our three usage does not rely on cross-copy identity —
 // so it is kept out of the diagnostics panel (still echoed to the console for
 // devs).
+//
+// MapLibre warns this once when 3D terrain is drawn on the globe projection:
+// its globe transform has no fog matrix and returns the identity instead,
+// and the terrain still renders correctly. Terrain is on by default, so
+// recording it would flag every fresh start with a warning nobody can act on.
 const BENIGN_CONSOLE_WARNINGS = [
   "Easing around a point is not supported under globe projection.",
+  "calculateFogMatrix is not supported on globe projection.",
   "WARNING: Multiple instances of Three.js being imported.",
 ];
 
