@@ -1373,6 +1373,19 @@ both counts in the entry. Anything upgradeable gets upgraded instead. Stale entr
 print a warning rather than failing, since the advisory database is a live service
 and a transient omission must not redden an unrelated PR.
 
+Before reaching for the allowlist, check whether the vulnerable package belongs
+in the production tree at all. picomatch (GHSA-fc5q-39xc-vjpf, a ReDoS with no
+patched release) was cleared that way. `patch-package` is an install-time tool,
+so it is a root devDependency; `scripts/apply-dependency-patches.mjs` exits
+before calling it in the workspace-scoped `--omit=dev` installs, where there is
+nothing to patch. The app's one `@osmix/geojson` function,
+`osmEntityToGeoJSONFeature`, is ported to
+`apps/geolibre-desktop/src/lib/osm-entity-feature.ts`, because that package
+depends on `@placemarkio/geojson-rewind`, which ships `@changesets/cli` as a
+runtime dependency. `tests/osm-entity-feature.test.ts` compares the port with the
+upstream function, which stays installed through the `osmix` devDependency. Keep
+both packages out of `dependencies`.
+
 When the fix is a scoped `overrides` entry (such as `@loaders.gl/compression` →
 `fflate`), npm 12 accepts it and `npm ls` then checks against the override's
 range. The lockfile still lists the package's own declared dependency (`fflate:

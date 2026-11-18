@@ -58,9 +58,6 @@
     "msix:build": "pwsh -NoProfile -ExecutionPolicy Bypass -File packaging/msix/build-msix.ps1",
     "portable:build": "pwsh -NoProfile -ExecutionPolicy Bypass -File packaging/portable/build-portable.ps1"
   },
-  "dependencies": {
-    "patch-package": "^8.0.1"
-  },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.65.0",
@@ -75,6 +72,7 @@
     "fflate": "^0.8.3",
     "happy-dom": "^21.0.4",
     "linkedom": "^0.18.15",
+    "patch-package": "^8.0.1",
     "tsx": "^4.23.15",
     "typescript-eslint": "^8.72.1"
   },
