@@ -2106,7 +2106,9 @@ export const DEFAULT_PROJECT_PREFERENCES: ProjectPreferences = {
     showPointerElevation: false,
     // On by default in this deployment: the built-in AWS Terrarium terrain (no
     // key) is part of the map, with its toggle in the top-right control column.
-    // A project saved with terrain off keeps it off.
+    // A project saved with terrain off keeps it off. Where WebGL draws without
+    // a GPU the toggle shows but terrain waits for a click (map package,
+    // software-webgl.ts).
     terrainEnabled: true,
     coordinateFormat: "dd",
     zoomToNewLayers: true,
