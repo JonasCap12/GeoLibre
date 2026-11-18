@@ -1917,7 +1917,10 @@ export interface MapPreferences {
    * from Controls -> Elevation.
    */
   showPointerElevation: boolean;
-  /** Whether the built-in 3D terrain control and terrain surface are enabled. */
+  /**
+   * Whether the built-in 3D terrain control and terrain surface are enabled.
+   * **Defaults to `true`**, also for a project file that predates the field.
+   */
   terrainEnabled: boolean;
   /**
    * Optional Cesium Ion terrain asset used by the globe when terrain is enabled.
@@ -2101,7 +2104,10 @@ export const DEFAULT_PROJECT_PREFERENCES: ProjectPreferences = {
     // Off by default: turning it on can send pointer coordinates to a public
     // elevation service, which should be an explicit choice.
     showPointerElevation: false,
-    terrainEnabled: false,
+    // On by default in this deployment: the built-in AWS Terrarium terrain (no
+    // key) is part of the map, with its toggle in the top-right control column.
+    // A project saved with terrain off keeps it off.
+    terrainEnabled: true,
     coordinateFormat: "dd",
     zoomToNewLayers: true,
     mapboxStyleUrl: "mapbox://styles/mapbox/standard",

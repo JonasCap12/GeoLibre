@@ -60,7 +60,8 @@ file contents do not change.
 
 The map's 3D look is part of the project. `mapView.pitch` and `mapView.bearing`
 hold the camera tilt and rotation, and `preferences.map` holds the terrain:
-`terrainEnabled` (3D terrain on or off), `terrainExaggeration` (vertical
+`terrainEnabled` (3D terrain on or off; `true` by default, also for a file
+that predates the field), `terrainExaggeration` (vertical
 exaggeration; omitted for the default of 1) and `terrainSource` (the HTTP(S) URL
 of a Cloud Optimized GeoTIFF DEM; omitted for the built-in global terrain). A DEM
 opened from a local file has no URL, so it is not saved. Like other URLs in a project,
