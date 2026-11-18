@@ -1,5 +1,10 @@
 import { useAppStore } from "@geolibre/core";
-import { DEFAULT_TERRAIN_EXAGGERATION, type MapEngine } from "@geolibre/map";
+import {
+  DEFAULT_TERRAIN_EXAGGERATION,
+  TERRAIN_TOGGLE_EVENT,
+  type MapEngine,
+  type TerrainToggleDetail,
+} from "@geolibre/map";
 import { useEffect, useRef } from "react";
 import { applyTerrainLook } from "../lib/terrain-look";
 
@@ -31,8 +36,28 @@ export function useTerrainRestore(
   const applied = useRef<{ engine: MapEngine; projectGeneration: number } | null>(null);
 
   useEffect(() => {
-    mapControllerRef.current?.setBuiltInControlVisible("terrain", terrainEnabled);
+    const engine = mapControllerRef.current;
+    if (!engine) return;
+    // On a map with a terrain button the button always shows, in the
+    // top-right control column; `terrainEnabled` only says whether terrain is
+    // on. A project saved with terrain off used to lose the button entirely.
+    if (terrainEnabled) engine.setBuiltInControlVisible("terrain", true);
+    else if (engine.showTerrainToggle) engine.showTerrainToggle();
+    else engine.setBuiltInControlVisible("terrain", false);
   }, [mapControllerRef, mapReadyGeneration, projectGeneration, terrainEnabled]);
+
+  // Save a click on the terrain button in the project, so the choice survives
+  // a reload and the autosave instead of snapping back to the saved state.
+  useEffect(() => {
+    const onToggle = (event: Event) => {
+      const { enabled } = (event as CustomEvent<TerrainToggleDetail>).detail;
+      const { preferences, setPreferences } = useAppStore.getState();
+      if (preferences.map.terrainEnabled === enabled) return;
+      setPreferences({ ...preferences, map: { ...preferences.map, terrainEnabled: enabled } });
+    };
+    window.addEventListener(TERRAIN_TOGGLE_EVENT, onToggle);
+    return () => window.removeEventListener(TERRAIN_TOGGLE_EVENT, onToggle);
+  }, []);
 
   useEffect(() => {
     const engine = mapControllerRef.current;
