@@ -71,6 +71,12 @@ export interface TerrainControlOptions {
    * immediately visible on the map.
    */
   onOpenSettings?: () => void;
+  /**
+   * Invoked after the user turns terrain on or off with the button (a click,
+   * or the double-click that opens the settings). Not called when code toggles
+   * terrain through {@link TerrainControl.setEnabled}.
+   */
+  onToggle?: (enabled: boolean) => void;
 }
 
 /**
@@ -90,6 +96,7 @@ export class TerrainControl implements maplibregl.IControl {
   private exaggeration: number;
   private label: string;
   private readonly onOpenSettings?: () => void;
+  private readonly onToggle?: (enabled: boolean) => void;
   private clickTimer: ReturnType<typeof setTimeout> | null = null;
   // Set briefly after a double-click opens the dialog so a 3rd+ rapid click
   // can't re-arm a single-click toggle and flatten terrain under the open dialog.
@@ -109,6 +116,7 @@ export class TerrainControl implements maplibregl.IControl {
     // controlLabel` string in the app's en.json — keep the two in sync.
     this.label = options.label ?? "Toggle terrain (double-click for exaggeration)";
     this.onOpenSettings = options.onOpenSettings;
+    this.onToggle = options.onToggle;
   }
 
   /** Keep the active (enabled) styling in sync when terrain changes elsewhere. */
@@ -176,13 +184,18 @@ export class TerrainControl implements maplibregl.IControl {
     }
     this.clickTimer = setTimeout(() => {
       this.clickTimer = null;
-      this.setEnabled(!this.isEnabled());
+      // The requested state, not a read-back: setTerrainSafely may defer the
+      // change until a loading style is done.
+      const enabled = !this.isEnabled();
+      this.setEnabled(enabled);
+      this.onToggle?.(enabled);
     }, DOUBLE_CLICK_MS);
   };
 
   private openSettings(): void {
     // Enable terrain first so exaggeration edits are visible live in the dialog.
     this.setEnabled(true);
+    this.onToggle?.(true);
     this.onOpenSettings?.();
     // Swallow further clicks for one more window (see handleClick).
     this.clicksSuppressed = true;

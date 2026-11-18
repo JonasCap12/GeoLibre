@@ -112,6 +112,8 @@ export {
   DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
   TERRAIN_SETTINGS_EVENT,
   TERRAIN_SETTINGS_CLOSE_EVENT,
+  TERRAIN_TOGGLE_EVENT,
+  type TerrainToggleDetail,
 } from "./map-controller";
 export {
   TerrainControl,

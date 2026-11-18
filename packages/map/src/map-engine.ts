@@ -246,6 +246,13 @@ export interface MapEngine {
 
   isTerrainEnabled(): boolean;
   setTerrainEnabled(enabled: boolean): boolean;
+  /**
+   * Show the on-map terrain button with terrain off. Only engines that draw a
+   * terrain button implement it; on the others terrain has no button, and
+   * `setBuiltInControlVisible("terrain", visible)` turns the relief itself on
+   * and off.
+   */
+  showTerrainToggle?(): boolean;
   getTerrainExaggeration(): number;
   setTerrainExaggeration(exaggeration: number): void;
   /** The COG URL currently backing terrain, or `null` for the default source. */
