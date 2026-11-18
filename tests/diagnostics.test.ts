@@ -375,6 +375,19 @@ describe("diagnostics startup transient suppression", () => {
     assert.equal(getDiagnosticsSnapshot().totalCount, 0);
   });
 
+  it("keeps MapLibre's globe fog-matrix warning (terrain on a globe) out of diagnostics but echoes it", () => {
+    let echoed: unknown[] | null = null;
+    console.warn = (...args: unknown[]) => {
+      echoed = args;
+    };
+    install();
+    const message = "calculateFogMatrix is not supported on globe projection.";
+    console.warn(message);
+    // Terrain is on by default, so this would otherwise flag every fresh start.
+    assert.deepEqual(echoed, [message]);
+    assert.equal(getDiagnosticsSnapshot().totalCount, 0);
+  });
+
   it("keeps the benign three.js multiple-instances warning out of diagnostics but echoes it", () => {
     let echoed: unknown[] | null = null;
     console.warn = (...args: unknown[]) => {

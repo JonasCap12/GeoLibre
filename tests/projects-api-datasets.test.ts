@@ -19,6 +19,7 @@ const CONFIG = {
   baseUrl: "https://api.example.test",
   viewerUrl: "https://app.example.test/",
   maxProjectBytes: 1,
+  versionLimit: 10,
   maxThumbnailBytes: 1,
   maxDatasetBytes: 1,
   activityRetentionDays: 90,

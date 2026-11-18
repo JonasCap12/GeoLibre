@@ -43,6 +43,11 @@ extension.
   counted by one `INSERT … ON CONFLICT DO UPDATE`. The reference needs
   read-then-write retries for the same guarantees because SQLAlchemy cannot
   express either portably.
+- **Old versions are deleted.** A project keeps its newest
+  `GEOLIBRE_VERSION_LIMIT` versions (default 10). Each save deletes the older
+  rows and their R2 objects, for good rather than into the trash. The reference
+  keeps every version. Here an autosaving workspace once filled the 5 GB bucket
+  with about 870 copies of one document.
 - **`GEOLIBRE_CORS_ORIGINS` has no wildcard default.** The Python default is
   `*`; here the app and the API are on different hostnames, so an operator must
   name the app origin anyway, and forgetting should fail visibly in the browser
@@ -52,6 +57,13 @@ extension.
   requirement for its reprojection path.
 
 ## Setup
+
+Before deploying the session-cookie API, apply its additive migration (also on
+existing databases):
+
+```bash
+wrangler d1 execute geolibre-projects --remote --file=workers/projects-api/schema-access-tokens.sql
+```
 
 ```bash
 # 1. Create the database and bucket, then paste the printed ids into wrangler.jsonc
@@ -97,6 +109,50 @@ rclone copy s3-old:geolibre-projects r2:geolibre-projects
 A Postgres deployment needs the rows exported as SQLite-compatible `INSERT`
 statements instead; the column names and order are identical, so only the dump
 syntax differs.
+
+## Web sessions in an HttpOnly cookie (fork, opt-in)
+
+Without it, the web build keeps the self-host bearer in `localStorage`, where any
+script on the page can read it and replay it elsewhere for up to 30 days. Cookie
+mode takes the long-lived credential out of JavaScript's reach:
+
+|                                               | Web, cookie mode                                                                                         | Desktop and API clients             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Session (30 days, 7 idle)                     | `tokens` row; its secret only in `__Host-geolibre_session` (`Path=/; Secure; HttpOnly; SameSite=Strict`) | `tokens` row; the bearer, as before |
+| What the app sends as `Authorization: Bearer` | A 10-minute access token (`access_tokens`), kept in memory only                                          | The session bearer                  |
+
+- **Same origin is required.** `workers.dev` is on the Public Suffix List, so a
+  cookie this Worker set on its own `*.workers.dev` host would be third-party to
+  the app, and Safari and Firefox block it. The web Worker (`workers/web`)
+  forwards `/api/*` here through a service binding (`PROJECTS_API`), and the app
+  in cookie mode calls `window.location.origin`.
+- **The cookie is read on three routes only**: `POST /api/auth/refresh`,
+  `POST /api/auth/session/adopt` and cookie-mode `DELETE /api/auth/token`.
+  Every other route authenticates by header, which a cross-site page cannot set,
+  so they need no CSRF token. The three cookie routes also require
+  `X-GeoLibre-Session: cookie` and an `Origin` listed in `GEOLIBRE_CORS_ORIGINS`.
+- **Nothing exchanges a cookie or an access token for a long-lived bearer.** In
+  cookie mode the four places that mint a session (register, sign-in, the
+  two-factor step, password change) set the cookie and return an access token.
+- An access token is valid only while its session row is: signing out, changing
+  or resetting the password, an admin disabling the account, or revoking the
+  device from the sessions list ends it at once.
+- **Adopt** moves a bearer an older build saved in `localStorage` into the
+  cookie. The new session keeps the old one's deadline, so adopting cannot
+  extend a session.
+- Refresh is rate-limited per session (`refresh:<digest>`), not per IP.
+
+Rollout, in this order:
+
+1. Apply `schema-access-tokens.sql` to the production D1 (see "Setup").
+2. Deploy this Worker and `workers/web`. With the variable below unset the app
+   behaves exactly as before; only the new routes and the `/api/*` proxy go live.
+3. Check that `https://<app host>/api/...` answers through the proxy.
+4. Set the repository variable `VITE_GEOLIBRE_SESSION_COOKIE=1` and redeploy the
+   web Worker. Existing users are migrated on their next visit.
+
+Rollback: unset the variable and redeploy the web Worker. Users sign in once
+more; the cookie routes stay harmless.
 
 ## Known gaps
 

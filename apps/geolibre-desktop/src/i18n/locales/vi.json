@@ -2629,6 +2629,16 @@
     "reset": "Cài lại",
     "done": "Xong"
   },
+  "sharedTerrain": {
+    "useAsTerrain": "Dùng làm địa hình 3D",
+    "clear": "Bỏ dùng làm địa hình",
+    "current": "Địa hình 3D của dự án: {{name}}",
+    "chosen": "“{{name}}” đã là địa hình 3D của dự án. Mọi người đã đăng nhập khi mở dự án hoặc vào phiên làm việc chung đều được tải địa hình này.",
+    "cleared": "Dự án không còn dùng địa hình 3D từ thư viện.",
+    "tiffNotLayer": "File GeoTIFF trong thư viện được dùng làm địa hình 3D của dự án, không thêm thành lớp.",
+    "loadFailed": "Không tải được địa hình 3D “{{name}}” của dự án từ thư viện dùng chung.",
+    "unsupportedRenderer": "Trình kết xuất này dùng địa hình riêng. Địa hình 3D từ thư viện của dự án cần trình kết xuất MapLibre."
+  },
   "pixelTimeSeries": {
     "title": "Chuỗi thời gian pixel",
     "empty": "Nhấp vào một pixel trên bản đồ để vẽ giá trị của nó theo thời gian. Thêm nhiều pixel hơn để so sánh.",
@@ -2690,6 +2700,8 @@
     "continue": "Tiếp tục",
     "loading": "Đang tải…",
     "sessionEnded": "Phiên đăng nhập đã kết thúc. Hãy đăng nhập lại để tiếp tục.",
+    "sessionLoading": "Đang khôi phục phiên đăng nhập…",
+    "sessionUnavailable": "Chưa thể khôi phục phiên đăng nhập. Hãy kiểm tra kết nối rồi thử lại.",
     "resetDone": "Đã đổi mật khẩu. Hãy đăng nhập bằng mật khẩu mới.",
     "botCheckPending": "Hãy hoàn tất bước kiểm tra bảo mật trước.",
     "botCheckLoadFailed": "Không tải được bước kiểm tra bảo mật. Kiểm tra kết nối hoặc tắt trình chặn nội dung cho trang này, rồi tải lại trang.",

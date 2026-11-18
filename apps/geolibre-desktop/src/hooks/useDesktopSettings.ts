@@ -12,6 +12,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 import { normalizeStringList } from "../lib/string-lists";
 import { DESKTOP_SETTINGS_STORAGE_KEY } from "../lib/storage-keys";
+import { persistedSessionToken, sessionCookieMode } from "../lib/selfhost-session-mode";
 import {
   credentialStorageLocation,
   queueCredentialChanges,
@@ -72,6 +73,11 @@ export interface DesktopSettings {
    * localStorage blob. The web build keeps it in this blob, where any
    * same-origin script could read it: the well-understood "PAT in local
    * storage" trade-off for a short-lived, revocable, single-service token.
+   *
+   * Fork: with `VITE_GEOLIBRE_SESSION_COOKIE=1` a self-hosted web build holds
+   * a 10-minute access token here, in memory only. The session itself lives in
+   * an HttpOnly cookie (`lib/selfhost-session.ts`,
+   * `workers/projects-api/README.md`), and this blob never stores the token.
    */
   shareToken: string;
   /**
@@ -692,6 +698,10 @@ export function migrateLegacyDefaultTheme(settings: unknown): unknown {
  * failed this session.
  */
 export function serializeDesktopSettingsForStorage(settings: DesktopSettings): string {
+  // Fork (self-host cookie sessions): the in-memory access token never reaches storage.
+  if (sessionCookieMode()) {
+    return JSON.stringify({ ...settings, shareToken: persistedSessionToken() });
+  }
   if (credentialStorageLocation() === "browser") return JSON.stringify(settings);
   const { publicSettings } = splitDesktopSettingsSecrets(settings);
   return JSON.stringify(

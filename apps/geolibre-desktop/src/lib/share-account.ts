@@ -24,6 +24,8 @@ import {
 } from "./password-strength";
 import { getShareFetch } from "./share-fetch";
 import { resolveShareBaseUrl } from "./share-geolibre";
+import { sessionCookieMode } from "./selfhost-session-mode";
+import { COOKIE_SESSION_HEADERS, readAccessToken } from "./selfhost-session";
 
 /** Mirrors the API: 3-39 lowercase letters, digits, or hyphens. */
 export const USERNAME_PATTERN = /^[a-z0-9-]{3,39}$/;
@@ -295,12 +297,14 @@ export async function authRequest(
   const base = requireBaseUrl(options.baseUrl);
   const fetchImpl = options.fetchImpl ?? getShareFetch();
   const headers: Record<string, string> = {};
+  if (sessionCookieMode()) Object.assign(headers, COOKIE_SESSION_HEADERS);
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   let response: Response;
   try {
     response = await fetchImpl(`${base}${path}`, {
       method: options.method ?? "POST",
+      ...(sessionCookieMode() ? { credentials: "same-origin" as const } : {}),
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
@@ -312,7 +316,12 @@ export async function authRequest(
 }
 
 async function readToken(response: Response): Promise<string> {
-  const body = (await response.json()) as { token?: unknown };
+  const body = (await response.json()) as {
+    token?: unknown;
+    accessToken?: unknown;
+    expiresAt?: unknown;
+  };
+  if (sessionCookieMode()) return readAccessToken(body);
   if (typeof body.token !== "string" || !body.token) {
     throw new ShareAccountError("The server did not return a token.");
   }
@@ -337,6 +346,8 @@ export async function signIn(options: ShareAccountOptions): Promise<SignInResult
     fallback: "Sign in failed",
   });
   const body = (await response.json()) as {
+    accessToken?: unknown;
+    expiresAt?: unknown;
     token?: unknown;
     mfaRequired?: unknown;
     mfaTicket?: unknown;
@@ -344,6 +355,7 @@ export async function signIn(options: ShareAccountOptions): Promise<SignInResult
   if (body.mfaRequired === true && typeof body.mfaTicket === "string" && body.mfaTicket) {
     return { kind: "mfa", ticket: body.mfaTicket };
   }
+  if (sessionCookieMode()) return { kind: "token", token: readAccessToken(body) };
   if (typeof body.token !== "string" || !body.token) {
     throw new ShareAccountError("The server did not return a token.");
   }

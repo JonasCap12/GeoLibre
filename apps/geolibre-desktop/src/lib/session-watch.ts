@@ -21,13 +21,14 @@ export interface SessionWatchOptions {
   getToken: () => string;
   /** Called once the server has confirmed the token is no longer valid. */
   onExpired: (token: string) => void;
+  /** Cookie mode: null means refresh returned 401; other failures must throw. */
+  refresh?: () => Promise<string | null>;
 }
 
 function headerValue(input: RequestInfo | URL, init: RequestInit | undefined, name: string) {
   const fromInit = init?.headers;
   if (fromInit !== undefined) {
-    const value = new Headers(fromInit).get(name);
-    if (value !== null) return value;
+    return new Headers(fromInit).get(name);
   }
   if (typeof Request !== "undefined" && input instanceof Request) return input.headers.get(name);
   return null;
@@ -41,6 +42,30 @@ export function installSessionWatch(options: SessionWatchOptions): () => void {
   const origin = requestOrigin(options.baseUrl);
   const base = options.baseUrl.replace(/\/+$/, "");
   let checking: string | null = null;
+  let recovering: { token: string; promise: Promise<string | null | undefined> } | null = null;
+
+  const recover = (token: string): Promise<string | null | undefined> => {
+    if (recovering?.token === token) return recovering.promise;
+    const promise = (async () => {
+      try {
+        if (options.getToken() !== token) return options.getToken() || null;
+        const confirmed = await inner(`${base}/api/account`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (options.getToken() !== token) return options.getToken() || null;
+        if (confirmed.status !== 401) return undefined;
+        const fresh = await options.refresh!();
+        if (fresh === null && options.getToken() === token) options.onExpired(token);
+        return fresh;
+      } catch {
+        return undefined;
+      }
+    })().finally(() => {
+      if (recovering?.promise === promise) recovering = null;
+    });
+    recovering = { token, promise };
+    return promise;
+  };
 
   const verify = async (token: string) => {
     if (checking === token) return;
@@ -61,8 +86,34 @@ export function installSessionWatch(options: SessionWatchOptions): () => void {
   };
 
   const watched: typeof globalThis.fetch = async (input, init) => {
+    const sentToken = headerValue(input, init, "Authorization")?.replace(/^Bearer /, "");
+    const wasCurrent = sentToken !== undefined && sentToken === options.getToken();
+    // A Request body is a stream even when its original source was a string.
+    // Never consume it twice; explicitly supplied replayable BodyInit values
+    // can be resent. GET/HEAD Requests can be cloned before the first fetch.
+    const body = init?.body ?? (input instanceof Request ? input.body : null);
+    const replayable =
+      body == null ||
+      typeof body === "string" ||
+      body instanceof Blob ||
+      body instanceof ArrayBuffer ||
+      body instanceof FormData ||
+      body instanceof URLSearchParams;
+    const retryInput =
+      options.refresh && replayable && input instanceof Request ? input.clone() : input;
     const response = await inner(input, init);
     if (response.status !== 401 || origin === null || requestOrigin(input) !== origin) {
+      return response;
+    }
+    if (options.refresh && sentToken && wasCurrent) {
+      const fresh = await recover(sentToken);
+      if (fresh && replayable) {
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : undefined),
+        );
+        headers.set("Authorization", `Bearer ${fresh}`);
+        return inner(retryInput, { ...init, headers });
+      }
       return response;
     }
     const token = options.getToken();

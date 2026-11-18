@@ -2690,6 +2690,16 @@
     "reset": "Reset",
     "done": "Done"
   },
+  "sharedTerrain": {
+    "useAsTerrain": "Use as 3D terrain",
+    "clear": "Stop using as terrain",
+    "current": "This project's 3D terrain: {{name}}",
+    "chosen": "“{{name}}” is now this project's 3D terrain. Everyone signed in who opens the project or joins its session loads it.",
+    "cleared": "The project no longer uses a 3D terrain from the library.",
+    "tiffNotLayer": "A GeoTIFF in the library is used as the project's 3D terrain, not added as a layer.",
+    "loadFailed": "Could not load the project's 3D terrain “{{name}}” from the shared library.",
+    "unsupportedRenderer": "This renderer uses its own terrain. The project's 3D terrain from the library needs the MapLibre renderer."
+  },
   "pixelTimeSeries": {
     "title": "Pixel time series",
     "empty": "Click a pixel on the map to plot its value over time. Add more pixels to compare.",
@@ -2751,6 +2761,8 @@
     "continue": "Continue",
     "loading": "Loading…",
     "sessionEnded": "Your session has ended. Sign in again to continue.",
+    "sessionLoading": "Restoring your session…",
+    "sessionUnavailable": "Could not restore your session. Check your connection and retry.",
     "resetDone": "Password changed. Sign in with your new password.",
     "botCheckPending": "Complete the security check first.",
     "botCheckLoadFailed": "The security check could not be loaded. Check your connection or disable content blockers for this site, then reload.",

@@ -1,5 +1,17 @@
+import { useAppStore } from "@geolibre/core";
 import { Button, Input, Label, Select } from "@geolibre/ui";
-import { Download, FileUp, RefreshCw, Search, Tag, Trash2, Upload, Users, X } from "lucide-react";
+import {
+  Download,
+  FileUp,
+  Mountain,
+  RefreshCw,
+  Search,
+  Tag,
+  Trash2,
+  Upload,
+  Users,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDesktopSettingsStore } from "../../../../hooks/useDesktopSettings";
@@ -13,6 +25,11 @@ import {
   type SharedDatasetVisibility,
   uploadSharedDataset,
 } from "../../../../lib/shared-datasets";
+import {
+  isTerrainDatasetFile,
+  readSharedTerrain,
+  withSharedTerrain,
+} from "../../../../lib/shared-terrain";
 import { openLocalDataFileWithFallback } from "../../../../lib/tauri-io";
 import { createBaseLayer, errorMessage, fileNameFromPath } from "../helpers";
 import { AddDataSourceForm, useAddDataSource } from "../shared";
@@ -101,6 +118,31 @@ export function SharedDataSource() {
   }, [refresh]);
 
   const selected = datasets.find((entry) => entry.id === selectedId) ?? null;
+  // Fork: a GeoTIFF in the library is the project's 3D terrain, not a layer
+  // (lib/shared-terrain.ts). Primitive selectors, not an object.
+  const selectedIsTerrain = selected !== null && isTerrainDatasetFile(selected.filename);
+  const terrainId = useAppStore((state) => readSharedTerrain(state.metadata)?.datasetId ?? null);
+  const terrainName = useAppStore((state) => readSharedTerrain(state.metadata)?.name ?? "");
+
+  /** Record the dataset as the project's terrain; useSharedTerrain downloads and applies it. */
+  const setProjectTerrain = (dataset: SharedDataset | null) => {
+    const state = useAppStore.getState();
+    useAppStore.setState({
+      metadata: withSharedTerrain(
+        state.metadata,
+        dataset ? { datasetId: dataset.id, name: dataset.name } : null,
+      ),
+      isDirty: true,
+    });
+    if (dataset) {
+      // Terrain on, and no saved URL left to compete with the library copy.
+      const { terrainSource: _url, ...map } = state.preferences.map;
+      state.setPreferences({ ...state.preferences, map: { ...map, terrainEnabled: true } });
+    }
+    setUploadNote(
+      dataset ? t("sharedTerrain.chosen", { name: dataset.name }) : t("sharedTerrain.cleared"),
+    );
+  };
 
   const handleUpload = async () => {
     if (!token) {
@@ -201,7 +243,7 @@ export function SharedDataSource() {
       onBeforeLayerIdChange={source.setBeforeLayerId}
       onSubmit={handleSubmit}
       error={source.error}
-      submitDisabled={source.isSubmitting || isListing || selected === null}
+      submitDisabled={source.isSubmitting || isListing || selected === null || selectedIsTerrain}
     >
       <div className="space-y-3">
         <div className="space-y-1.5">
@@ -282,6 +324,34 @@ export function SharedDataSource() {
           ) : null}
           {listError ? <p className="text-xs text-destructive">{listError}</p> : null}
         </div>
+
+        {selectedIsTerrain || terrainId ? (
+          <div className="space-y-1.5 rounded-md border border-border p-2">
+            {selectedIsTerrain ? (
+              <p className="text-xs text-muted-foreground">{t("sharedTerrain.tiffNotLayer")}</p>
+            ) : null}
+            {terrainId ? (
+              <p className="text-xs">
+                <Mountain className="me-1 inline h-3.5 w-3.5 align-text-bottom" />
+                {t("sharedTerrain.current", { name: terrainName || terrainId })}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              {selected && selectedIsTerrain && selected.id !== terrainId ? (
+                <Button type="button" variant="outline" onClick={() => setProjectTerrain(selected)}>
+                  <Mountain className="me-2 h-3.5 w-3.5" />
+                  {t("sharedTerrain.useAsTerrain")}
+                </Button>
+              ) : null}
+              {terrainId ? (
+                <Button type="button" variant="outline" onClick={() => setProjectTerrain(null)}>
+                  <X className="me-2 h-3.5 w-3.5" />
+                  {t("sharedTerrain.clear")}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
           <Button

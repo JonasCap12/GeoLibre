@@ -1,11 +1,13 @@
 import { Button, Input, Label } from "@geolibre/ui";
 import { LogOut, ShieldAlert, X } from "lucide-react";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useBeforeUnloadGuard } from "../../hooks/useBeforeUnloadGuard";
 import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
 import { resolveAppName } from "../../lib/app-name";
 import { installSessionWatch } from "../../lib/session-watch";
+import { createSelfHostSession } from "../../lib/selfhost-session";
+import { sessionCookieMode } from "../../lib/selfhost-session-mode";
 import {
   ShareAccountError,
   USERNAME_PATTERN,
@@ -64,8 +66,68 @@ export function SelfHostGate({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<SelfHostRoute>(() => captureSelfHostRoute());
   const [notice, setNotice] = useState<string | null>(null);
   const token = useDesktopSettingsStore((state) => state.desktopSettings.shareToken.trim());
+  const cookieMode = sessionCookieMode();
+  const [boot, setBoot] = useState<"loading" | "ready" | "error">(cookieMode ? "loading" : "ready");
+  const [bootAttempt, setBootAttempt] = useState(0);
+  // Read through a ref: a language switch must not tear the session down and
+  // boot it again (a loading flash and a needless refresh).
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   useEffect(() => {
+    if (!cookieMode) return;
+    let cancelled = false;
+    // A 401 while booting means "no session on this browser" (a first visit,
+    // or a cookie that lapsed while the tab was closed), not "your session just
+    // ended": only a session lost after boot earns the notice.
+    let booted = false;
+    const ended = () => {
+      if (!cancelled && booted) setNotice(tRef.current("auth.sessionEnded"));
+    };
+    const baseUrl = resolveShareBaseUrl() ?? window.location.origin;
+    const getToken = () => useDesktopSettingsStore.getState().desktopSettings.shareToken.trim();
+    setBoot("loading");
+    const session = createSelfHostSession({
+      baseUrl,
+      getToken,
+      setToken: writeShareToken,
+      onExpired: ended,
+    });
+    const unsubscribe = useDesktopSettingsStore.subscribe((state, previous) => {
+      if (state.desktopSettings.shareToken !== previous.desktopSettings.shareToken) {
+        session.tokenChanged();
+      }
+    });
+    const unwatch = installSessionWatch({
+      baseUrl,
+      getToken,
+      refresh: session.refresh,
+      onExpired: () => {
+        writeShareToken("");
+        ended();
+      },
+    });
+    void session
+      .boot()
+      .then(() => {
+        booted = true;
+        if (!cancelled) setBoot("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setBoot("error");
+      });
+    return () => {
+      cancelled = true;
+      session.stop();
+      unsubscribe();
+      unwatch();
+    };
+  }, [cookieMode, bootAttempt]);
+
+  useEffect(() => {
+    if (cookieMode) return;
     const baseUrl = resolveShareBaseUrl();
     if (!token || !baseUrl) return;
     return installSessionWatch({
@@ -76,7 +138,7 @@ export function SelfHostGate({ children }: { children: ReactNode }) {
         setNotice(t("auth.sessionEnded"));
       },
     });
-  }, [token, t]);
+  }, [token, t, cookieMode]);
 
   const leave = (message: string | null = null) => {
     leaveSelfHostRoute();
@@ -112,6 +174,17 @@ export function SelfHostGate({ children }: { children: ReactNode }) {
   if (route.page === "verify-email") {
     return <VerifyEmailScreen token={route.token} onDone={() => leave()} />;
   }
+  if (boot !== "ready")
+    return (
+      <AuthScreen>
+        <p role="status">
+          {t(boot === "loading" ? "auth.sessionLoading" : "auth.sessionUnavailable")}
+        </p>
+        {boot === "error" ? (
+          <Button onClick={() => setBootAttempt((n) => n + 1)}>{t("auth.retry")}</Button>
+        ) : null}
+      </AuthScreen>
+    );
   if (!token) return <SignInScreen notice={notice} />;
   return <SignedIn token={token}>{children}</SignedIn>;
 }
@@ -249,12 +322,14 @@ function MfaEnrollmentScreen({
   const [busy, setBusy] = useState(false);
   const leave = async () => {
     setBusy(true);
+    let revoked = false;
     try {
       await signOut({ token });
+      revoked = true;
     } catch (err) {
       console.warn("sign-out could not reach the server; clearing the local session", err);
     } finally {
-      writeShareToken("");
+      if (revoked || !sessionCookieMode()) writeShareToken("");
       setBusy(false);
     }
   };

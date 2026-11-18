@@ -260,23 +260,25 @@ describe("project parsing", () => {
     assert.equal(reloaded.preferences.map.projection, "mercator");
   });
 
-  it("round-trips terrain and defaults legacy projects to terrain off", () => {
+  it("round-trips terrain and defaults new and legacy projects to terrain on", () => {
+    // The built-in AWS terrain is on out of the box (owner's fork default).
     const base = createEmptyProject("Terrain");
-    assert.equal(base.preferences.map.terrainEnabled, false);
-    const enabled = {
+    assert.equal(base.preferences.map.terrainEnabled, true);
+    const disabled = {
       ...base,
       preferences: {
         ...base.preferences,
-        map: { ...base.preferences.map, terrainEnabled: true },
+        map: { ...base.preferences.map, terrainEnabled: false },
       },
     };
-    assert.equal(parseProject(serializeProject(enabled)).preferences.map.terrainEnabled, true);
+    // Turning it off is still a saved choice.
+    assert.equal(parseProject(serializeProject(disabled)).preferences.map.terrainEnabled, false);
 
     const legacy = structuredClone(base) as unknown as {
       preferences: { map: Record<string, unknown> };
     };
     delete legacy.preferences.map.terrainEnabled;
-    assert.equal(parseProject(JSON.stringify(legacy)).preferences.map.terrainEnabled, false);
+    assert.equal(parseProject(JSON.stringify(legacy)).preferences.map.terrainEnabled, true);
   });
 
   it("round-trips the 3D look: view, terrain, exaggeration and DEM source", () => {

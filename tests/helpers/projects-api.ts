@@ -63,6 +63,7 @@ export function apiScope(
       baseUrl: "https://api.example.com",
       viewerUrl: "https://viewer.example.com/",
       maxProjectBytes: 100000,
+      versionLimit: 10,
       maxThumbnailBytes: 10000,
       maxDatasetBytes: 100000,
       activityRetentionDays: 30,

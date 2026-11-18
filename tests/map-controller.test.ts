@@ -2575,6 +2575,62 @@ describe("MapController terrain auto-enable", () => {
     }
   });
 
+  it("shows the toggle but leaves terrain off when WebGL draws in software", () => {
+    const prevDoc = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = makeTerrainDomStub();
+    try {
+      let terrain = null as maplibregl.TerrainSpecification | null;
+      const sources = new Set<string>();
+      const swiftShader = {
+        RENDERER: 0x1f01,
+        getExtension: () => ({ UNMASKED_RENDERER_WEBGL: 0x9246 }),
+        getParameter: () => "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device), SwiftShader driver)",
+      };
+      let added = 0;
+      const map = {
+        addControl: (control: maplibregl.IControl) => {
+          added += 1;
+          control.onAdd(map as unknown as maplibregl.Map);
+        },
+        removeControl() {},
+        getCanvas: () => ({ getContext: (type: string) => (type === "webgl2" ? swiftShader : null) }),
+        getSource: (id: string) => (sources.has(id) ? {} : undefined),
+        addSource: (id: string) => {
+          sources.add(id);
+        },
+        getTerrain: () => terrain,
+        setTerrain: (spec: maplibregl.TerrainSpecification | null) => {
+          terrain = spec;
+        },
+        setCenterClampedToGround() {},
+        on() {},
+        off() {},
+      };
+      const controller = createMapController();
+      const internal = controller as unknown as {
+        map: unknown;
+        styleReady: boolean;
+        terrainEnablePending: boolean;
+      };
+      internal.map = map;
+      internal.styleReady = true;
+
+      const ok = controller.setBuiltInControlVisible("terrain", true);
+
+      assert.equal(ok, true);
+      assert.equal(added, 1);
+      // Drawn on the CPU, 3D terrain stalls the page: it waits for a click.
+      assert.equal(terrain, null);
+      assert.equal(internal.terrainEnablePending, false);
+      // An explicit request (a plugin, the settings dialog) still turns it on.
+      assert.equal(controller.setTerrainEnabled(true), true);
+      assert.equal((terrain as maplibregl.TerrainSpecification | null)?.source, "geolibre-terrain-dem");
+    } finally {
+      if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = prevDoc;
+    }
+  });
+
   it("defers the enable while the style loads, then turns terrain on once ready", () => {
     const prevDoc = (globalThis as { document?: unknown }).document;
     (globalThis as { document?: unknown }).document = makeTerrainDomStub();

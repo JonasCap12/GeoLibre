@@ -96,6 +96,7 @@ export { defaultBlankBackgroundColor };
 import { ResetBearingControl } from "./reset-bearing-control";
 import { MaptoolkitLogoControl } from "./maptoolkit-logo-control";
 import { TerrainControl, DEFAULT_TERRAIN_EXAGGERATION, setTerrainSafely } from "./terrain-control";
+import { mapUsesSoftwareWebGL } from "./software-webgl";
 import { getDynamicPaintProperty, setDynamicPaintProperty } from "./dynamic-style-property";
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import { installMapTransformCompat } from "./map-transform-compat";
@@ -936,8 +937,10 @@ export class MapController implements MapEngine {
       if (control === "terrain") {
         const added = this.addTerrainControl();
         // Turning the Terrain control on should show 3D relief immediately, so
-        // users don't have to click the control button as a second step.
-        this.autoEnableTerrain();
+        // users don't have to click the control button as a second step. Not
+        // where WebGL draws in software: there 3D terrain stalls the page, so
+        // the toggle waits for a click (see software-webgl.ts).
+        if (!mapUsesSoftwareWebGL(this.map)) this.autoEnableTerrain();
         return added;
       }
       if (control === "scale") return this.addScaleControl();
