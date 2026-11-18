@@ -82,6 +82,10 @@
     // mail from noreply@jonasnguyen.uk would not be delivered.
     "GEOLIBRE_EMAIL_FROM": "noreply@geolibre.jonasnguyen.uk",
     "GEOLIBRE_MAX_PROJECT_BYTES": "52428800",
+    // Saved versions kept per project. Each autosave is a whole copy of the
+    // project in R2, and keeping all of them once filled the 5 GB bucket
+    // (src/version-retention.ts). Older versions are deleted for good on save.
+    "GEOLIBRE_VERSION_LIMIT": "10",
     "GEOLIBRE_MAX_THUMBNAIL_BYTES": "5242880",
     // Also the retention of the auth audit log (auth_events).
     "GEOLIBRE_ACTIVITY_RETENTION_DAYS": "90",

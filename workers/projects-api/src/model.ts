@@ -11,6 +11,8 @@ export interface Config {
   baseUrl: string;
   viewerUrl: string;
   maxProjectBytes: number;
+  /** Saved versions kept per project; older ones are deleted on save. */
+  versionLimit: number;
   maxThumbnailBytes: number;
   maxDatasetBytes: number;
   activityRetentionDays: number;
