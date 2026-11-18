@@ -2,7 +2,7 @@
 // before @osmix/core reads it at module-load time.
 import "./osm-shared-array-buffer-shim";
 import { Osm } from "@osmix/core";
-import { osmEntityToGeoJSONFeature } from "@osmix/geojson";
+import { osmEntityToGeoJSONFeature } from "./osm-entity-feature";
 import { readOsmPbf } from "@osmix/pbf";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 
