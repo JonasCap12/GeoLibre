@@ -50,6 +50,7 @@ import {
   Clapperboard,
   ClipboardList,
   LocateFixed,
+  Route,
   ShieldAlert,
   SlidersHorizontal,
   Video,
@@ -60,6 +61,7 @@ import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
 import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
 import { isMaptoolkitBasemapActive } from "../../../lib/maptoolkit-basemap";
 import { useNavigationTool } from "../../../lib/navigation/store";
+import { openNetworkDashboard } from "../../../lib/network-dashboard-screen";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import {
   LOGO_CONTROL_IDS,
@@ -526,6 +528,11 @@ export function ControlsMenu({
               {t("toolbar.item.hazardAlert")}
             </DropdownMenuItem>
           )}
+          {/* Fork: road and bridge network overview, a full-page dashboard. */}
+          <DropdownMenuItem onSelect={openNetworkDashboard}>
+            <Route className="me-2 h-3.5 w-3.5" />
+            {t("roadNetwork.open")}
+          </DropdownMenuItem>
           {show("controls.recordTour") && (
             <DropdownMenuItem onSelect={onOpenRecordTour}>
               <Video className="me-2 h-3.5 w-3.5" />

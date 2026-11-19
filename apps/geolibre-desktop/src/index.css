@@ -6332,6 +6332,100 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
     inset-block-end: var(--progress-strip-h);
   }
 }
+/* Fork: road and bridge network dashboard (NetworkDashboardScreen). Like the
+   progress screen, it pins the shell's own map into its middle cell: filters
+   on the start side, legend and total kilometres on the end side, charts under
+   the map. On a narrow screen the map takes the top and the panels scroll
+   underneath it. */
+:root[data-network-dashboard] {
+  --nd-header-h: 4rem;
+  --nd-start-w: clamp(14rem, 18vw, 18rem);
+  --nd-end-w: clamp(15rem, 20vw, 19rem);
+  --nd-strip-h: clamp(12rem, 27vh, 16rem);
+  overflow: hidden;
+}
+:root[data-network-dashboard] main.isolate {
+  position: fixed;
+  z-index: 40;
+  inset-block: var(--nd-header-h) var(--nd-strip-h);
+  inset-inline: var(--nd-start-w) var(--nd-end-w);
+  min-height: 0;
+}
+.network-dashboard-header {
+  position: fixed;
+  z-index: 41;
+  inset-block-start: 0;
+  inset-inline: 0;
+  height: var(--nd-header-h);
+}
+.network-dashboard-body {
+  display: contents;
+}
+.network-dashboard-start,
+.network-dashboard-end {
+  position: fixed;
+  z-index: 40;
+  inset-block: var(--nd-header-h) 0;
+}
+.network-dashboard-start {
+  inset-inline-start: 0;
+  width: var(--nd-start-w);
+}
+.network-dashboard-end {
+  inset-inline-end: 0;
+  width: var(--nd-end-w);
+}
+.network-dashboard-strip {
+  position: fixed;
+  z-index: 40;
+  inset-block-end: 0;
+  inset-inline: var(--nd-start-w) var(--nd-end-w);
+  height: var(--nd-strip-h);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.network-dashboard-empty {
+  position: fixed;
+  z-index: 41;
+  inset-block: var(--nd-header-h) var(--nd-strip-h);
+  inset-inline: var(--nd-start-w) var(--nd-end-w);
+}
+@media (max-width: 899px) {
+  :root[data-network-dashboard] {
+    --nd-header-h: 3.5rem;
+    --nd-map-h: 45dvh;
+  }
+  :root[data-network-dashboard] main.isolate {
+    inset-block: var(--nd-header-h) auto;
+    inset-inline: 0;
+    height: var(--nd-map-h);
+  }
+  .network-dashboard-body {
+    position: fixed;
+    z-index: 40;
+    display: block;
+    inset-block: calc(var(--nd-header-h) + var(--nd-map-h)) 0;
+    inset-inline: 0;
+    overflow-y: auto;
+  }
+  .network-dashboard-start,
+  .network-dashboard-end,
+  .network-dashboard-strip {
+    position: static;
+    width: auto;
+    height: auto;
+    border-inline-width: 0;
+    border-block-start-width: 1px;
+  }
+  .network-dashboard-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .network-dashboard-empty {
+    inset-block: var(--nd-header-h) auto;
+    inset-inline: 0;
+    height: var(--nd-map-h);
+  }
+}
+
 /* The dashboard frames the native map in its measured grid slot. */
 :root[data-progress-dashboard] main.isolate {
   left: var(--dashboard-map-left, 0px);

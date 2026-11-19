@@ -12205,5 +12205,60 @@
         "length": "{{done}}/{{total}} m"
       }
     }
+  },
+  "roadNetwork": {
+    "open": "Road network dashboard",
+    "title": "Road and bridge projects",
+    "subtitle": "Overview of every project line in this workspace",
+    "colorBy": "Color lines by",
+    "mode": {
+      "status": "Status",
+      "type": "Type"
+    },
+    "legend": {
+      "status": "Lines by status",
+      "type": "Lines by type"
+    },
+    "fitAll": "Show all",
+    "close": "Close the dashboard",
+    "filters": "Filters",
+    "clearFilters": "Clear filters",
+    "noFields": "These layers have no status, type or year attribute set. Choose them in Layers and fields….",
+    "totalKm": "Total length",
+    "lineCount_one": "{{count}} line",
+    "lineCount_other": "{{count}} lines",
+    "unclassified": "Not classified",
+    "charts": "Charts",
+    "chart": {
+      "byYear": "Kilometers by start year",
+      "noYear": "No line has a start year.",
+      "by": {
+        "status": "Kilometers by status",
+        "type": "Kilometers by type"
+      }
+    },
+    "year": "Start year",
+    "yearRange": "Start year",
+    "yearFrom": "From year",
+    "yearTo": "To year",
+    "empty": {
+      "title": "No project lines to show",
+      "noLines": "Add the project routes as a line layer (KMZ, KML, GeoJSON, Shapefile…) to see them here.",
+      "noneIncluded": "Every line layer is left out of the dashboard. Choose the layers to include.",
+      "filtered": "No line matches the filters."
+    },
+    "layers": {
+      "open": "Layers and fields…",
+      "title": "Layers and fields",
+      "description": "Choose the line layers that hold project routes, and the attribute that holds each project's name, status, type and start year.",
+      "layer": "Layer"
+    },
+    "field": {
+      "name": "Name",
+      "status": "Status",
+      "type": "Type",
+      "year": "Start year",
+      "none": "(none)"
+    }
   }
 }
