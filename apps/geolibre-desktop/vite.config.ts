@@ -306,6 +306,7 @@ const BUILD_ENV_KEYS = [
   "VITE_GEOLIBRE_SHARE_URL",
   "VITE_GEOLIBRE_SELFHOST_AUTH",
   "VITE_GEOLIBRE_SESSION_COOKIE",
+  "VITE_GEOLIBRE_CONSTRUCTION_PROGRESS",
   "VITE_GEOLIBRE_TILES_URL",
   // Public by design (it is in the page for anyone to read); the secret half
   // lives only on the projects API.

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useCallback, useState } from "react";
 import { DesktopShell } from "./components/layout/DesktopShell";
 import { ConstructionProgressScreen } from "./components/progress/ConstructionProgressScreen";
+import { NetworkDashboardScreen } from "./components/network/NetworkDashboardScreen";
 import { NotificationRegion } from "./components/layout/NotificationRegion";
 import { OnboardingDialog } from "./components/layout/OnboardingDialog";
 import { RegionalBasemapPrompt } from "./components/layout/RegionalBasemapPrompt";
@@ -97,6 +98,7 @@ export default function App() {
             onMapReady={handleMapReady}
           />
           <ConstructionProgressScreen camera={mapAppAPI} />
+          <NetworkDashboardScreen camera={mapAppAPI} />
           <OnboardingDialog open={showOnboarding} onClose={dismissOnboarding} />
           {/* Asks before an opened project's regional basemap (tiles from
               mainland China) loads; the default basemap shows meanwhile. */}

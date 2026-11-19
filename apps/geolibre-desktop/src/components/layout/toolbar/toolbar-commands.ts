@@ -32,6 +32,7 @@ import {
   Palette,
   Printer,
   RefreshCw,
+  Route,
   Save,
   Shapes,
   Share2,
@@ -62,6 +63,8 @@ import { masHidesDataSource } from "../../../lib/mas-build";
 import { openObiaWorkbench } from "../../../lib/obia/obia-panel";
 import { pluginDisplayName } from "../../../lib/plugin-display-name";
 import { openProgressScreenOrNotify } from "../../../lib/progress-screen";
+import { constructionProgressEnabled } from "../../../lib/construction-progress-flag";
+import { openNetworkDashboard } from "../../../lib/network-dashboard-screen";
 import { IS_STORE_BUILD } from "../../../lib/updates";
 import type { AddDataKind } from "../AddDataDialog";
 import {
@@ -738,14 +741,28 @@ export function buildToolbarCommands(context: ToolbarCommandContext): Command[] 
       icon: ShieldAlert,
       run: () => setHazardAlertOpen(true),
     },
+    // Fork: construction progress screen over a drawing layer. Hidden unless
+    // VITE_GEOLIBRE_CONSTRUCTION_PROGRESS=1 (see construction-progress-flag.ts).
+    ...(constructionProgressEnabled()
+      ? [
+          {
+            id: "control.construction-progress",
+            title: t("progress.openScreen"),
+            group: t("toolbar.commandGroup.controls"),
+            keywords: "construction progress schedule drawing cad tien do thi cong",
+            icon: ClipboardCheck,
+            run: () => openProgressScreenOrNotify(t("progress.noLayer")),
+          },
+        ]
+      : []),
     {
-      // Fork: construction progress screen over a drawing layer.
-      id: "control.construction-progress",
-      title: t("progress.openScreen"),
+      // Fork: overview of the road and bridge project lines.
+      id: "control.network-dashboard",
+      title: t("roadNetwork.open"),
       group: t("toolbar.commandGroup.controls"),
-      keywords: "construction progress schedule drawing cad tien do thi cong",
-      icon: ClipboardCheck,
-      run: () => openProgressScreenOrNotify(t("progress.noLayer")),
+      keywords: "network dashboard road bridge expressway overview km tong quan du an cau duong",
+      icon: Route,
+      run: openNetworkDashboard,
     },
     // View
     // All eight drive the shared engine's camera, which every engine

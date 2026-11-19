@@ -11,34 +11,62 @@ const { useLayerRefresh } =
 const { closeProgressScreen, getProgressScreenLayerId } =
   await import("../apps/geolibre-desktop/src/lib/progress-screen");
 
-it("opens construction progress for the selected layer from its actions menu", async () => {
-  useAppStore.setState({
-    layers: [
-      geojsonLayer({
-        id: "works",
-        name: "Construction works",
-        geojson: {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              properties: {},
-              geometry: { type: "Point", coordinates: [106, 10] },
-            },
-          ],
-        },
-      }),
-    ],
-  });
+/** Turn the hidden construction progress screen on, as a deployment would. */
+function withConstructionProgress(enabled: boolean): () => void {
+  const host = window as unknown as { __GEOLIBRE_DEPLOYMENT_ENV__?: Record<string, string> };
+  const previous = host.__GEOLIBRE_DEPLOYMENT_ENV__;
+  host.__GEOLIBRE_DEPLOYMENT_ENV__ = enabled
+    ? { ...previous, VITE_GEOLIBRE_CONSTRUCTION_PROGRESS: "1" }
+    : previous;
+  return () => {
+    host.__GEOLIBRE_DEPLOYMENT_ENV__ = previous;
+  };
+}
+
+it("hides construction progress from the layer actions menu by default", async () => {
+  useAppStore.setState({ layers: [worksLayer()] });
   renderLayerPanel();
   fireEvent.pointerDown(
     within(row("Construction works")).getByRole("button", { name: "Layer actions" }),
     { button: 0, ctrlKey: false, pointerType: "mouse" },
   );
-  fireEvent.click(await screen.findByRole("menuitem", { name: /construction progress/i }));
-  assert.equal(getProgressScreenLayerId(), "works");
-  closeProgressScreen();
+  await screen.findAllByRole("menuitem");
+  assert.equal(screen.queryByRole("menuitem", { name: /construction progress/i }), null);
 });
+
+it("opens construction progress for the selected layer when the deployment offers it", async () => {
+  const restore = withConstructionProgress(true);
+  try {
+    useAppStore.setState({ layers: [worksLayer()] });
+    renderLayerPanel();
+    fireEvent.pointerDown(
+      within(row("Construction works")).getByRole("button", { name: "Layer actions" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: /construction progress/i }));
+    assert.equal(getProgressScreenLayerId(), "works");
+    closeProgressScreen();
+  } finally {
+    restore();
+  }
+});
+
+function worksLayer() {
+  return geojsonLayer({
+    id: "works",
+    name: "Construction works",
+    geojson: {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {},
+          geometry: { type: "Point", coordinates: [106, 10] },
+        },
+      ],
+    },
+  });
+}
 
 const noop = () => {};
 

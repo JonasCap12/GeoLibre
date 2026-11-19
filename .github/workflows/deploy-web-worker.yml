@@ -83,6 +83,9 @@ jobs:
           # built worker is ungated no matter what the code says.
           VITE_GEOLIBRE_SELFHOST_AUTH: ${{ vars.VITE_GEOLIBRE_SELFHOST_AUTH }}
           VITE_GEOLIBRE_SESSION_COOKIE: ${{ vars.VITE_GEOLIBRE_SESSION_COOKIE }}
+          # The construction progress screen is hidden unless this is 1 (another
+          # department builds progress tracking). The owner sets the variable.
+          VITE_GEOLIBRE_CONSTRUCTION_PROGRESS: ${{ vars.VITE_GEOLIBRE_CONSTRUCTION_PROGRESS }}
           # Comma-separated region ids to drop from the basemap pickers and the
           # Basemaps control. `china` hides Amap, Tencent and Tianditu. Unset
           # leaves the upstream catalog unchanged. The owner sets the variable.

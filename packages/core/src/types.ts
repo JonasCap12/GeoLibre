@@ -459,6 +459,13 @@ export interface LayerStyle {
    */
   strokeWidthUnit: StrokeWidthUnit;
   /**
+   * Renderer-only `line-width` expression. A transient dashboard view
+   * ({@link GeoLibreLayer.progressDashboard}) sets it on the copy it hands the
+   * renderer, so lines keep a readable width at every zoom. Never set on a
+   * stored layer, so it is never saved.
+   */
+  dashboardLineWidth?: unknown[];
+  /**
    * Opacity (0..1) of lines, polygon outlines and point outlines, applied on
    * top of the layer opacity, so a translucent outline can sit over an opaque
    * fill. A per-feature simplestyle `stroke-opacity` replaces it for features
@@ -1507,8 +1514,12 @@ export interface GeoLibreLayer {
   timeFilter?: unknown[];
   /** Transient MapLibre expression applied by the iframe embed API. */
   embedFilter?: unknown[];
-  /** Transient construction dashboard view, excluded from projects and undo history. */
-  progressDashboard?: { filter: unknown[]; colorExpression: string };
+  /**
+   * Transient dashboard view (the construction progress screen, the road
+   * network dashboard), excluded from projects and undo history. `lineWidth`,
+   * when set, replaces the layer's line width with a zoom expression.
+   */
+  progressDashboard?: { filter: unknown[]; colorExpression: string; lineWidth?: unknown[] };
   /**
    * Project-persisted boolean MapLibre expression that narrows the features
    * rendered for this layer. Unlike a selection, this leaves the source data

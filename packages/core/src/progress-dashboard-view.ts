@@ -32,6 +32,7 @@ export function progressDashboardLayer(layer: GeoLibreLayer): GeoLibreLayer {
       simpleStyleEnabled: false,
       vectorStyleMode: "expression",
       vectorStyleExpression: dashboard.colorExpression,
+      ...(dashboard.lineWidth ? { dashboardLineWidth: dashboard.lineWidth } : {}),
     },
   };
 }

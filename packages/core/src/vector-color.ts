@@ -276,6 +276,9 @@ export function metersWidthExpression(meters: number): unknown[] {
  * @returns A number (constant pixels) or a MapLibre expression array.
  */
 export function lineWidthValue(style: LayerStyle): number | unknown[] {
+  // A dashboard view's zoom-driven width wins: it is only ever set on the
+  // renderer copy of a layer shown in a dashboard (see progressDashboardLayer).
+  if (Array.isArray(style.dashboardLineWidth)) return style.dashboardLineWidth;
   // Proportional (graduated) sizing takes precedence: width is driven by a
   // numeric field, reusing the circle-radius output range as the width range.
   const proportionalWidth = proportionalRadiusExpression(style);
