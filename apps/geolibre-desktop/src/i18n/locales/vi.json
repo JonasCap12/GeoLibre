@@ -12041,5 +12041,59 @@
         "length": "{{done}}/{{total}} m"
       }
     }
+  },
+  "roadNetwork": {
+    "open": "Tổng quan dự án cầu đường",
+    "title": "Các dự án cầu đường",
+    "subtitle": "Tổng quan mọi tuyến dự án trong workspace này",
+    "colorBy": "Tô màu tuyến theo",
+    "mode": {
+      "status": "Trạng thái",
+      "type": "Loại công trình"
+    },
+    "legend": {
+      "status": "Tuyến theo trạng thái",
+      "type": "Tuyến theo loại công trình"
+    },
+    "fitAll": "Xem toàn bộ",
+    "close": "Đóng dashboard",
+    "filters": "Bộ lọc",
+    "clearFilters": "Bỏ lọc",
+    "noFields": "Các lớp này chưa chọn cột trạng thái, loại hay năm. Chọn trong Lớp và cột dữ liệu….",
+    "totalKm": "Tổng chiều dài",
+    "lineCount_other": "{{count}} tuyến",
+    "unclassified": "Chưa phân loại",
+    "charts": "Biểu đồ",
+    "chart": {
+      "byYear": "Số km theo năm khởi công",
+      "noYear": "Chưa tuyến nào có năm khởi công.",
+      "by": {
+        "status": "Số km theo trạng thái",
+        "type": "Số km theo loại công trình"
+      }
+    },
+    "year": "Năm khởi công",
+    "yearRange": "Năm khởi công",
+    "yearFrom": "Từ năm",
+    "yearTo": "Đến năm",
+    "empty": {
+      "title": "Chưa có tuyến dự án để hiển thị",
+      "noLines": "Thêm các tuyến dự án dưới dạng lớp đường (KMZ, KML, GeoJSON, Shapefile…) để xem tại đây.",
+      "noneIncluded": "Tất cả lớp đường đang bị loại khỏi dashboard. Hãy chọn các lớp cần đưa vào.",
+      "filtered": "Không có tuyến nào khớp bộ lọc."
+    },
+    "layers": {
+      "open": "Lớp và cột dữ liệu…",
+      "title": "Lớp và cột dữ liệu",
+      "description": "Chọn các lớp đường chứa tuyến dự án, và cột nào chứa tên, trạng thái, loại công trình và năm khởi công của từng dự án.",
+      "layer": "Lớp"
+    },
+    "field": {
+      "name": "Tên",
+      "status": "Trạng thái",
+      "type": "Loại",
+      "year": "Năm khởi công",
+      "none": "(không có)"
+    }
   }
 }

@@ -83,6 +83,7 @@ import {
 import { isSpaceborneLidarLayer } from "../../../lib/along-track-profile";
 import { openAlongTrackProfile } from "../../../lib/along-track-profile-store";
 import { canTrackProgress, openProgressScreen } from "../../../lib/progress-screen";
+import { constructionProgressEnabled } from "../../../lib/construction-progress-flag";
 import {
   canEditAttributeValues,
   canOpenLayerAttributeTable,
@@ -613,7 +614,7 @@ export function LayerActionsMenuItems({
           {t("alongTrackProfile.menuItem")}
         </DropdownMenuItem>
       )}
-      {canTrackProgress(layer) && (
+      {constructionProgressEnabled() && canTrackProgress(layer) && (
         <DropdownMenuItem onSelect={() => openProgressScreen(layer.id)}>
           <ClipboardCheck className="me-2 h-3.5 w-3.5" />
           {t("progress.openScreen")}
