@@ -108,7 +108,11 @@ function makeFakeMap(): FakeMap {
  * Mount a control on a fresh fake map and return the pieces a test drives: the
  * control, the map spy, and the button whose click events we simulate.
  */
-function mount(options?: { onOpenSettings?: () => void; exaggeration?: number }) {
+function mount(options?: {
+  onOpenSettings?: () => void;
+  onToggle?: (enabled: boolean) => void;
+  exaggeration?: number;
+}) {
   const created: FakeElement[] = [];
   (globalThis as { document?: unknown }).document = {
     createElement: () => {
@@ -122,6 +126,7 @@ function mount(options?: { onOpenSettings?: () => void; exaggeration?: number })
     source: TERRAIN_SOURCE,
     exaggeration: options?.exaggeration,
     onOpenSettings: options?.onOpenSettings,
+    onToggle: options?.onToggle,
   });
   control.onAdd(fake.map);
   // created[0] is the container div, created[1] the button, created[2] the icon.
@@ -155,6 +160,24 @@ describe("TerrainControl", () => {
     t.mock.timers.tick(DOUBLE_CLICK_MS);
     assert.equal(control.isEnabled(), false);
     assert.equal(fake.setTerrainCalls.at(-1), null);
+  });
+
+  it("reports each click's new state, but not a programmatic change", (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const toggles: boolean[] = [];
+    const { control, button } = mount({ onToggle: (enabled) => toggles.push(enabled) });
+
+    button.emit("click");
+    t.mock.timers.tick(DOUBLE_CLICK_MS);
+    button.emit("click");
+    t.mock.timers.tick(DOUBLE_CLICK_MS);
+    control.setEnabled(true);
+    // A double click turns terrain on for the settings dialog: reported too.
+    control.setEnabled(false);
+    button.emit("click");
+    button.emit("click");
+
+    assert.deepEqual(toggles, [true, false, true]);
   });
 
   it("opens settings on a double click without flickering terrain", (t) => {

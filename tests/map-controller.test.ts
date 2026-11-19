@@ -2593,7 +2593,9 @@ describe("MapController terrain auto-enable", () => {
           control.onAdd(map as unknown as maplibregl.Map);
         },
         removeControl() {},
-        getCanvas: () => ({ getContext: (type: string) => (type === "webgl2" ? swiftShader : null) }),
+        getCanvas: () => ({
+          getContext: (type: string) => (type === "webgl2" ? swiftShader : null),
+        }),
         getSource: (id: string) => (sources.has(id) ? {} : undefined),
         addSource: (id: string) => {
           sources.add(id);
@@ -2624,7 +2626,10 @@ describe("MapController terrain auto-enable", () => {
       assert.equal(internal.terrainEnablePending, false);
       // An explicit request (a plugin, the settings dialog) still turns it on.
       assert.equal(controller.setTerrainEnabled(true), true);
-      assert.equal((terrain as maplibregl.TerrainSpecification | null)?.source, "geolibre-terrain-dem");
+      assert.equal(
+        (terrain as maplibregl.TerrainSpecification | null)?.source,
+        "geolibre-terrain-dem",
+      );
     } finally {
       if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
       else (globalThis as { document?: unknown }).document = prevDoc;
@@ -2683,6 +2688,93 @@ describe("MapController terrain auto-enable", () => {
       const enabled = terrain as maplibregl.TerrainSpecification | null;
       assert.equal(enabled?.source, "geolibre-terrain-dem");
       assert.equal(internal.terrainEnablePending, false);
+    } finally {
+      if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = prevDoc;
+    }
+  });
+
+  /** A fake map that records terrain and how many controls were mounted. */
+  function terrainMap() {
+    const state = {
+      terrain: null as maplibregl.TerrainSpecification | null,
+      added: 0,
+    };
+    const sources = new Set<string>();
+    const map = {
+      addControl: (control: maplibregl.IControl) => {
+        state.added += 1;
+        control.onAdd(map as unknown as maplibregl.Map);
+      },
+      removeControl() {},
+      getSource: (id: string) => (sources.has(id) ? {} : undefined),
+      addSource: (id: string) => {
+        sources.add(id);
+      },
+      getTerrain: () => state.terrain,
+      setTerrain: (spec: maplibregl.TerrainSpecification | null) => {
+        state.terrain = spec;
+      },
+      setCenterClampedToGround() {},
+      on() {},
+      off() {},
+    };
+    return { map, state };
+  }
+
+  it("shows the terrain button with terrain off for a project saved without terrain", () => {
+    const prevDoc = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = makeTerrainDomStub();
+    try {
+      const { map, state } = terrainMap();
+      const controller = createMapController();
+      const internal = controller as unknown as { map: unknown; styleReady: boolean };
+      internal.map = map;
+      internal.styleReady = true;
+      controller.setBuiltInControlVisible("terrain", true);
+      assert.equal(state.terrain?.source, "geolibre-terrain-dem");
+
+      // The project now says terrain off: the button stays, terrain goes.
+      assert.equal(controller.showTerrainToggle(), false, "the button was already mounted");
+      assert.equal(state.added, 1);
+      assert.equal(state.terrain, null);
+      assert.equal(controller.getBuiltInControlPosition("terrain"), "top-right");
+
+      // On a fresh map the button is mounted, still without terrain.
+      const fresh = terrainMap();
+      const other = createMapController();
+      const otherInternal = other as unknown as { map: unknown; styleReady: boolean };
+      otherInternal.map = fresh.map;
+      otherInternal.styleReady = true;
+      assert.equal(other.showTerrainToggle(), true);
+      assert.equal(fresh.state.added, 1);
+      assert.equal(fresh.state.terrain, null);
+    } finally {
+      if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = prevDoc;
+    }
+  });
+
+  it("keeps a deferred auto-enable from turning terrain back on after it was switched off", () => {
+    const prevDoc = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = makeTerrainDomStub();
+    try {
+      const { map, state } = terrainMap();
+      const controller = createMapController();
+      const internal = controller as unknown as {
+        map: unknown;
+        styleReady: boolean;
+        terrainEnablePending: boolean;
+      };
+      internal.map = map;
+      internal.styleReady = false;
+      controller.setBuiltInControlVisible("terrain", true);
+      assert.equal(internal.terrainEnablePending, true);
+
+      controller.showTerrainToggle();
+
+      assert.equal(internal.terrainEnablePending, false);
+      assert.equal(state.terrain, null);
     } finally {
       if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
       else (globalThis as { document?: unknown }).document = prevDoc;

@@ -260,6 +260,17 @@ export const TERRAIN_SETTINGS_EVENT = "geolibre:terrain-settings-open";
  * than leaving it open with no terrain to affect.
  */
 export const TERRAIN_SETTINGS_CLOSE_EVENT = "geolibre:terrain-settings-close";
+/**
+ * Window event dispatched when the user turns terrain on or off with the
+ * terrain button, so the React layer can save the choice in the project
+ * (`preferences.map.terrainEnabled`). `detail.enabled` is the new state.
+ */
+export const TERRAIN_TOGGLE_EVENT = "geolibre:terrain-toggle";
+
+/** The `detail` of a {@link TERRAIN_TOGGLE_EVENT}. */
+export interface TerrainToggleDetail {
+  enabled: boolean;
+}
 const EMPTY_HIGHLIGHT: FeatureCollection = {
   type: "FeatureCollection",
   features: [],
@@ -2797,9 +2808,26 @@ export class MapController implements MapEngine {
       onOpenSettings: () => {
         window.dispatchEvent(new CustomEvent(TERRAIN_SETTINGS_EVENT));
       },
+      onToggle: (enabled) => {
+        window.dispatchEvent(
+          new CustomEvent<TerrainToggleDetail>(TERRAIN_TOGGLE_EVENT, { detail: { enabled } }),
+        );
+      },
     });
     this.map.addControl(this.terrainControl, this.controlPositions.terrain);
     return true;
+  }
+
+  /**
+   * Mount the terrain button with terrain off, for a project saved with terrain
+   * off: the button belongs in the control column whatever the project's
+   * terrain state, so turning terrain back on is one click away.
+   */
+  showTerrainToggle(): boolean {
+    this.controlVisibility.terrain = true;
+    const added = this.addTerrainControl();
+    this.setTerrainEnabled(false);
+    return added;
   }
 
   /**
@@ -2904,6 +2932,9 @@ export class MapController implements MapEngine {
    * guarantee relief while active without changing the user's control layout.
    */
   setTerrainEnabled(enabled: boolean): boolean {
+    // Turning terrain off voids an auto-enable still waiting for the DEM
+    // source, so a late style load cannot switch it back on.
+    if (!enabled) this.terrainEnablePending = false;
     if (!this.map) return false;
     if (enabled) {
       if (!this.addTerrainSource()) return false;
