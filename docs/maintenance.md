@@ -1623,3 +1623,22 @@ output when a build actually runs. Rebuild, or delete the stale directory.
   changed size cap, limit, or behavioral caveat still has to be carried over by
   hand — update the skill in the same PR. A stale caveat sends an agent down a
   path that no longer works, with no failure anywhere.
+
+## Daily construction report board
+
+`apps/geolibre-desktop/public/daily-report/index.html` is copied from the owner's
+`Dashboard_BaoCaoNgay_BLLK.html` (local version L2026.11.04-v84). The original's
+SHA-256 is `d75c9101dc4d5fb8933a89e2412bcd0d0396090658c33edee8f350b896067b22`.
+The shipped file is byte-identical to the original. To update, copy the file;
+preserve the inline libraries, fonts and app. The source sets BCN_LOCAL=1 before
+the libraries and before the main app reads it, so no extra initialization is needed.
+
+The parent hides #bX, synchronizes light/dark and adapts the update button to
+upload when neither saved file handles nor links are configured. It shows an
+external setup hint and suppresses only the exact missing-source toast, without
+editing the board. Configured sources retain the board's sync/permission flow.
+Reports stay in the browser's IndexedDB; they are not project data.
+The web Worker replaces the CSP for /daily-report/* (overlapping _headers cannot
+relax the app policy); nginx mirrors it. Keep the board out of the PWA precache
+and the SPA navigation fallback (including the directory URL after Cloudflare's
+redirect), and out of Python embed output. Desktop script CSP is unchanged.

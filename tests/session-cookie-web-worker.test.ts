@@ -46,6 +46,7 @@ describe("same-origin projects API proxy", () => {
     ["/missing.json", "GET", 404, 0],
     ["/a-project", "POST", 404, 0],
     ["/jupyterlite/lab/index.html", "GET", 200, 1],
+    ["/daily-report/index.html", "GET", 200, 1],
     ["/api-elsewhere", "GET", 200, 1],
   ] as const) {
     it(`preserves asset / fallback behavior for ${method} ${path}`, async () => {

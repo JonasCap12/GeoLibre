@@ -1305,6 +1305,22 @@ function removeJupyterLiteFromTauriDistPlugin(): Plugin {
   };
 }
 
+/** Public assets are copied by Vite; exclude the internal board from Python wheels. */
+function removeDailyReportFromEmbedPlugin(): Plugin {
+  let outputDirectory: string;
+  return {
+    name: "geolibre-remove-daily-report-from-embed",
+    apply: "build",
+    configResolved(config) {
+      outputDirectory = path.resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      if (IS_EMBED)
+        rmSync(path.join(outputDirectory, "daily-report"), { recursive: true, force: true });
+    },
+  };
+}
+
 function projectUrlQueryPlugin(): Plugin {
   return {
     name: "geolibre-project-url-query",
@@ -1398,6 +1414,8 @@ function pwaPlugin(): Plugin[] {
     // its own service worker scoped to /jupyterlite/. Keep it entirely out of
     // the app shell precache, or first visit would balloon by thousands of files.
     "**/jupyterlite/**",
+    // The report board is fetched only when its dashboard opens.
+    "**/daily-report/**",
     // Bundled drop-in plugins (public/plugins/<id>/) load at runtime through
     // the external-plugin path (fetch → blob import), so they never need to be
     // in the app-shell precache — and a large private plugin bundle would
@@ -1475,9 +1493,15 @@ function pwaPlugin(): Plugin[] {
       clientsClaim: true,
       skipWaiting: true,
       navigateFallback: "index.html",
-      // Never SPA-fallback the sidecar proxy or any asset request; let those hit
-      // the network/precache directly.
-      navigateFallbackDenylist: [/^\/sidecar\//, /^\/__geolibre_/, /\/[^/?]+\.[^/]+$/],
+      // The asset server redirects the report's index.html to its directory.
+      // Both URLs must reach the independent document instead of the app shell.
+      // Also bypass the sidecar proxy and ordinary asset requests.
+      navigateFallbackDenylist: [
+        /^\/sidecar\//,
+        /^\/__geolibre_/,
+        /\/daily-report(?:\/|$)/,
+        /\/[^/?]+\.[^/]+$/,
+      ],
       runtimeCaching: [
         {
           // Hashed build assets under /assets/ that the precache skips: the
@@ -1598,6 +1622,7 @@ export default defineConfig({
     selectiveJsMinifyPlugin(),
     bootBundleBudgetPlugin(),
     removeJupyterLiteFromTauriDistPlugin(),
+    removeDailyReportFromEmbedPlugin(),
     ...pwaPlugin(),
   ],
   clearScreen: false,

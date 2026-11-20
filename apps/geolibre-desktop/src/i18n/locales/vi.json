@@ -12045,7 +12045,7 @@
   "roadNetwork": {
     "open": "Tổng quan dự án cầu đường",
     "title": "Các dự án cầu đường",
-    "subtitle": "Tổng quan mọi tuyến dự án trong workspace này",
+    "subtitle": "Báo cáo thi công ngày và vị trí thực hiện trên bản đồ",
     "colorBy": "Tô màu tuyến theo",
     "mode": {
       "status": "Trạng thái",
@@ -12057,32 +12057,12 @@
     },
     "fitAll": "Xem toàn bộ",
     "close": "Đóng dashboard",
-    "filters": "Bộ lọc",
-    "clearFilters": "Bỏ lọc",
-    "noFields": "Các lớp này chưa chọn cột trạng thái, loại hay năm. Chọn trong Lớp và cột dữ liệu….",
-    "totalKm": "Tổng chiều dài",
-    "lineCount_other": "{{count}} tuyến",
     "unclassified": "Chưa phân loại",
-    "charts": "Biểu đồ",
-    "chart": {
-      "byYear": "Số km theo năm khởi công",
-      "noYear": "Chưa tuyến nào có năm khởi công.",
-      "progressVsPlan": "Thực hiện so với kế hoạch",
-      "noProgress": "Chưa có cột % thực hiện. Chọn trong Lớp và cột dữ liệu….",
-      "donut": {
-        "status": "Tỷ trọng chiều dài theo trạng thái",
-        "type": "Tỷ trọng chiều dài theo loại công trình"
-      }
-    },
     "year": "Năm khởi công",
-    "yearRange": "Năm khởi công",
-    "yearFrom": "Từ năm",
-    "yearTo": "Đến năm",
     "empty": {
       "title": "Chưa có tuyến dự án để hiển thị",
       "noLines": "Thêm các tuyến dự án dưới dạng lớp đường (KMZ, KML, GeoJSON, Shapefile…) để xem tại đây.",
-      "noneIncluded": "Tất cả lớp đường đang bị loại khỏi dashboard. Hãy chọn các lớp cần đưa vào.",
-      "filtered": "Không có tuyến nào khớp bộ lọc."
+      "noneIncluded": "Tất cả lớp đường đang bị loại khỏi dashboard. Hãy chọn các lớp cần đưa vào."
     },
     "layers": {
       "open": "Lớp và cột dữ liệu…",
@@ -12099,24 +12079,25 @@
       "progress": "% thực hiện",
       "plan": "% kế hoạch"
     },
-    "progressRange": "% thực hiện",
-    "progressFrom": "Từ % thực hiện",
-    "progressTo": "Đến % thực hiện",
     "kpi": {
-      "title": "Số liệu chính",
       "progress": "Thực hiện",
-      "plan": "Kế hoạch",
-      "gap": "{{value}} điểm % so với kế hoạch",
-      "doneKm": "Khối lượng đã xong",
-      "behind": "Hạng mục chậm"
+      "plan": "Kế hoạch"
     },
-    "behind": {
-      "title": "Hạng mục chậm tiến độ",
-      "none": "Không có hạng mục nào chậm so với kế hoạch.",
-      "item": "Hạng mục",
-      "doneOfPlan": "TH/KH",
-      "gap": "Lệch",
-      "more_other": "và {{count}} hạng mục khác"
+    "view": {
+      "title": "Chế độ hiển thị",
+      "split": "Báo cáo + Bản đồ",
+      "report": "Chỉ báo cáo",
+      "map": "Chỉ bản đồ"
+    },
+    "boardTitle": "Bảng báo cáo thi công ngày",
+    "splitter": "Điều chỉnh kích thước báo cáo và bản đồ",
+    "sourceHint": {
+      "title": "Nạp báo cáo ngày để bắt đầu",
+      "detail": "Nạp file Excel ngay, hoặc chọn file đồng bộ OneDrive cho từng gói một lần trong Cài đặt → File đồng bộ OneDrive trên máy. Edge và Chrome có thể đọc lại file mỗi lần mở.",
+      "upload": "Nạp file Excel…",
+      "configure": "Chọn file đồng bộ…",
+      "dismiss": "Ẩn hướng dẫn",
+      "unsupported": "Trình duyệt này không hỗ trợ chọn file đồng bộ. Dùng Edge hoặc Chrome để tự cập nhật, hoặc nạp Excel tại đây."
     }
   }
 }
