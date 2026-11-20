@@ -11,6 +11,9 @@ import type { Feature } from "geojson";
 import {
   categoryColors,
   collectSegments,
+  compareNames,
+  parsePercent,
+  planGap,
   fieldValues,
   foldText,
   isNetworkCandidate,
@@ -118,7 +121,32 @@ describe("road network dashboard: fields", () => {
       status: "Trang_thai",
       type: "Loai",
       year: "Nam_KC",
+      progress: "",
+      plan: "",
     });
+  });
+
+  it("tells percent done from planned, and skips the gap between them", () => {
+    const features = [
+      line(ONE_DEGREE, {
+        Ten: "Đoạn 1",
+        Chenh_lech_pct: -10,
+        Tien_do_pct: 40,
+        Ke_hoach_tien_do: 50,
+      }),
+    ];
+    const fields = suggestFields(features);
+    assert.equal(fields.progress, "Tien_do_pct");
+    assert.equal(fields.plan, "Ke_hoach_tien_do");
+  });
+
+  it("reads percents from numbers and text", () => {
+    assert.equal(parsePercent(45), 45);
+    assert.equal(parsePercent("45,5 %"), 45.5);
+    assert.equal(parsePercent("120"), 100);
+    assert.equal(parsePercent(-3), 0);
+    assert.equal(parsePercent(""), null);
+    assert.equal(parsePercent("n/a"), null);
   });
 
   it("reads a year from numbers, years and dates", () => {
@@ -142,8 +170,30 @@ describe("road network dashboard: fields", () => {
       status: "Trang_thai",
       type: "",
       year: "Nam_KC",
+      progress: "",
+      plan: "",
     });
     assert.deepEqual(collectSegments([saved]), []);
+  });
+
+  it("suggests a field an older saved setup does not mention", () => {
+    const layer = routes();
+    layer.geojson!.features[0].properties!.Tien_do = 60;
+    const older = {
+      ...layer,
+      metadata: {
+        [NETWORK_METADATA_KEY]: {
+          included: true,
+          name: "Ten_du_an",
+          status: "",
+          type: "",
+          year: "",
+        },
+      },
+    } as GeoLibreLayer;
+    const config = readLayerConfig(older);
+    assert.equal(config.status, "", "a field saved as unset stays unset");
+    assert.equal(config.progress, "Tien_do", "a field added later is suggested");
   });
 });
 
@@ -179,23 +229,27 @@ describe("road network dashboard: figures", () => {
     assert.equal(colors.get(""), UNCLASSIFIED_COLOR);
   });
 
-  it("sums kilometres and keeps the network's colours under a filter", () => {
-    const colors = categoryColors(
+  const palettes = {
+    status: categoryColors(
+      "status",
+      fieldValues(segments, "status").map((entry) => entry.value),
+    ),
+    type: categoryColors(
       "type",
       fieldValues(segments, "type").map((entry) => entry.value),
-    );
-    const all = summarize(segments, "type", NO_FILTERS, colors);
+    ),
+  };
+
+  it("sums kilometres and keeps the network's colours under a filter", () => {
+    const all = summarize(segments, NO_FILTERS, palettes);
     assert.equal(all.lineCount, 3);
     assert.ok(Math.abs(all.totalKm - 3 * 111.19) < 0.3);
+    assert.equal(all.byStatus.length, 3);
+    assert.equal(all.progressPct, null, "no line has a percent done");
 
-    const onlyBridges = summarize(
-      segments,
-      "type",
-      { ...NO_FILTERS, types: new Set(["Cầu"]) },
-      colors,
-    );
+    const onlyBridges = summarize(segments, { ...NO_FILTERS, types: new Set(["Cầu"]) }, palettes);
     assert.equal(onlyBridges.lineCount, 1);
-    assert.equal(onlyBridges.byColor[0].color, colors.get("Cầu"));
+    assert.equal(onlyBridges.byType[0].color, palettes.type.get("Cầu"));
   });
 
   it("filters by year range, leaving out lines without a year", () => {
@@ -204,9 +258,68 @@ describe("road network dashboard: figures", () => {
       segments.filter((s) => passesFilters(s, filters)).map((s) => s.index),
       [0],
     );
-    assert.deepEqual(summarize(segments, "status", filters, new Map()).byYear, [
+    assert.deepEqual(summarize(segments, filters, palettes).byYear, [
       { year: 2023, km: segments[0].km },
     ]);
+  });
+});
+
+describe("road network dashboard: progress", () => {
+  // Two lines of the same length: one 100% done on a 100% plan, one 20% done
+  // on a 60% plan; and a third, twice as long, 50% done with no plan.
+  const layer = {
+    ...routes(),
+    geojson: {
+      type: "FeatureCollection",
+      features: [
+        line(ONE_DEGREE, { Ten: "Km9", Tien_do_pct: 100, Ke_hoach_pct: 100 }),
+        line(ONE_DEGREE, { Ten: "Km10", Tien_do_pct: 20, Ke_hoach_pct: 60 }),
+        line(
+          [
+            [106, 10],
+            [106, 12],
+          ],
+          { Ten: "Km11", Tien_do_pct: "50%" },
+        ),
+      ],
+    },
+  } as unknown as GeoLibreLayer;
+  const segments = collectSegments([layer]);
+  const summary = summarize(segments, NO_FILTERS, { status: new Map(), type: new Map() });
+  const oneKm = segments[0].km;
+
+  it("weights percent done and planned by length", () => {
+    // (100 + 20 + 2 × 50) / 4 lengths = 55; plan only on the first two: 80.
+    assert.ok(Math.abs((summary.progressPct ?? 0) - 55) < 1e-9);
+    assert.ok(Math.abs((summary.planPct ?? 0) - 80) < 1e-9);
+    assert.ok(Math.abs((summary.doneKm ?? 0) - 2.2 * oneKm) < 1e-6);
+  });
+
+  it("lists the lines behind plan, most behind first", () => {
+    assert.deepEqual(
+      summary.behind.map((s) => s.name),
+      ["Km10"],
+    );
+    assert.equal(planGap(summary.behind[0]), -40);
+    assert.equal(planGap(segments[2]), null, "no plan, no gap");
+  });
+
+  it("filters by percent done", () => {
+    const filters = { ...NO_FILTERS, progress: [40, 100] as const };
+    assert.deepEqual(
+      segments.filter((s) => passesFilters(s, filters)).map((s) => s.name),
+      ["Km9", "Km11"],
+    );
+  });
+
+  it("orders line names naturally", () => {
+    assert.deepEqual(
+      [...segments]
+        .reverse()
+        .sort(compareNames)
+        .map((s) => s.name),
+      ["Km9", "Km10", "Km11"],
+    );
   });
 });
 
