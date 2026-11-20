@@ -83,4 +83,34 @@ describe("NetworkDashboardScreen", () => {
     assert.ok(screen.getByText("No project lines to show"));
     act(() => closeNetworkDashboard());
   });
+
+  it("shows percent done against plan and the lines behind it", () => {
+    const layer = routesLayer();
+    const progress = [
+      [100, 100],
+      [20, 60],
+      [70, 80],
+    ];
+    layer.geojson!.features.forEach((feature, i) => {
+      feature.properties = {
+        ...feature.properties,
+        tien_do_pct: progress[i][0],
+        ke_hoach_pct: progress[i][1],
+      };
+    });
+    useAppStore.setState({ layers: [layer] });
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+
+    // Equal lengths: done (100 + 20 + 70) / 3, planned (100 + 60 + 80) / 3.
+    assert.ok(screen.getByText("63.3%"));
+    assert.ok(screen.getByText("80%"));
+    const behind = screen.getByText("Behind plan", { selector: "h2" }).parentElement!;
+    const rows = [...behind.querySelectorAll("tbody tr")].map((row) => row.textContent);
+    assert.deepEqual(rows, ["Cầu Đang thi công20/60%-40", "Cao tốc Hoàn thành70/80%-10"]);
+    assert.equal(screen.getAllByRole("slider").length, 2, "the percent-done range has two thumbs");
+    assert.ok(screen.getByText("Share of length by status"));
+    assert.ok(screen.getByText("Done against plan"));
+    act(() => closeNetworkDashboard());
+  });
 });

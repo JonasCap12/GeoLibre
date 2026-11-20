@@ -6340,8 +6340,8 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
 :root[data-network-dashboard] {
   --nd-header-h: 4rem;
   --nd-start-w: clamp(14rem, 18vw, 18rem);
-  --nd-end-w: clamp(15rem, 20vw, 19rem);
-  --nd-strip-h: clamp(12rem, 27vh, 16rem);
+  --nd-end-w: clamp(16rem, 21vw, 21rem);
+  --nd-strip-h: clamp(14rem, 33vh, 20rem);
   overflow: hidden;
 }
 :root[data-network-dashboard] main.isolate {
@@ -6381,7 +6381,15 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   inset-block-end: 0;
   inset-inline: var(--nd-start-w) var(--nd-end-w);
   height: var(--nd-strip-h);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+/* Four charts need room; a laptop-width screen takes them two by two and
+   scrolls the strip. */
+@media (max-width: 1399px) {
+  .network-dashboard-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: calc(var(--nd-strip-h) - 1.5rem);
+  }
 }
 .network-dashboard-empty {
   position: fixed;
