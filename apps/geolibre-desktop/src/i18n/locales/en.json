@@ -12209,7 +12209,7 @@
   "roadNetwork": {
     "open": "Road network dashboard",
     "title": "Road and bridge projects",
-    "subtitle": "Overview of every project line in this workspace",
+    "subtitle": "Daily construction reports and work locations on the map",
     "colorBy": "Color lines by",
     "mode": {
       "status": "Status",
@@ -12221,33 +12221,12 @@
     },
     "fitAll": "Show all",
     "close": "Close the dashboard",
-    "filters": "Filters",
-    "clearFilters": "Clear filters",
-    "noFields": "These layers have no status, type or year attribute set. Choose them in Layers and fields….",
-    "totalKm": "Total length",
-    "lineCount_one": "{{count}} line",
-    "lineCount_other": "{{count}} lines",
     "unclassified": "Not classified",
-    "charts": "Charts",
-    "chart": {
-      "byYear": "Kilometers by start year",
-      "noYear": "No line has a start year.",
-      "progressVsPlan": "Done against plan",
-      "noProgress": "No line has a percent done. Choose the field in Layers and fields….",
-      "donut": {
-        "status": "Share of length by status",
-        "type": "Share of length by type"
-      }
-    },
     "year": "Start year",
-    "yearRange": "Start year",
-    "yearFrom": "From year",
-    "yearTo": "To year",
     "empty": {
       "title": "No project lines to show",
       "noLines": "Add the project routes as a line layer (KMZ, KML, GeoJSON, Shapefile…) to see them here.",
-      "noneIncluded": "Every line layer is left out of the dashboard. Choose the layers to include.",
-      "filtered": "No line matches the filters."
+      "noneIncluded": "Every line layer is left out of the dashboard. Choose the layers to include."
     },
     "layers": {
       "open": "Layers and fields…",
@@ -12264,25 +12243,25 @@
       "progress": "% done",
       "plan": "% planned"
     },
-    "progressRange": "Percent done",
-    "progressFrom": "From percent done",
-    "progressTo": "To percent done",
     "kpi": {
-      "title": "Key figures",
       "progress": "Done",
-      "plan": "Planned",
-      "gap": "{{value}} pts vs plan",
-      "doneKm": "Length done",
-      "behind": "Behind plan"
+      "plan": "Planned"
     },
-    "behind": {
-      "title": "Behind plan",
-      "none": "No line is behind its plan.",
-      "item": "Item",
-      "doneOfPlan": "Done/plan",
-      "gap": "Gap",
-      "more_one": "and {{count}} more",
-      "more_other": "and {{count}} more"
+    "view": {
+      "title": "Dashboard view",
+      "split": "Report + map",
+      "report": "Report only",
+      "map": "Map only"
+    },
+    "boardTitle": "Daily construction report board",
+    "splitter": "Resize report and map",
+    "sourceHint": {
+      "title": "Load daily reports to get started",
+      "detail": "Load Excel files now, or choose each package’s OneDrive-synced file once in Settings → Synced OneDrive files. Edge and Chrome can read it again on every open.",
+      "upload": "Load Excel files…",
+      "configure": "Set up synced files…",
+      "dismiss": "Hide this hint",
+      "unsupported": "This browser cannot select synced files. Use Edge or Chrome for automatic updates, or load Excel files here."
     }
   }
 }

@@ -1,5 +1,5 @@
 // Serving rules the asset server cannot express on its own: the JupyterLite
-// prefix's headers, and what a request that matches no asset should get.
+// and daily-report headers, and what a request that matches no asset should get.
 //
 // `assets.not_found_handling` is "none" in wrangler.jsonc, so a request that
 // matches no asset arrives here instead of being answered by the asset server.
@@ -21,7 +21,7 @@
 //     `try_files $uri /index.html`.
 
 /** Prefixes that are real directories of files; a miss there is a 404. */
-const NEVER_FALLBACK = ["/assets/", "/jupyterlite/", "/plugins/"];
+const NEVER_FALLBACK = ["/assets/", "/jupyterlite/", "/daily-report/", "/plugins/"];
 
 /**
  * The self-hosted auth pages that emails link to. They take a password, so
@@ -111,6 +111,11 @@ const JUPYTERLITE_CSP =
   "https://api.mapbox.com/mapbox-gl-js/; " +
   "worker-src blob: 'self'";
 
+// Like JupyterLite, the self-contained board needs a replacement policy, not
+// an overlapping _headers rule (which would intersect with the app policy).
+const DAILY_REPORT_CSP =
+  "default-src 'self'; base-uri 'self'; form-action 'self'; connect-src 'self' https: data: blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src blob: 'self'; frame-ancestors 'self'";
+
 interface Env {
   ASSETS: Fetcher;
   PROJECTS_API: Fetcher;
@@ -143,6 +148,23 @@ async function serveJupyterLite(request: Request, env: Env): Promise<Response> {
   });
 }
 
+/** Serve the original report with exactly one policy, scoped to its directory. */
+async function serveDailyReport(request: Request, env: Env): Promise<Response> {
+  const response = await env.ASSETS.fetch(request);
+  if (response.status === 404) return notFound();
+  const headers = new Headers(response.headers);
+  headers.set("Content-Security-Policy", DAILY_REPORT_CSP);
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set("Cache-Control", "no-cache, must-revalidate");
+  applyAppSecurityHeaders(headers);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -154,6 +176,8 @@ export default {
     if (url.pathname.startsWith("/jupyterlite/")) {
       return serveJupyterLite(request, env);
     }
+
+    if (url.pathname.startsWith("/daily-report/")) return serveDailyReport(request, env);
 
     // Past this point the asset server already looked and found nothing.
     if (NEVER_FALLBACK.some((prefix) => url.pathname.startsWith(prefix))) return notFound();

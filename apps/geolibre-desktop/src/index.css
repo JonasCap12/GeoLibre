@@ -4360,8 +4360,8 @@ html
 }
 
 .basemap-control-result[data-geolibre-basemap-preview="pending"]:not(
-    :has(.geolibre-basemap-thumbnail)
-  )::before {
+  :has(.geolibre-basemap-thumbnail)
+)::before {
   content: "";
   width: 56px;
   height: 42px;
@@ -6332,105 +6332,148 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
     inset-block-end: var(--progress-strip-h);
   }
 }
-/* Fork: road and bridge network dashboard (NetworkDashboardScreen). Like the
-   progress screen, it pins the shell's own map into its middle cell: filters
-   on the start side, legend and total kilometres on the end side, charts under
-   the map. On a narrow screen the map takes the top and the panels scroll
-   underneath it. */
+/* The report occupies the start side; these same variables position the live map. */
 :root[data-network-dashboard] {
   --nd-header-h: 4rem;
-  --nd-start-w: clamp(14rem, 18vw, 18rem);
-  --nd-end-w: clamp(16rem, 21vw, 21rem);
-  --nd-strip-h: clamp(14rem, 33vh, 20rem);
+  --nd-start-w: var(--nd-split-w, 60vw);
+  --nd-end-w: 0px;
+  --nd-strip-h: 0px;
   overflow: hidden;
 }
-:root[data-network-dashboard] main.isolate {
+:root[data-network-dashboard="report"] {
+  --nd-start-w: 100vw;
+}
+:root[data-network-dashboard="map"] {
+  --nd-start-w: 0px;
+}
+:root[data-network-dashboard] main.isolate,
+.network-dashboard-empty {
   position: fixed;
   z-index: 40;
   inset-block: var(--nd-header-h) var(--nd-strip-h);
   inset-inline: var(--nd-start-w) var(--nd-end-w);
   min-height: 0;
 }
+:root[data-network-dashboard="report"] main.isolate {
+  visibility: hidden;
+}
 .network-dashboard-header {
   position: fixed;
-  z-index: 41;
+  z-index: 42;
   inset-block-start: 0;
   inset-inline: 0;
   height: var(--nd-header-h);
 }
-.network-dashboard-body {
-  display: contents;
-}
-.network-dashboard-start,
-.network-dashboard-end {
+.network-dashboard-board {
   position: fixed;
   z-index: 40;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   inset-block: var(--nd-header-h) 0;
-}
-.network-dashboard-start {
   inset-inline-start: 0;
   width: var(--nd-start-w);
+  border-inline-end: 1px solid hsl(var(--border));
 }
-.network-dashboard-end {
-  inset-inline-end: 0;
-  width: var(--nd-end-w);
+.network-dashboard-board[hidden] {
+  display: none;
 }
-.network-dashboard-strip {
-  position: fixed;
-  z-index: 40;
-  inset-block-end: 0;
-  inset-inline: var(--nd-start-w) var(--nd-end-w);
-  height: var(--nd-strip-h);
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
+.network-dashboard-source-hint {
+  flex-shrink: 0;
 }
-/* Four charts need room; a laptop-width screen takes them two by two and
-   scrolls the strip. */
-@media (max-width: 1399px) {
-  .network-dashboard-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-auto-rows: calc(var(--nd-strip-h) - 1.5rem);
-  }
+.network-dashboard-frame-box {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: flex-start;
 }
-.network-dashboard-empty {
+.network-dashboard-board iframe {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+.network-dashboard-divider {
   position: fixed;
   z-index: 41;
-  inset-block: var(--nd-header-h) var(--nd-strip-h);
-  inset-inline: var(--nd-start-w) var(--nd-end-w);
+  inset-block: var(--nd-header-h) 0;
+  inset-inline-start: calc(var(--nd-start-w) - 4px);
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.network-dashboard-divider::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 3px;
+  width: 2px;
+  background: hsl(var(--border));
+}
+.network-dashboard-divider:hover::after,
+.network-dashboard-divider:focus-visible::after {
+  background: hsl(var(--primary));
+}
+.network-dashboard-divider:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+.network-dashboard-legend {
+  position: fixed;
+  z-index: 41;
+  inset-block-start: calc(var(--nd-header-h) + 1rem);
+  inset-inline-start: calc(var(--nd-start-w) + 1rem);
+  max-width: min(18rem, calc(100vw - var(--nd-start-w) - 5rem));
+  max-height: 35dvh;
+  overflow-y: auto;
+}
+.network-dashboard-empty {
+  z-index: 41;
+}
+@media (min-width: 900px) and (max-width: 1399px) {
+  :root[data-network-dashboard="split"] {
+    --nd-start-w: var(--nd-split-w, 55vw);
+  }
 }
 @media (max-width: 899px) {
   :root[data-network-dashboard] {
-    --nd-header-h: 3.5rem;
-    --nd-map-h: 45dvh;
+    --nd-header-h: 7.5rem;
   }
-  :root[data-network-dashboard] main.isolate {
-    inset-block: var(--nd-header-h) auto;
-    inset-inline: 0;
-    height: var(--nd-map-h);
-  }
-  .network-dashboard-body {
-    position: fixed;
-    z-index: 40;
-    display: block;
-    inset-block: calc(var(--nd-header-h) + var(--nd-map-h)) 0;
-    inset-inline: 0;
+  .network-dashboard-board {
     overflow-y: auto;
   }
-  .network-dashboard-start,
-  .network-dashboard-end,
-  .network-dashboard-strip {
-    position: static;
-    width: auto;
-    height: auto;
-    border-inline-width: 0;
-    border-block-start-width: 1px;
+  .network-dashboard-frame-box {
+    flex: none;
   }
-  .network-dashboard-strip {
-    grid-template-columns: minmax(0, 1fr);
+  .network-dashboard-board iframe {
+    max-height: none;
   }
-  .network-dashboard-empty {
-    inset-block: var(--nd-header-h) auto;
-    inset-inline: 0;
-    height: var(--nd-map-h);
+  .network-dashboard-header {
+    flex-wrap: wrap;
+    align-content: center;
+    gap: 0.375rem;
+  }
+  .network-dashboard-heading {
+    flex-basis: calc(100% - 3rem);
+  }
+  .network-dashboard-view {
+    order: 1;
+    flex-basis: 100%;
+    justify-content: center;
+  }
+  .network-dashboard-heading h1 {
+    font-size: 0.875rem;
+  }
+  .network-dashboard-heading p {
+    display: none;
+  }
+  .network-dashboard-header [role="radiogroup"] {
+    margin-inline-end: auto;
+  }
+  .network-dashboard-header [role="radio"] {
+    padding: 0.25rem 0.5rem;
   }
 }
 

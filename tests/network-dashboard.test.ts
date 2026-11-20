@@ -11,9 +11,7 @@ import type { Feature } from "geojson";
 import {
   categoryColors,
   collectSegments,
-  compareNames,
   parsePercent,
-  planGap,
   fieldValues,
   foldText,
   isNetworkCandidate,
@@ -22,16 +20,12 @@ import {
   lineKm,
   NETWORK_LINE_WIDTH,
   NETWORK_METADATA_KEY,
-  NO_FILTERS,
   parseYear,
-  passesFilters,
   readLayerConfig,
   segmentsBounds,
   shownIndexes,
   suggestFields,
-  summarize,
   UNCLASSIFIED_COLOR,
-  yearBounds,
 } from "../apps/geolibre-desktop/src/lib/network-dashboard";
 import { constructionProgressEnabled } from "../apps/geolibre-desktop/src/lib/construction-progress-flag";
 
@@ -211,7 +205,6 @@ describe("road network dashboard: figures", () => {
         [2, "Cầu B", "Chuẩn bị đầu tư", "Cầu", null],
       ],
     );
-    assert.deepEqual(yearBounds(segments), [2021, 2023]);
   });
 
   it("gives known statuses meaningful colours", () => {
@@ -229,97 +222,11 @@ describe("road network dashboard: figures", () => {
     assert.equal(colors.get(""), UNCLASSIFIED_COLOR);
   });
 
-  const palettes = {
-    status: categoryColors(
-      "status",
-      fieldValues(segments, "status").map((entry) => entry.value),
-    ),
-    type: categoryColors(
-      "type",
-      fieldValues(segments, "type").map((entry) => entry.value),
-    ),
-  };
-
-  it("sums kilometres and keeps the network's colours under a filter", () => {
-    const all = summarize(segments, NO_FILTERS, palettes);
-    assert.equal(all.lineCount, 3);
-    assert.ok(Math.abs(all.totalKm - 3 * 111.19) < 0.3);
-    assert.equal(all.byStatus.length, 3);
-    assert.equal(all.progressPct, null, "no line has a percent done");
-
-    const onlyBridges = summarize(segments, { ...NO_FILTERS, types: new Set(["Cầu"]) }, palettes);
-    assert.equal(onlyBridges.lineCount, 1);
-    assert.equal(onlyBridges.byType[0].color, palettes.type.get("Cầu"));
-  });
-
-  it("filters by year range, leaving out lines without a year", () => {
-    const filters = { ...NO_FILTERS, years: [2022, 2030] as const };
-    assert.deepEqual(
-      segments.filter((s) => passesFilters(s, filters)).map((s) => s.index),
-      [0],
-    );
-    assert.deepEqual(summarize(segments, filters, palettes).byYear, [
-      { year: 2023, km: segments[0].km },
-    ]);
-  });
-});
-
-describe("road network dashboard: progress", () => {
-  // Two lines of the same length: one 100% done on a 100% plan, one 20% done
-  // on a 60% plan; and a third, twice as long, 50% done with no plan.
-  const layer = {
-    ...routes(),
-    geojson: {
-      type: "FeatureCollection",
-      features: [
-        line(ONE_DEGREE, { Ten: "Km9", Tien_do_pct: 100, Ke_hoach_pct: 100 }),
-        line(ONE_DEGREE, { Ten: "Km10", Tien_do_pct: 20, Ke_hoach_pct: 60 }),
-        line(
-          [
-            [106, 10],
-            [106, 12],
-          ],
-          { Ten: "Km11", Tien_do_pct: "50%" },
-        ),
-      ],
-    },
-  } as unknown as GeoLibreLayer;
-  const segments = collectSegments([layer]);
-  const summary = summarize(segments, NO_FILTERS, { status: new Map(), type: new Map() });
-  const oneKm = segments[0].km;
-
-  it("weights percent done and planned by length", () => {
-    // (100 + 20 + 2 × 50) / 4 lengths = 55; plan only on the first two: 80.
-    assert.ok(Math.abs((summary.progressPct ?? 0) - 55) < 1e-9);
-    assert.ok(Math.abs((summary.planPct ?? 0) - 80) < 1e-9);
-    assert.ok(Math.abs((summary.doneKm ?? 0) - 2.2 * oneKm) < 1e-6);
-  });
-
-  it("lists the lines behind plan, most behind first", () => {
-    assert.deepEqual(
-      summary.behind.map((s) => s.name),
-      ["Km10"],
-    );
-    assert.equal(planGap(summary.behind[0]), -40);
-    assert.equal(planGap(segments[2]), null, "no plan, no gap");
-  });
-
-  it("filters by percent done", () => {
-    const filters = { ...NO_FILTERS, progress: [40, 100] as const };
-    assert.deepEqual(
-      segments.filter((s) => passesFilters(s, filters)).map((s) => s.name),
-      ["Km9", "Km11"],
-    );
-  });
-
-  it("orders line names naturally", () => {
-    assert.deepEqual(
-      [...segments]
-        .reverse()
-        .sort(compareNames)
-        .map((s) => s.name),
-      ["Km9", "Km10", "Km11"],
-    );
+  it("sums the legend's kilometres by category", () => {
+    const values = fieldValues(segments, "type");
+    assert.equal(values.length, 3);
+    assert.ok(Math.abs(values.reduce((sum, value) => sum + value.km, 0) - 3 * 111.19) < 0.3);
+    assert.ok(values.every((value) => value.count === 1));
   });
 });
 
@@ -328,14 +235,14 @@ describe("road network dashboard: map view", () => {
   const config = readLayerConfig(layer);
   const segments = collectSegments([layer]);
 
-  it("shows only the filtered lines, by feature index", () => {
-    const shown = shownIndexes(segments, { ...NO_FILTERS, statuses: new Set(["Hoàn thành"]) });
-    assert.deepEqual(shown.get("routes"), [1]);
+  it("shows all included lines, by original feature index", () => {
+    const shown = shownIndexes(segments);
+    assert.deepEqual(shown.get("routes"), [0, 1, 2]);
     const view = layerView(config, "status", new Map(), shown.get("routes") ?? []);
     assert.deepEqual(view.filter, [
       "match",
       ["get", "__geolibre_progress_index"],
-      [1],
+      [0, 1, 2],
       true,
       false,
     ]);

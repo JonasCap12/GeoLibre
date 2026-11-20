@@ -2,7 +2,7 @@
   // Static-assets Worker that serves the GeoLibre web build.
   //
   // The Worker script runs for as little as possible: only the /jupyterlite/
-  // prefix (assets.run_worker_first) and requests that match no asset at all
+  // and /daily-report/ prefixes (assets.run_worker_first) and requests that match no asset at all
   // (assets.not_found_handling "none"). Every other request -- which is every
   // request that actually hits an asset -- is answered by the asset server
   // directly, with no Worker invocation and no CPU billed. Keep it that way:
@@ -34,7 +34,7 @@
     // "none" (not "single-page-application") so a request matching no asset
     // reaches src/index.ts instead of being answered with index.html by the
     // asset server. The Worker then decides per path: a real 404 under
-    // /assets/, /jupyterlite/ and /plugins/, and the app shell everywhere else.
+    // /assets/, /jupyterlite/, /daily-report/ and /plugins/, and the app shell everywhere else.
     //
     // The SPA setting could not make that distinction, and the cost was not
     // cosmetic: it answered a missing hashed chunk with "200 OK, text/html"
@@ -57,7 +57,7 @@
     // enforced as a second policy rather than a replacement -- which left
     // JupyterLab's inline bootstrap blocked by the app policy. See
     // src/index.ts for the full explanation.
-    "run_worker_first": ["/jupyterlite/*", "/api/*"],
+    "run_worker_first": ["/jupyterlite/*", "/daily-report/*", "/api/*"],
   },
 
   // No "routes": this deploys to geolibre-web.<subdomain>.workers.dev. To bind a
