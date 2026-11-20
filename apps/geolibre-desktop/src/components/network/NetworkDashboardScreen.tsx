@@ -11,7 +11,6 @@ import {
   isNetworkCandidate,
   layerView,
   NO_FILTERS,
-  passesFilters,
   readLayerConfig,
   segmentsBounds,
   shownIndexes,
@@ -19,6 +18,7 @@ import {
   yearBounds,
   type NetworkColorMode,
   type NetworkFilters,
+  type NetworkPalettes,
   type NetworkSegment,
 } from "../../lib/network-dashboard";
 import {
@@ -28,14 +28,24 @@ import {
   subscribeNetworkDashboard,
 } from "../../lib/network-dashboard-screen";
 import { NetworkLayersDialog } from "./NetworkLayersDialog";
-import { BarList, CategoryFilter, YearBars, useKmFormat } from "./NetworkDashboardBlocks";
+import {
+  BehindList,
+  CategoryFilter,
+  Donut,
+  KpiCards,
+  ProgressBullets,
+  RangeFilter,
+  YearBars,
+  useKmFormat,
+} from "./NetworkDashboardBlocks";
 
 /**
  * Full-page road and bridge network dashboard: filters on the start side, the
- * map in the middle, the legend and the total kilometres on the end side, and
- * the charts under the map. While it is open, `data-network-dashboard` on the
- * document element makes `index.css` pin the shell's map into the middle cell,
- * so it is the same live map with the same layers.
+ * map in the middle, key figures, the legend and the lines behind plan on the
+ * end side, and four charts under the map. While it is open,
+ * `data-network-dashboard` on the document element makes `index.css` pin the
+ * shell's map into the middle cell, so it is the same live map with the same
+ * layers.
  */
 export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | null }) {
   const open = useSyncExternalStore(subscribeNetworkDashboard, isNetworkDashboardOpen);
@@ -54,13 +64,18 @@ export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | n
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !document.querySelector("[role=dialog]"))
+      if (event.key === "Escape" && !document.querySelector("[role=dialog]")) {
         closeNetworkDashboard();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
   return open ? <Dashboard camera={camera} /> : null;
+}
+
+function isFiltered(filters: NetworkFilters): boolean {
+  return Boolean(filters.statuses || filters.types || filters.years || filters.progress);
 }
 
 function Dashboard({ camera }: { camera: DashboardCamera | null }) {
@@ -76,26 +91,34 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
   // Colours come from the whole network, so filtering never repaints a line.
   const statusValues = useMemo(() => fieldValues(segments, "status"), [segments]);
   const typeValues = useMemo(() => fieldValues(segments, "type"), [segments]);
-  const colors = useMemo(
-    () =>
-      categoryColors(
-        mode,
-        (mode === "status" ? statusValues : typeValues).map((entry) => entry.value),
+  const palettes = useMemo<NetworkPalettes>(
+    () => ({
+      status: categoryColors(
+        "status",
+        statusValues.map((entry) => entry.value),
       ),
-    [mode, statusValues, typeValues],
+      type: categoryColors(
+        "type",
+        typeValues.map((entry) => entry.value),
+      ),
+    }),
+    [statusValues, typeValues],
   );
+  const colors = palettes[mode];
   const summary = useMemo(
-    () => summarize(segments, mode, filters, colors),
-    [segments, mode, filters, colors],
+    () => summarize(segments, filters, palettes),
+    [segments, filters, palettes],
   );
   const years = useMemo(() => yearBounds(segments), [segments]);
   const hasStatus = statusValues.some((entry) => entry.value !== "");
   const hasType = typeValues.some((entry) => entry.value !== "");
+  const hasProgress = segments.some((segment) => segment.progress !== null);
+  const byColor = mode === "status" ? summary.byStatus : summary.byType;
 
   useDashboardViews(candidates, segments, mode, colors, filters);
 
-  const fitTo = (shown: readonly NetworkSegment[]) => {
-    const bounds = segmentsBounds(candidates, shown);
+  const fitTo = (lines: readonly NetworkSegment[]) => {
+    const bounds = segmentsBounds(candidates, lines);
     const map = camera?.getMap?.();
     if (!bounds) return;
     if (map) {
@@ -105,7 +128,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
           [bounds[0], bounds[1]],
           [bounds[2], bounds[3]],
         ],
-        { padding: 40, maxZoom: 14, duration: 400 },
+        { padding: 60, maxZoom: 16, duration: 500 },
       );
     } else camera?.fitBounds(bounds);
   };
@@ -121,7 +144,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
   }, [segments]);
 
   const hover = useLineHover(camera, candidates, segments);
-  const filtered = filters !== NO_FILTERS;
+  const label = (value: string) => value.trim() || t("roadNetwork.unclassified");
 
   return (
     <>
@@ -157,10 +180,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => {
-            const shown = segments.filter((segment) => passesFilters(segment, filters));
-            fitTo(shown.length > 0 ? shown : segments);
-          }}
+          onClick={() => fitTo(summary.shown.length > 0 ? summary.shown : segments)}
           disabled={segments.length === 0}
         >
           <Maximize2 className="h-3.5 w-3.5 lg:me-1.5" />
@@ -185,7 +205,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         <aside className="network-dashboard-start space-y-4 overflow-y-auto border-e bg-card p-3 text-sm">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">{t("roadNetwork.filters")}</h2>
-            {filtered && (
+            {isFiltered(filters) && (
               <button
                 type="button"
                 className="text-xs text-primary hover:underline"
@@ -199,7 +219,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
             <CategoryFilter
               title={t("roadNetwork.mode.status")}
               entries={statusValues}
-              colors={mode === "status" ? colors : null}
+              colors={mode === "status" ? palettes.status : null}
               selected={filters.statuses}
               onChange={(statuses) => setFilters({ ...filters, statuses })}
             />
@@ -208,62 +228,70 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
             <CategoryFilter
               title={t("roadNetwork.mode.type")}
               entries={typeValues}
-              colors={mode === "type" ? colors : null}
+              colors={mode === "type" ? palettes.type : null}
               selected={filters.types}
               onChange={(types) => setFilters({ ...filters, types })}
             />
           )}
-          {years && (
-            <YearRange
+          {hasProgress && (
+            <RangeFilter
+              title={t("roadNetwork.progressRange")}
+              bounds={[0, 100]}
+              step={5}
+              value={filters.progress}
+              format={(value) => `${value}%`}
+              minLabel={t("roadNetwork.progressFrom")}
+              maxLabel={t("roadNetwork.progressTo")}
+              onChange={(progress) => setFilters({ ...filters, progress })}
+            />
+          )}
+          {years && years[0] < years[1] && (
+            <RangeFilter
+              title={t("roadNetwork.yearRange")}
               bounds={years}
+              step={1}
               value={filters.years}
+              format={String}
+              minLabel={t("roadNetwork.yearFrom")}
+              maxLabel={t("roadNetwork.yearTo")}
               onChange={(range) => setFilters({ ...filters, years: range })}
             />
           )}
-          {!hasStatus && !hasType && !years && segments.length > 0 && (
+          {!hasStatus && !hasType && !years && !hasProgress && segments.length > 0 && (
             <p className="text-xs text-muted-foreground">{t("roadNetwork.noFields")}</p>
           )}
         </aside>
 
         <aside className="network-dashboard-end space-y-4 overflow-y-auto border-s bg-card p-3 text-sm">
-          <section className="rounded-lg border bg-background p-3 text-center">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t("roadNetwork.totalKm")}
-            </h2>
-            <p className="text-4xl font-bold tabular-nums text-primary">{km(summary.totalKm)}</p>
-            <p className="text-xs text-muted-foreground">
-              {t("roadNetwork.lineCount", { count: summary.lineCount })}
-            </p>
-          </section>
+          <KpiCards summary={summary} />
           <section>
             <h2 className="mb-2 font-semibold">{t(`roadNetwork.legend.${mode}`)}</h2>
-            {summary.byColor.length === 0 ? (
+            {byColor.length === 0 ? (
               <p className="text-xs text-muted-foreground">{t("roadNetwork.empty.filtered")}</p>
             ) : (
               <ul className="space-y-1.5">
-                {summary.byColor.map((entry) => (
+                {byColor.map((entry) => (
                   <li key={entry.value} className="flex items-center gap-2">
                     <span
                       aria-hidden="true"
                       className="h-1.5 w-6 shrink-0 rounded-full"
                       style={{ background: entry.color }}
                     />
-                    <span className="min-w-0 flex-1 truncate">
-                      {entry.value.trim() || t("roadNetwork.unclassified")}
-                    </span>
+                    <span className="min-w-0 flex-1 truncate">{label(entry.value)}</span>
                     <span className="tabular-nums text-muted-foreground">{km(entry.km)} km</span>
                   </li>
                 ))}
               </ul>
             )}
           </section>
+          {hasProgress && <BehindList lines={summary.behind} onPick={(line) => fitTo([line])} />}
         </aside>
 
         <section
           className="network-dashboard-strip grid gap-3 overflow-y-auto border-t bg-card p-3"
           aria-label={t("roadNetwork.charts")}
         >
-          <figure className="min-w-0 rounded-lg border bg-background p-3">
+          <figure className="flex min-w-0 flex-col rounded-lg border bg-background p-3">
             <figcaption className="mb-2 text-sm font-semibold">
               {t("roadNetwork.chart.byYear")}
             </figcaption>
@@ -273,13 +301,41 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
               <p className="text-xs text-muted-foreground">{t("roadNetwork.chart.noYear")}</p>
             )}
           </figure>
-          <figure className="min-w-0 rounded-lg border bg-background p-3">
+          <figure className="flex min-h-0 min-w-0 flex-col rounded-lg border bg-background p-3">
             <figcaption className="mb-2 text-sm font-semibold">
-              {t(`roadNetwork.chart.by.${mode}`)}
+              {t("roadNetwork.chart.progressVsPlan")}
             </figcaption>
-            <BarList
-              entries={summary.byColor.map((entry) => ({
-                label: entry.value.trim() || t("roadNetwork.unclassified"),
+            {hasProgress ? (
+              <ProgressBullets
+                lines={summary.shown}
+                colors={colors}
+                colorOf={(line) => line[mode]}
+                onPick={(line) => fitTo([line])}
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("roadNetwork.chart.noProgress")}</p>
+            )}
+          </figure>
+          <figure className="flex min-w-0 flex-col rounded-lg border bg-background p-3">
+            <figcaption className="mb-2 text-sm font-semibold">
+              {t("roadNetwork.chart.donut.status")}
+            </figcaption>
+            <Donut
+              entries={summary.byStatus.map((entry) => ({
+                label: label(entry.value),
+                color: entry.color,
+                value: entry.km,
+              }))}
+              format={km}
+            />
+          </figure>
+          <figure className="flex min-w-0 flex-col rounded-lg border bg-background p-3">
+            <figcaption className="mb-2 text-sm font-semibold">
+              {t("roadNetwork.chart.donut.type")}
+            </figcaption>
+            <Donut
+              entries={summary.byType.map((entry) => ({
+                label: label(entry.value),
                 color: entry.color,
                 value: entry.km,
               }))}
@@ -324,6 +380,13 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
               {t("roadNetwork.mode.type")}: {hover.segment.type.trim()}
             </p>
           )}
+          {hover.segment.progress !== null && (
+            <p>
+              {t("roadNetwork.kpi.progress")}: {km(hover.segment.progress)}%
+              {hover.segment.plan !== null &&
+                ` · ${t("roadNetwork.kpi.plan")}: ${km(hover.segment.plan)}%`}
+            </p>
+          )}
           {hover.segment.year !== null && (
             <p>
               {t("roadNetwork.year")}: {hover.segment.year}
@@ -335,61 +398,6 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
 
       <NetworkLayersDialog open={layersOpen} onOpenChange={setLayersOpen} layers={candidates} />
     </>
-  );
-}
-
-/** Start and end year pickers. */
-function YearRange({
-  bounds,
-  value,
-  onChange,
-}: {
-  bounds: [number, number];
-  value: readonly [number, number] | null;
-  onChange: (range: [number, number] | null) => void;
-}) {
-  const { t } = useTranslation();
-  const [from, to] = value ?? bounds;
-  const years: number[] = [];
-  for (let year = bounds[0]; year <= bounds[1]; year += 1) years.push(year);
-  const set = (next: [number, number]) => {
-    const range: [number, number] = [Math.min(...next), Math.max(...next)];
-    onChange(range[0] === bounds[0] && range[1] === bounds[1] ? null : range);
-  };
-  const select = "h-8 w-full rounded-md border bg-background px-2 text-sm";
-  return (
-    <fieldset className="space-y-1.5">
-      <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t("roadNetwork.yearRange")}
-      </legend>
-      <div className="flex items-center gap-2">
-        <select
-          aria-label={t("roadNetwork.yearFrom")}
-          className={select}
-          value={from}
-          onChange={(event) => set([Number(event.target.value), to])}
-        >
-          {years.map((year) => (
-            <option key={year} value={year}>
-              {year}
-            </option>
-          ))}
-        </select>
-        <span aria-hidden="true">–</span>
-        <select
-          aria-label={t("roadNetwork.yearTo")}
-          className={select}
-          value={to}
-          onChange={(event) => set([from, Number(event.target.value)])}
-        >
-          {years.map((year) => (
-            <option key={year} value={year}>
-              {year}
-            </option>
-          ))}
-        </select>
-      </div>
-    </fieldset>
   );
 }
 

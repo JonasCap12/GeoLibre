@@ -11,12 +11,10 @@ import { useTranslation } from "react-i18next";
 import {
   layerConfigPatch,
   layerFieldNames,
+  NETWORK_FIELDS,
   readLayerConfig,
-  type NetworkFields,
   type NetworkLayerConfig,
 } from "../../lib/network-dashboard";
-
-const FIELDS: (keyof NetworkFields)[] = ["name", "status", "type", "year"];
 
 /**
  * Which line layers take part in the dashboard, and which attribute holds each
@@ -52,7 +50,7 @@ export function NetworkLayersDialog({
               <thead>
                 <tr className="text-start text-xs text-muted-foreground">
                   <th className="p-1 text-start font-medium">{t("roadNetwork.layers.layer")}</th>
-                  {FIELDS.map((field) => (
+                  {NETWORK_FIELDS.map((field) => (
                     <th key={field} className="p-1 text-start font-medium">
                       {t(`roadNetwork.field.${field}`)}
                     </th>
@@ -78,7 +76,7 @@ export function NetworkLayersDialog({
                           </span>
                         </label>
                       </td>
-                      {FIELDS.map((field) => (
+                      {NETWORK_FIELDS.map((field) => (
                         <td key={field} className="p-1">
                           <Select
                             aria-label={`${layer.name}: ${t(`roadNetwork.field.${field}`)}`}

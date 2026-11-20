@@ -12232,9 +12232,11 @@
     "chart": {
       "byYear": "Kilometers by start year",
       "noYear": "No line has a start year.",
-      "by": {
-        "status": "Kilometers by status",
-        "type": "Kilometers by type"
+      "progressVsPlan": "Done against plan",
+      "noProgress": "No line has a percent done. Choose the field in Layers and fields….",
+      "donut": {
+        "status": "Share of length by status",
+        "type": "Share of length by type"
       }
     },
     "year": "Start year",
@@ -12258,7 +12260,29 @@
       "status": "Status",
       "type": "Type",
       "year": "Start year",
-      "none": "(none)"
+      "none": "(none)",
+      "progress": "% done",
+      "plan": "% planned"
+    },
+    "progressRange": "Percent done",
+    "progressFrom": "From percent done",
+    "progressTo": "To percent done",
+    "kpi": {
+      "title": "Key figures",
+      "progress": "Done",
+      "plan": "Planned",
+      "gap": "{{value}} pts vs plan",
+      "doneKm": "Length done",
+      "behind": "Behind plan"
+    },
+    "behind": {
+      "title": "Behind plan",
+      "none": "No line is behind its plan.",
+      "item": "Item",
+      "doneOfPlan": "Done/plan",
+      "gap": "Gap",
+      "more_one": "and {{count}} more",
+      "more_other": "and {{count}} more"
     }
   }
 }

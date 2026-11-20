@@ -12067,9 +12067,11 @@
     "chart": {
       "byYear": "Số km theo năm khởi công",
       "noYear": "Chưa tuyến nào có năm khởi công.",
-      "by": {
-        "status": "Số km theo trạng thái",
-        "type": "Số km theo loại công trình"
+      "progressVsPlan": "Thực hiện so với kế hoạch",
+      "noProgress": "Chưa có cột % thực hiện. Chọn trong Lớp và cột dữ liệu….",
+      "donut": {
+        "status": "Tỷ trọng chiều dài theo trạng thái",
+        "type": "Tỷ trọng chiều dài theo loại công trình"
       }
     },
     "year": "Năm khởi công",
@@ -12093,7 +12095,28 @@
       "status": "Trạng thái",
       "type": "Loại",
       "year": "Năm khởi công",
-      "none": "(không có)"
+      "none": "(không có)",
+      "progress": "% thực hiện",
+      "plan": "% kế hoạch"
+    },
+    "progressRange": "% thực hiện",
+    "progressFrom": "Từ % thực hiện",
+    "progressTo": "Đến % thực hiện",
+    "kpi": {
+      "title": "Số liệu chính",
+      "progress": "Thực hiện",
+      "plan": "Kế hoạch",
+      "gap": "{{value}} điểm % so với kế hoạch",
+      "doneKm": "Khối lượng đã xong",
+      "behind": "Hạng mục chậm"
+    },
+    "behind": {
+      "title": "Hạng mục chậm tiến độ",
+      "none": "Không có hạng mục nào chậm so với kế hoạch.",
+      "item": "Hạng mục",
+      "doneOfPlan": "TH/KH",
+      "gap": "Lệch",
+      "more_other": "và {{count}} hạng mục khác"
     }
   }
 }
