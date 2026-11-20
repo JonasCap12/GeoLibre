@@ -1,7 +1,7 @@
 import { progressDashboardFeature, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import { Button } from "@geolibre/ui";
 import { Maximize2, Settings2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { DashboardCamera } from "../../lib/progress-dashboard-map";
 import {
@@ -22,6 +22,16 @@ import {
   subscribeNetworkDashboard,
 } from "../../lib/network-dashboard-screen";
 import { NetworkLayersDialog } from "./NetworkLayersDialog";
+import { DailyReportBoard } from "./DailyReportBoard";
+import {
+  dashboardView,
+  dashboardRatio,
+  dashboardPointerRatio,
+  clampDashboardRatio,
+  NETWORK_VIEW_STORAGE,
+  NETWORK_RATIO_STORAGE,
+  type NetworkDashboardView,
+} from "../../lib/network-dashboard-layout";
 
 /** The daily report board beside the shell's live progress map. */
 export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | null }) {
@@ -34,6 +44,7 @@ export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | n
     window.dispatchEvent(new Event("resize"));
     return () => {
       root.removeAttribute(NETWORK_DASHBOARD_ATTRIBUTE);
+      root.style.removeProperty("--nd-split-w");
       window.dispatchEvent(new Event("resize"));
     };
   }, [open]);
@@ -56,31 +67,56 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     () => new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }).format,
     [i18n.language],
   );
-  const [view, setView] = useState<"split" | "report" | "map">(() => {
+  const narrow = useDashboardMedia("(max-width: 899px)");
+  const wide = useDashboardMedia("(min-width: 1400px)");
+  const [preferredView, setView] = useState<NetworkDashboardView | null>(() => {
     try {
-      const saved = localStorage.getItem("geolibre-network-dashboard-view");
-      if (saved === "report" || saved === "map") return saved;
+      const saved = localStorage.getItem(NETWORK_VIEW_STORAGE);
+      if (saved === "split" || saved === "report" || saved === "map") return saved;
     } catch {
       /* Storage can be disabled by the browser. */
     }
-    return "split";
+    return null;
   });
-  const board = useRef<HTMLIFrameElement>(null);
+  const view = dashboardView(preferredView, narrow);
+  const [ratio, setRatio] = useState(() => {
+    try {
+      return dashboardRatio(localStorage.getItem(NETWORK_RATIO_STORAGE));
+    } catch {
+      return null;
+    }
+  });
+  const currentRatio = ratio ?? (wide ? 60 : 55);
+  const ratioRef = useRef(currentRatio);
+  ratioRef.current = currentRatio;
+  const dragging = useRef(false);
+  const [refitRevision, setRefitRevision] = useState(0);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute(NETWORK_DASHBOARD_ATTRIBUTE, view);
-    try {
-      localStorage.setItem("geolibre-network-dashboard-view", view);
-    } catch {
-      /* Optional preference. */
-    }
     window.dispatchEvent(new Event("resize"));
   }, [view]);
   useEffect(() => {
-    const observer = new MutationObserver(() => syncBoardTheme(board.current));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
+    try {
+      if (preferredView) localStorage.setItem(NETWORK_VIEW_STORAGE, preferredView);
+    } catch {
+      /* Optional preference. */
+    }
+  }, [preferredView]);
+  useEffect(() => {
+    const style = document.documentElement.style;
+    if (ratio === null) style.removeProperty("--nd-split-w");
+    else style.setProperty("--nd-split-w", `${ratio}vw`);
+  }, [ratio]);
+  const finishDivider = () => {
+    dragging.current = false;
+    try {
+      localStorage.setItem(NETWORK_RATIO_STORAGE, String(ratioRef.current));
+    } catch {
+      /* Optional preference. */
+    }
+    setRefitRevision((value) => value + 1);
+  };
   const layers = useAppStore((state) => state.layers);
   const [mode, setMode] = useState<NetworkColorMode>("status");
   const [layersOpen, setLayersOpen] = useState(false);
@@ -94,33 +130,60 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
   );
   useDashboardViews(candidates, segments, mode, colors);
 
-  const fitTo = (lines: readonly NetworkSegment[]) => {
-    const bounds = segmentsBounds(candidates, lines);
-    const map = camera?.getMap?.();
-    if (!bounds) return;
-    if (map) {
-      map.resize();
-      map.fitBounds(
-        [
-          [bounds[0], bounds[1]],
-          [bounds[2], bounds[3]],
-        ],
-        { padding: 60, maxZoom: 16, duration: 500 },
-      );
-    } else camera?.fitBounds(bounds);
-  };
-  // Frame the whole network once, when the dashboard opens.
-  const framed = useRef(false);
+  const fitTo = useCallback(
+    (lines: readonly NetworkSegment[]) => {
+      const bounds = segmentsBounds(candidates, lines);
+      const map = camera?.getMap?.();
+      if (!bounds) return;
+      if (map) {
+        map.resize();
+        map.fitBounds(
+          [
+            [bounds[0], bounds[1]],
+            [bounds[2], bounds[3]],
+          ],
+          { padding: 60, maxZoom: 16, duration: 500 },
+        );
+      } else camera?.fitBounds(bounds);
+    },
+    [candidates, camera],
+  );
+  const userMoved = useRef(false);
+  const framed = useRef<string | null>(null);
+  const lastLayout = useRef<string | null>(null);
   useEffect(() => {
-    if (framed.current || !camera || segments.length === 0 || view === "report") return;
+    const map = camera?.getMap?.();
+    if (!map) return;
+    const manual = (event: { originalEvent?: unknown }) => {
+      if (event.originalEvent) userMoved.current = true;
+    };
+    map.on("movestart", manual);
+    return () => {
+      map.off("movestart", manual);
+    };
+  }, [camera]);
+  useEffect(() => {
+    const key = `${view}:${refitRevision}`;
+    if (lastLayout.current !== key) {
+      lastLayout.current = key;
+      framed.current = null;
+    }
+    if (
+      framed.current === key ||
+      userMoved.current ||
+      !camera ||
+      segments.length === 0 ||
+      view === "report"
+    )
+      return;
     // After the map has been resized into its cell.
     const timer = window.setTimeout(() => {
-      framed.current = true;
+      if (userMoved.current) return;
+      framed.current = key;
       fitTo(segments);
     }, 50);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on the first lines
-  }, [segments, view, camera]);
+  }, [segments, view, camera, refitRevision, fitTo]);
 
   const hover = useLineHover(camera, candidates, segments);
   const label = (value: string) => value.trim() || t("roadNetwork.unclassified");
@@ -139,17 +202,19 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
           aria-label={t("roadNetwork.view.title")}
           className="network-dashboard-view flex rounded-md border border-header-foreground/40 text-xs"
         >
-          {(["split", "report", "map"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={view === value}
-              className={`px-2 py-1.5 font-medium ${view === value ? "bg-header-foreground text-header" : "hover:bg-header-foreground/10"}`}
-              onClick={() => setView(value)}
-            >
-              {t(`roadNetwork.view.${value}`)}
-            </button>
-          ))}
+          {(narrow ? (["report", "map"] as const) : (["split", "report", "map"] as const)).map(
+            (value) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={view === value}
+                className={`px-2 py-1.5 font-medium ${view === value ? "bg-header-foreground text-header" : "hover:bg-header-foreground/10"}`}
+                onClick={() => setView(value)}
+              >
+                {t(`roadNetwork.view.${value}`)}
+              </button>
+            ),
+          )}
         </div>
         <div
           role="radiogroup"
@@ -176,7 +241,11 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => fitTo(segments)}
+          onClick={() => {
+            userMoved.current = false;
+            framed.current = `${view}:${refitRevision}`;
+            fitTo(segments);
+          }}
           disabled={segments.length === 0}
         >
           <Maximize2 className="h-3.5 w-3.5 lg:me-1.5" />
@@ -197,29 +266,55 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         </Button>
       </header>
 
-      <div className="network-dashboard-body">
-        <section
-          className="network-dashboard-board bg-background"
-          hidden={view === "map"}
-          aria-label={t("roadNetwork.boardTitle")}
-        >
-          <iframe
-            ref={board}
-            src={`${import.meta.env.BASE_URL}daily-report/index.html`}
-            title={t("roadNetwork.boardTitle")}
-            allow="fullscreen"
-            onLoad={() => {
-              const doc = board.current?.contentDocument;
-              if (!doc) return;
-              const style = doc.createElement("style");
-              style.textContent = "#bX { display: none !important; }";
-              doc.head.appendChild(style);
-              syncBoardTheme(board.current);
-            }}
-          />
-        </section>
-        <div className="network-dashboard-map-space" aria-hidden="true" />
-      </div>
+      <DailyReportBoard hidden={view === "map"} />
+      {view === "split" && !narrow && (
+        <div
+          className="network-dashboard-divider"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("roadNetwork.splitter")}
+          tabIndex={0}
+          aria-valuemin={35}
+          aria-valuemax={80}
+          aria-valuenow={Math.round(currentRatio)}
+          onPointerDown={(event) => {
+            dragging.current = true;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            event.preventDefault();
+          }}
+          onPointerMove={(event) => {
+            if (!dragging.current) return;
+            const value = dashboardPointerRatio(
+              event.clientX,
+              window.innerWidth,
+              document.documentElement.dir === "rtl",
+            );
+            ratioRef.current = value;
+            setRatio(value);
+          }}
+          onPointerUp={(event) => {
+            if (!dragging.current) return;
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            finishDivider();
+          }}
+          onPointerCancel={() => {
+            if (dragging.current) finishDivider();
+          }}
+          onKeyDown={(event) => {
+            const direction = document.documentElement.dir === "rtl" ? -1 : 1;
+            let value: number;
+            if (event.key === "ArrowLeft") value = currentRatio - 2 * direction;
+            else if (event.key === "ArrowRight") value = currentRatio + 2 * direction;
+            else if (event.key === "Home") value = 35;
+            else if (event.key === "End") value = 80;
+            else return;
+            event.preventDefault();
+            ratioRef.current = clampDashboardRatio(value);
+            setRatio(ratioRef.current);
+            finishDivider();
+          }}
+        />
+      )}
       {view !== "report" && entries.length > 0 && (
         <section
           className="network-dashboard-legend rounded-md border bg-card/95 p-2 text-xs shadow-sm"
@@ -379,10 +474,14 @@ function useLineHover(
   return hover;
 }
 
-/** The app's dark class is separate from its accent scheme data-theme. */
-function syncBoardTheme(frame: HTMLIFrameElement | null) {
-  frame?.contentDocument?.documentElement.setAttribute(
-    "data-theme",
-    document.documentElement.classList.contains("dark") ? "dark" : "light",
+function useDashboardMedia(query: string) {
+  const media = useMemo(() => window.matchMedia(query), [query]);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      media.addEventListener("change", listener);
+      return () => media.removeEventListener("change", listener);
+    },
+    [media],
   );
+  return useSyncExternalStore(subscribe, () => media.matches);
 }

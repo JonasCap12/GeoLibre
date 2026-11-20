@@ -11,12 +11,11 @@ const DAILY_REPORT_CSP = read("../workers/web/src/index.ts").match(
 )![1];
 
 describe("daily report board distribution", () => {
-  it("preserves the original byte for byte except the early local storage flag", () => {
+  it("preserves the owner's original byte for byte, including its own local flag", () => {
     const html = read("../apps/geolibre-desktop/public/daily-report/index.html");
-    assert.ok(html.includes("<head><script>window.BCN_LOCAL = true;</script>"));
-    const original = html.replace("<script>window.BCN_LOCAL = true;</script>", "");
+    assert.ok(html.indexOf("window.BCN_LOCAL=1") < html.indexOf("const o=!!window.BCN_LOCAL"));
     assert.equal(
-      createHash("sha256").update(original).digest("hex"),
+      createHash("sha256").update(html).digest("hex"),
       "d75c9101dc4d5fb8933a89e2412bcd0d0396090658c33edee8f350b896067b22",
     );
   });
