@@ -12096,6 +12096,7 @@
       "detail": "Nạp file Excel ngay, hoặc chọn file đồng bộ OneDrive cho từng gói một lần trong Cài đặt → File đồng bộ OneDrive trên máy. Edge và Chrome có thể đọc lại file mỗi lần mở.",
       "upload": "Nạp file Excel…",
       "configure": "Chọn file đồng bộ…",
+      "dismiss": "Ẩn hướng dẫn",
       "unsupported": "Trình duyệt này không hỗ trợ chọn file đồng bộ. Dùng Edge hoặc Chrome để tự cập nhật, hoặc nạp Excel tại đây."
     }
   }

@@ -6,6 +6,8 @@ import {
   readDailyReportSource,
   attachDailyReportAdapter,
   NO_REPORT_SOURCE_TOAST,
+  dismissSourceHint,
+  sourceHintDismissed,
 } from "../apps/geolibre-desktop/src/lib/daily-report-board";
 import {
   dashboardView,
@@ -235,5 +237,30 @@ describe("network dashboard responsive preferences", () => {
     assert.equal(dashboardPointerRatio(650, 1000, false), 65);
     assert.equal(dashboardPointerRatio(350, 1000, true), 65);
     assert.equal(dashboardPointerRatio(-20, 1000, false), 35);
+  });
+});
+
+describe("daily report source hint", () => {
+  it("remembers a dismissal and tolerates missing or throwing storage", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+    };
+    assert.equal(sourceHintDismissed(storage), false);
+    dismissSourceHint(storage);
+    assert.equal(sourceHintDismissed(storage), true);
+
+    const broken = {
+      getItem: (): string | null => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    assert.doesNotThrow(() => dismissSourceHint(broken));
+    assert.equal(sourceHintDismissed(broken), false);
+    assert.equal(sourceHintDismissed(null), false);
   });
 });

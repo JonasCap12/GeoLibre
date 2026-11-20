@@ -1,13 +1,29 @@
 import { Button } from "@geolibre/ui";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { attachDailyReportAdapter, readDailyReportSource } from "../../lib/daily-report-board";
+import {
+  attachDailyReportAdapter,
+  dismissSourceHint,
+  readDailyReportSource,
+  sourceHintDismissed,
+} from "../../lib/daily-report-board";
+
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 export function DailyReportBoard({ hidden }: { hidden: boolean }) {
   const { t } = useTranslation();
   const board = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | undefined>(undefined);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  // Once reports are loaded by hand, the header button already opens the picker,
+  // so the hint can go for good on this device.
+  const [hintDismissed, setHintDismissed] = useState(() => sourceHintDismissed(browserStorage()));
   const [filePicker, setFilePicker] = useState(false);
   useEffect(() => {
     const observer = new MutationObserver(() => syncTheme(board.current));
@@ -23,7 +39,7 @@ export function DailyReportBoard({ hidden }: { hidden: boolean }) {
       hidden={hidden}
       aria-label={t("roadNetwork.boardTitle")}
     >
-      {configured === false && (
+      {configured === false && !hintDismissed && (
         <div
           className="network-dashboard-source-hint border-b bg-card px-3 py-2 text-sm"
           role="status"
@@ -49,6 +65,16 @@ export function DailyReportBoard({ hidden }: { hidden: boolean }) {
               onClick={() => board.current?.contentDocument?.getElementById("bSet")?.click()}
             >
               {t("roadNetwork.sourceHint.configure")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                dismissSourceHint(browserStorage());
+                setHintDismissed(true);
+              }}
+            >
+              {t("roadNetwork.sourceHint.dismiss")}
             </Button>
           </div>
         </div>

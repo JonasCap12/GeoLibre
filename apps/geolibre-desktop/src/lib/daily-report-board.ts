@@ -69,6 +69,26 @@ export async function readDailyReportSource(
   });
 }
 
+const HINT_DISMISSED_STORAGE = "geolibre-daily-report-hint-dismissed";
+
+/** Whether the viewer has hidden the "how to load reports" hint on this device. */
+export function sourceHintDismissed(storage: Pick<Storage, "getItem"> | null): boolean {
+  try {
+    return storage?.getItem(HINT_DISMISSED_STORAGE) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remember the dismissal; storage can be unavailable, the hint just returns next time. */
+export function dismissSourceHint(storage: Pick<Storage, "setItem"> | null): void {
+  try {
+    storage?.setItem(HINT_DISMISSED_STORAGE, "1");
+  } catch {
+    /* Optional preference. */
+  }
+}
+
 export const NO_REPORT_SOURCE_TOAST =
   "Lỗi chưa có link dữ liệu (⚙ Cài đặt) và chưa có file trong DuLieu";
 
