@@ -1638,4 +1638,5 @@ The parent hides #bX and synchronizes light/dark on iframe load, without editing
 the board. Reports stay in the browser's IndexedDB; they are not project data.
 The web Worker replaces the CSP for /daily-report/* (overlapping _headers cannot
 relax the app policy); nginx mirrors it. Keep the board out of the PWA precache
-and Python embed output. Desktop script CSP is unchanged.
+and the SPA navigation fallback (including the directory URL after Cloudflare's
+redirect), and out of Python embed output. Desktop script CSP is unchanged.

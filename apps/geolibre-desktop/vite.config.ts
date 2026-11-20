@@ -1493,9 +1493,15 @@ function pwaPlugin(): Plugin[] {
       clientsClaim: true,
       skipWaiting: true,
       navigateFallback: "index.html",
-      // Never SPA-fallback the sidecar proxy or any asset request; let those hit
-      // the network/precache directly.
-      navigateFallbackDenylist: [/^\/sidecar\//, /^\/__geolibre_/, /\/[^/?]+\.[^/]+$/],
+      // The asset server redirects the report's index.html to its directory.
+      // Both URLs must reach the independent document instead of the app shell.
+      // Also bypass the sidecar proxy and ordinary asset requests.
+      navigateFallbackDenylist: [
+        /^\/sidecar\//,
+        /^\/__geolibre_/,
+        /\/daily-report(?:\/|$)/,
+        /\/[^/?]+\.[^/]+$/,
+      ],
       runtimeCaching: [
         {
           // Hashed build assets under /assets/ that the precache skips: the

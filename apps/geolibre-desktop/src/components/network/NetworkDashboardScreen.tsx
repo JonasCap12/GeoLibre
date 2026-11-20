@@ -112,7 +112,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
   // Frame the whole network once, when the dashboard opens.
   const framed = useRef(false);
   useEffect(() => {
-    if (framed.current || segments.length === 0 || view === "report") return;
+    if (framed.current || !camera || segments.length === 0 || view === "report") return;
     // After the map has been resized into its cell.
     const timer = window.setTimeout(() => {
       framed.current = true;
@@ -120,7 +120,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     }, 50);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on the first lines
-  }, [segments, view]);
+  }, [segments, view, camera]);
 
   const hover = useLineHover(camera, candidates, segments);
   const label = (value: string) => value.trim() || t("roadNetwork.unclassified");

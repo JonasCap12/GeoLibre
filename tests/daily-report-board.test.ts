@@ -30,6 +30,19 @@ describe("daily report board distribution", () => {
     assert.ok(vite.includes('"**/daily-report/**"'));
     assert.match(vite, /if \(IS_EMBED\)\s+rmSync\(path.join\(outputDirectory, "daily-report"\)/);
     assert.match(vite, /removeDailyReportFromEmbedPlugin\(\),/);
+    const denylist = vite.match(/navigateFallbackDenylist:\s*\[([\s\S]*?)\n\s*\]/)![1];
+    // Check the actual configured regular expressions, including redirects and subpath hosts.
+    const patterns = [...denylist.matchAll(/^\s*(\/.*\/[a-z]*)\s*,?\s*$/gm)].map((match) => {
+      const pattern = match[1];
+      const end = pattern.lastIndexOf("/");
+      return new RegExp(pattern.slice(1, end), pattern.slice(end + 1));
+    });
+    for (const url of ["/daily-report/", "/daily-report/index.html", "/app/daily-report/"]) {
+      assert.ok(
+        patterns.some((pattern) => pattern.test(url)),
+        `${url} must bypass the SPA fallback`,
+      );
+    }
   });
 
   it("sends the same single policy from nginx and the Worker", () => {
