@@ -163,7 +163,7 @@ describe("deployment config", () => {
     const source = read("../workers/web/src/index.ts");
     assert.match(source, /Strict-Transport-Security", "max-age=31536000; includeSubDomains"/);
     assert.match(source, /Cross-Origin-Opener-Policy", "same-origin-allow-popups"/);
-    assert.equal(source.match(/applyAppSecurityHeaders\(headers\)/g)?.length, 2);
+    assert.equal(source.match(/applyAppSecurityHeaders\(headers\)/g)?.length, 3);
   });
 });
 

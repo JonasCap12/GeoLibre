@@ -41,76 +41,120 @@ function routesLayer(): GeoLibreLayer {
   } as unknown as GeoLibreLayer;
 }
 
-/** The figure under the "Total length" heading. */
-function totalKm(): string | null | undefined {
-  return screen.getByText("Total length").nextElementSibling?.textContent;
-}
-
 describe("NetworkDashboardScreen", () => {
-  it("sums the project lines, filters them and cleans up on close", () => {
+  it("embeds the board only while open, applies real map views and cleans up", () => {
     useAppStore.setState({ layers: [routesLayer()], isDirty: false });
     render(createElement(NetworkDashboardScreen, { camera: null }));
-    assert.equal(screen.queryByText("Road and bridge projects"), null, "closed at first");
-
+    assert.equal(document.querySelector("iframe"), null);
     act(() => openNetworkDashboard());
-
-    assert.ok(screen.getByText("Road and bridge projects"));
-    assert.equal(document.documentElement.hasAttribute(NETWORK_DASHBOARD_ATTRIBUTE), true);
-    assert.equal(totalKm(), "333.6", "three lines of ~111.2 km");
-    assert.ok(screen.getByText("3 lines"));
-    const view = useAppStore.getState().layers[0].progressDashboard;
-    assert.ok(view, "the map view is applied to the layer");
-    assert.equal(
-      useAppStore.getState().isDirty,
-      false,
-      "the view does not mark the project changed",
+    const frame = screen.getByTitle("Daily construction report board");
+    assert.equal(frame.getAttribute("src"), "/daily-report/index.html");
+    assert.equal(frame.getAttribute("allow"), "fullscreen");
+    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "split");
+    assert.ok(screen.getByRole("region", { name: "Lines by status" }));
+    assert.equal(screen.queryByText("Total length"), null);
+    assert.ok(useAppStore.getState().layers[0].progressDashboard);
+    assert.equal(useAppStore.getState().isDirty, false);
+    const statusView = useAppStore.getState().layers[0].progressDashboard!.colorExpression;
+    fireEvent.click(screen.getByRole("radio", { name: "Type" }));
+    assert.notEqual(
+      useAppStore.getState().layers[0].progressDashboard!.colorExpression,
+      statusView,
     );
-
-    // Leave out the finished line.
-    fireEvent.click(screen.getByRole("checkbox", { name: /Hoàn thành/ }));
-    assert.equal(totalKm(), "222.4");
-    assert.ok(screen.getByText("2 lines"));
-
     act(() => closeNetworkDashboard());
+    assert.equal(document.querySelector("iframe"), null);
     assert.equal(useAppStore.getState().layers[0].progressDashboard, undefined);
     assert.equal(document.documentElement.hasAttribute(NETWORK_DASHBOARD_ATTRIBUTE), false);
   });
 
-  it("explains what to add when the workspace has no lines", () => {
-    useAppStore.setState({ layers: [] });
+  it("persists the selected view across closing and reopening", () => {
+    useAppStore.setState({ layers: [routesLayer()] });
     render(createElement(NetworkDashboardScreen, { camera: null }));
     act(() => openNetworkDashboard());
-    assert.ok(screen.getByText("No project lines to show"));
+    fireEvent.click(screen.getByRole("button", { name: "Report only" }));
+    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "report");
+    assert.equal(screen.queryByRole("region", { name: "Lines by status" }), null);
+    act(() => closeNetworkDashboard());
+    act(() => openNetworkDashboard());
+    assert.equal(
+      screen.getByRole("button", { name: "Report only" }).getAttribute("aria-pressed"),
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map only" }));
+    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "map");
+    assert.equal(document.querySelector(".network-dashboard-board")?.hasAttribute("hidden"), true);
     act(() => closeNetworkDashboard());
   });
 
-  it("shows percent done against plan and the lines behind it", () => {
-    const layer = routesLayer();
-    const progress = [
-      [100, 100],
-      [20, 60],
-      [70, 80],
-    ];
-    layer.geojson!.features.forEach((feature, i) => {
-      feature.properties = {
-        ...feature.properties,
-        tien_do_pct: progress[i][0],
-        ke_hoach_pct: progress[i][1],
-      };
-    });
-    useAppStore.setState({ layers: [layer] });
+  it("keeps the board available without lines, including the field setup action", () => {
+    useAppStore.setState({ layers: [] });
+    localStorage.setItem("geolibre-network-dashboard-view", "invalid");
     render(createElement(NetworkDashboardScreen, { camera: null }));
     act(() => openNetworkDashboard());
+    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "split");
+    assert.ok(screen.getByText("No project lines to show"));
+    assert.ok(screen.getByTitle("Daily construction report board"));
+    assert.equal(screen.getByRole("button", { name: "Show all" }).hasAttribute("disabled"), true);
+    fireEvent.click(screen.getAllByRole("button", { name: "Layers and fields…" })[1]);
+    assert.ok(screen.getByRole("dialog"));
+    act(() => closeNetworkDashboard());
+  });
 
-    // Equal lengths: done (100 + 20 + 70) / 3, planned (100 + 60 + 80) / 3.
-    assert.ok(screen.getByText("63.3%"));
-    assert.ok(screen.getByText("80%"));
-    const behind = screen.getByText("Behind plan", { selector: "h2" }).parentElement!;
-    const rows = [...behind.querySelectorAll("tbody tr")].map((row) => row.textContent);
-    assert.deepEqual(rows, ["Cầu Đang thi công20/60%-40", "Cao tốc Hoàn thành70/80%-10"]);
-    assert.equal(screen.getAllByRole("slider").length, 2, "the percent-done range has two thumbs");
-    assert.ok(screen.getByText("Share of length by status"));
-    assert.ok(screen.getByText("Done against plan"));
+  it("fits the network using the existing camera", () => {
+    useAppStore.setState({ layers: [routesLayer()] });
+    let fitted: unknown;
+    render(
+      createElement(NetworkDashboardScreen, {
+        camera: {
+          fitBounds(bounds) {
+            fitted = bounds;
+          },
+        },
+      }),
+    );
+    act(() => openNetworkDashboard());
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    assert.deepEqual(fitted, [106, 10, 106, 11]);
+    act(() => closeNetworkDashboard());
+  });
+
+  it("frames once after transient views replace the layer objects", async () => {
+    useAppStore.setState({ layers: [routesLayer()] });
+    const fitted: number[][] = [];
+    render(
+      createElement(NetworkDashboardScreen, {
+        camera: {
+          fitBounds(bounds) {
+            fitted.push(bounds);
+          },
+        },
+      }),
+    );
+    act(() => openNetworkDashboard());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    assert.deepEqual(fitted, [[106, 10, 106, 11]]);
+    act(() => closeNetworkDashboard());
+  });
+
+  it("hides the board exit and follows the app theme on load and later changes", async () => {
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    const frame = screen.getByTitle("Daily construction report board") as HTMLIFrameElement;
+    const doc = document.implementation.createHTMLDocument("board");
+    Object.defineProperty(frame, "contentDocument", { configurable: true, value: doc });
+    fireEvent.load(frame);
+    assert.ok(doc.head.textContent?.includes("#bX { display: none !important; }"));
+    assert.equal(doc.documentElement.getAttribute("data-theme"), "light");
+    await act(async () => {
+      document.documentElement.classList.add("dark");
+    });
+    assert.equal(doc.documentElement.getAttribute("data-theme"), "dark");
+    await act(async () => {
+      document.documentElement.classList.remove("dark");
+    });
+    assert.equal(doc.documentElement.getAttribute("data-theme"), "light");
     act(() => closeNetworkDashboard());
   });
 });

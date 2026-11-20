@@ -4,7 +4,7 @@ import type { Feature, Geometry, Position } from "geojson";
 /**
  * The road and bridge network dashboard: an overview of every project line in
  * the workspace (expressways, national roads, bridges), coloured by status or
- * by type, filtered, and summed in kilometres.
+ * by type, with a compact legend in kilometres.
  *
  * It reads the line layers already in the project. Which layers take part, and
  * which attribute holds each project's name, status, type and year, is saved
@@ -60,23 +60,6 @@ export interface NetworkSegment {
   plan: number | null;
   km: number;
 }
-
-/** The dashboard filters. A null set or range means "no filter". */
-export interface NetworkFilters {
-  statuses: ReadonlySet<string> | null;
-  types: ReadonlySet<string> | null;
-  /** Inclusive year range. */
-  years: readonly [number, number] | null;
-  /** Inclusive percent-done range. */
-  progress: readonly [number, number] | null;
-}
-
-export const NO_FILTERS: NetworkFilters = {
-  statuses: null,
-  types: null,
-  years: null,
-  progress: null,
-};
 
 /**
  * Line width by zoom: thick enough to see the whole network zoomed out to a
@@ -316,23 +299,6 @@ export function collectSegments(layers: readonly GeoLibreLayer[]): NetworkSegmen
   return segments;
 }
 
-/** Whether a line passes the filters. */
-export function passesFilters(segment: NetworkSegment, filters: NetworkFilters): boolean {
-  if (filters.statuses && !filters.statuses.has(segment.status)) return false;
-  if (filters.types && !filters.types.has(segment.type)) return false;
-  if (filters.years) {
-    if (segment.year === null) return false;
-    if (segment.year < filters.years[0] || segment.year > filters.years[1]) return false;
-  }
-  if (filters.progress) {
-    if (segment.progress === null) return false;
-    if (segment.progress < filters.progress[0] || segment.progress > filters.progress[1]) {
-      return false;
-    }
-  }
-  return true;
-}
-
 /** Known statuses get fixed, meaningful colours (folded text → colour). */
 const STATUS_COLORS: [RegExp, string][] = [
   [/(dang|under).*(thi cong|construction)|^thi cong|in progress|ongoing/, "#dc2626"],
@@ -422,115 +388,19 @@ export function fieldValues(
   }));
 }
 
-/** Kilometres per year, for the lines that carry a year. */
-export function kmByYear(segments: readonly NetworkSegment[]): { year: number; km: number }[] {
-  const totals = new Map<number, number>();
-  for (const segment of segments) {
-    if (segment.year === null) continue;
-    totals.set(segment.year, (totals.get(segment.year) ?? 0) + segment.km);
-  }
-  return [...totals.entries()].sort((a, b) => a[0] - b[0]).map(([year, km]) => ({ year, km }));
-}
-
-/** The smallest and largest year among the lines, or null when none has one. */
-export function yearBounds(segments: readonly NetworkSegment[]): [number, number] | null {
-  const years = segments.flatMap((segment) => (segment.year === null ? [] : [segment.year]));
-  return years.length ? [Math.min(...years), Math.max(...years)] : null;
-}
-
-/** The dashboard's figures for the filtered lines. */
-export interface NetworkSummary {
-  /** The lines that pass the filters. */
-  shown: NetworkSegment[];
-  totalKm: number;
-  lineCount: number;
-  byStatus: NetworkCategory[];
-  byType: NetworkCategory[];
-  byYear: { year: number; km: number }[];
-  /** Percent done and planned, weighted by length; null when no line has one. */
-  progressPct: number | null;
-  planPct: number | null;
-  /** Kilometres done: each line's length times its percent done. */
-  doneKm: number | null;
-  /** Lines behind their plan, most behind first. */
-  behind: NetworkSegment[];
-}
-
-/** The palettes of both fields over the whole network, so filtering keeps colours. */
-export interface NetworkPalettes {
-  status: ReadonlyMap<string, string>;
-  type: ReadonlyMap<string, string>;
-}
-
-function weightedPercent(
-  segments: readonly NetworkSegment[],
-  pick: (segment: NetworkSegment) => number | null,
-): number | null {
-  let km = 0;
-  let sum = 0;
-  for (const segment of segments) {
-    const value = pick(segment);
-    if (value === null) continue;
-    // A line of no measurable length still counts, with a token weight.
-    const weight = segment.km > 0 ? segment.km : 1e-6;
-    km += weight;
-    sum += value * weight;
-  }
-  return km > 0 ? sum / km : null;
-}
-
-/** How far a line is behind its plan, in percentage points (negative = behind). */
-export function planGap(segment: NetworkSegment): number | null {
-  return segment.progress !== null && segment.plan !== null
-    ? segment.progress - segment.plan
-    : null;
-}
-
-export function summarize(
-  segments: readonly NetworkSegment[],
-  filters: NetworkFilters,
-  palettes: NetworkPalettes,
-): NetworkSummary {
-  const shown = segments.filter((segment) => passesFilters(segment, filters));
-  const withProgress = shown.filter((segment) => segment.progress !== null);
-  const behind = shown
-    .filter((segment) => (planGap(segment) ?? 0) < 0)
-    .sort((a, b) => (planGap(a) ?? 0) - (planGap(b) ?? 0));
-  return {
-    shown,
-    totalKm: shown.reduce((sum, segment) => sum + segment.km, 0),
-    lineCount: shown.length,
-    byStatus: fieldValues(shown, "status", palettes.status),
-    byType: fieldValues(shown, "type", palettes.type),
-    byYear: kmByYear(shown),
-    progressPct: weightedPercent(shown, (segment) => segment.progress),
-    planPct: weightedPercent(shown, (segment) => segment.plan),
-    doneKm: withProgress.length
-      ? withProgress.reduce((sum, segment) => sum + (segment.km * (segment.progress ?? 0)) / 100, 0)
-      : null,
-    behind,
-  };
-}
-
-/** Natural order for line names ("Km9" before "Km10"). */
-export function compareNames(a: NetworkSegment, b: NetworkSegment): number {
-  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-}
-
 function fieldExpression(field: string): unknown {
   return ["to-string", ["coalesce", ["get", field], ""]];
 }
 
 /**
- * The transient renderer view for one included layer: only the lines that pass
- * the filters, a colour per value of the colour field, and the zoom-driven
- * line width.
+ * The transient renderer view for one included layer: its project lines,
+ * a colour per value of the colour field, and the zoom-driven line width.
  *
- * The map filters on the feature indexes the summary kept (the renderer copy
+ * The map filters on the included feature indexes (the renderer copy
  * carries each feature's index), so the map and the kilometre figures always
- * agree, whatever form the year or status values take.
+ * agree.
  *
- * @param shown The indexes of this layer's lines that pass the filters.
+ * @param shown The original indexes of this layer's included lines.
  */
 export function layerView(
   config: NetworkLayerConfig,
@@ -558,14 +428,10 @@ export function layerView(
   };
 }
 
-/** The indexes of each layer's lines that pass the filters, by layer id. */
-export function shownIndexes(
-  segments: readonly NetworkSegment[],
-  filters: NetworkFilters,
-): Map<string, number[]> {
+/** The indexes of each layer's included lines, by layer id. */
+export function shownIndexes(segments: readonly NetworkSegment[]): Map<string, number[]> {
   const shown = new Map<string, number[]>();
   for (const segment of segments) {
-    if (!passesFilters(segment, filters)) continue;
     const list = shown.get(segment.layerId) ?? [];
     list.push(segment.index);
     shown.set(segment.layerId, list);
