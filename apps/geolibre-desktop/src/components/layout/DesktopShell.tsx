@@ -189,7 +189,10 @@ interface DesktopShellProps {
   mapAppAPI: ReturnType<typeof createAppAPI> | null;
   themeMode: ThemeMode;
   onToggleThemeMode: () => void;
-  onMapReady?: (app: ReturnType<typeof createAppAPI>) => void;
+  onMapReady?: (
+    app: ReturnType<typeof createAppAPI>,
+    highlight: (features: import("geojson").FeatureCollection | null) => void,
+  ) => void;
 }
 
 export function DesktopShell({
@@ -491,7 +494,9 @@ export function DesktopShell({
 
   const handleMapControllerReady = useCallback(() => {
     setMapReadyGeneration((generation) => generation + 1);
-    onMapReady?.(createAppAPI(mapControllerRef));
+    onMapReady?.(createAppAPI(mapControllerRef), (features) =>
+      mapControllerRef.current?.setTransientHighlight?.(features),
+    );
   }, [onMapReady]);
 
   /**

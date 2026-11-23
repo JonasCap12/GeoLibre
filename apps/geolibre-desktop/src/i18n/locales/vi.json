@@ -12049,7 +12049,8 @@
     "colorBy": "Tô màu tuyến theo",
     "mode": {
       "status": "Trạng thái",
-      "type": "Loại công trình"
+      "type": "Loại công trình",
+      "report": "Theo báo cáo"
     },
     "legend": {
       "status": "Tuyến theo trạng thái",
@@ -12107,6 +12108,11 @@
       "office": "Nội nghiệp",
       "general": "Công tác chung",
       "showOnMap": "Xem trên bản đồ",
+      "selectFront": "Chọn {{name}} và xem trên bản đồ",
+      "locateWork": "Định vị {{name}} trên bản đồ",
+      "locatePhoto": "Định vị ảnh trên bản đồ",
+      "unknownProgress": "Chưa có tiến độ",
+      "progressBand": "{{range}}%",
       "resources": "Nhân sự, máy móc và khó khăn",
       "issues": "Khó khăn, vướng mắc",
       "photos": "Hình ảnh hiện trường",

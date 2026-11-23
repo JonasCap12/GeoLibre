@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { DesktopShell } from "./components/layout/DesktopShell";
 import { ConstructionProgressScreen } from "./components/progress/ConstructionProgressScreen";
 import { NetworkDashboardScreen } from "./components/network/NetworkDashboardScreen";
+import type { DashboardCamera } from "./lib/progress-dashboard-map";
 import { NotificationRegion } from "./components/layout/NotificationRegion";
 import { OnboardingDialog } from "./components/layout/OnboardingDialog";
 import { RegionalBasemapPrompt } from "./components/layout/RegionalBasemapPrompt";
@@ -49,9 +50,21 @@ export default function App() {
   // `?data=` loader's effect deps, and a changing identity would re-run that
   // one-shot import and duplicate its layers.
   const [mapAppAPI, setMapAppAPI] = useState<ReturnType<typeof createAppAPI> | null>(null);
-  const handleMapReady = useCallback((api: ReturnType<typeof createAppAPI>) => {
-    setMapAppAPI((current) => current ?? api);
-  }, []);
+  const [dashboardCamera, setDashboardCamera] = useState<DashboardCamera | null>(null);
+  const handleMapReady = useCallback(
+    (api: ReturnType<typeof createAppAPI>, highlight: DashboardCamera["setTransientHighlight"]) => {
+      setMapAppAPI((current) => current ?? api);
+      setDashboardCamera(
+        (current) =>
+          current ?? {
+            getMap: api.getMap,
+            fitBounds: api.fitBounds,
+            setTransientHighlight: highlight,
+          },
+      );
+    },
+    [],
+  );
   const projectUrlLoadState = useProjectUrlLoader();
   const dataUrlLoadState = useDataUrlLoader(mapAppAPI);
   useStacUrlLoader(mapAppAPI, layoutOptions.viewer);
@@ -98,7 +111,7 @@ export default function App() {
             onMapReady={handleMapReady}
           />
           <ConstructionProgressScreen camera={mapAppAPI} />
-          <NetworkDashboardScreen camera={mapAppAPI} />
+          <NetworkDashboardScreen camera={dashboardCamera} />
           <OnboardingDialog open={showOnboarding} onClose={dismissOnboarding} />
           {/* Asks before an opened project's regional basemap (tiles from
               mainland China) loads; the default basemap shows meanwhile. */}

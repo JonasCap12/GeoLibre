@@ -1,10 +1,12 @@
 import { progressDashboardFeature, type GeoLibreLayer } from "@geolibre/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
+import type { FeatureCollection } from "geojson";
 import { featuresBounds } from "./construction-progress";
 
 export interface DashboardCamera {
   fitBounds(bounds: [number, number, number, number]): void;
   getMap?: () => MapLibreMap | null;
+  setTransientHighlight?: (features: FeatureCollection | null) => void;
 }
 /**
  * Closest zoom the dashboard frames a selection at. One small structure (a

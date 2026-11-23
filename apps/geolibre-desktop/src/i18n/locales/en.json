@@ -12213,7 +12213,8 @@
     "colorBy": "Color lines by",
     "mode": {
       "status": "Status",
-      "type": "Type"
+      "type": "Type",
+      "report": "By report"
     },
     "legend": {
       "status": "Lines by status",
@@ -12271,6 +12272,11 @@
       "office": "Office work",
       "general": "General work",
       "showOnMap": "Show on map",
+      "selectFront": "Select {{name}} and show on map",
+      "locateWork": "Locate {{name}} on map",
+      "locatePhoto": "Locate photo on map",
+      "unknownProgress": "Unknown progress",
+      "progressBand": "{{range}}%",
       "resources": "Staff, equipment and issues",
       "issues": "Issues",
       "photos": "Site photos",
