@@ -30,6 +30,7 @@ import {
   clampDashboardRatio,
   NETWORK_VIEW_STORAGE,
   NETWORK_RATIO_STORAGE,
+  paddingBesideBoard,
   type NetworkDashboardView,
 } from "../../lib/network-dashboard-layout";
 
@@ -142,7 +143,19 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
             [bounds[0], bounds[1]],
             [bounds[2], bounds[3]],
           ],
-          { padding: 60, maxZoom: 16, duration: 500 },
+          {
+            // In split view the report floats over the map's corner: frame the
+            // lines in the part of the map that stays visible.
+            padding: paddingBesideBoard(
+              map.getContainer().getBoundingClientRect(),
+              document
+                .querySelector<HTMLElement>(".network-dashboard-board:not([hidden])")
+                ?.getBoundingClientRect() ?? null,
+              document.documentElement.dir === "rtl",
+            ),
+            maxZoom: 16,
+            duration: 500,
+          },
         );
       } else camera?.fitBounds(bounds);
     },

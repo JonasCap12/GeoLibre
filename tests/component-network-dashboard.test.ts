@@ -165,6 +165,7 @@ describe("NetworkDashboardScreen", () => {
     let fits = 0;
     const map = {
       resize() {},
+      getContainer: () => document.body,
       fitBounds() {
         fits++;
       },

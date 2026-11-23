@@ -6332,19 +6332,26 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
     inset-block-end: var(--progress-strip-h);
   }
 }
-/* The report occupies the start side; these same variables position the live map. */
+/* --nd-board-w sizes the report; --nd-start-w is where the live map begins.
+   Split view: the map fills the whole screen and the 16:9 report floats over
+   its start-top corner, so no part of the screen is left empty. */
 :root[data-network-dashboard] {
   --nd-header-h: 4rem;
-  --nd-start-w: var(--nd-split-w, 60vw);
+  --nd-board-w: var(--nd-split-w, 60vw);
+  --nd-board-h: min(calc(var(--nd-board-w) * 9 / 16), calc(100dvh - var(--nd-header-h)));
+  --nd-start-w: 0px;
+  /* Where map overlays (legend, empty-state card) start: beside the report. */
+  --nd-overlay-start: var(--nd-start-w);
   --nd-end-w: 0px;
   --nd-strip-h: 0px;
   overflow: hidden;
 }
-:root[data-network-dashboard="report"] {
-  --nd-start-w: 100vw;
+:root[data-network-dashboard="split"] {
+  --nd-overlay-start: var(--nd-board-w);
 }
-:root[data-network-dashboard="map"] {
-  --nd-start-w: 0px;
+:root[data-network-dashboard="report"] {
+  --nd-board-w: 100vw;
+  --nd-start-w: 100vw;
 }
 :root[data-network-dashboard] main.isolate,
 .network-dashboard-empty {
@@ -6366,14 +6373,21 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
 }
 .network-dashboard-board {
   position: fixed;
-  z-index: 40;
+  z-index: 41;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   inset-block: var(--nd-header-h) 0;
   inset-inline-start: 0;
-  width: var(--nd-start-w);
+  width: var(--nd-board-w);
+}
+/* Floating over the map: as tall as the 16:9 board (plus the hint, if shown). */
+:root[data-network-dashboard="split"] .network-dashboard-board {
+  inset-block-end: auto;
+  max-height: calc(100dvh - var(--nd-header-h));
+  border-block-end: 1px solid hsl(var(--border));
   border-inline-end: 1px solid hsl(var(--border));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
 }
 .network-dashboard-board[hidden] {
   display: none;
@@ -6397,9 +6411,10 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
 }
 .network-dashboard-divider {
   position: fixed;
-  z-index: 41;
-  inset-block: var(--nd-header-h) 0;
-  inset-inline-start: calc(var(--nd-start-w) - 4px);
+  z-index: 42;
+  inset-block-start: var(--nd-header-h);
+  height: var(--nd-board-h);
+  inset-inline-start: calc(var(--nd-board-w) - 4px);
   width: 8px;
   cursor: col-resize;
   touch-action: none;
@@ -6424,17 +6439,18 @@ html.dark .maplibregl-popup-anchor-right:has(.vector-control-popup) .maplibregl-
   position: fixed;
   z-index: 41;
   inset-block-start: calc(var(--nd-header-h) + 1rem);
-  inset-inline-start: calc(var(--nd-start-w) + 1rem);
-  max-width: min(18rem, calc(100vw - var(--nd-start-w) - 5rem));
+  inset-inline-start: calc(var(--nd-overlay-start) + 1rem);
+  max-width: min(18rem, calc(100vw - var(--nd-overlay-start) - 5rem));
   max-height: 35dvh;
   overflow-y: auto;
 }
 .network-dashboard-empty {
   z-index: 41;
+  inset-inline-start: var(--nd-overlay-start);
 }
 @media (min-width: 900px) and (max-width: 1399px) {
   :root[data-network-dashboard="split"] {
-    --nd-start-w: var(--nd-split-w, 55vw);
+    --nd-board-w: var(--nd-split-w, 55vw);
   }
 }
 @media (max-width: 899px) {
