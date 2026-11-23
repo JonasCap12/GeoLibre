@@ -23,6 +23,7 @@ import {
 } from "../../lib/network-dashboard-screen";
 import { NetworkLayersDialog } from "./NetworkLayersDialog";
 import { DailyReportBoard } from "./DailyReportBoard";
+import { NetworkProgressPanel } from "./NetworkProgressPanel";
 import {
   dashboardView,
   dashboardRatio,
@@ -185,6 +186,19 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     return () => window.clearTimeout(timer);
   }, [segments, view, camera, refitRevision, fitTo]);
 
+  const [boardPackage, setBoardPackage] = useState<string | null>(null);
+  const showOnMap = (segment: NetworkSegment) => {
+    // The user picked a place: later layout changes must not reframe away from it.
+    userMoved.current = true;
+    if (view !== "report") {
+      fitTo([segment]);
+      return;
+    }
+    setView(narrow ? "map" : "split");
+    // Once the map has its cell again.
+    window.setTimeout(() => fitTo([segment]), 80);
+  };
+
   const hover = useLineHover(camera, candidates, segments);
   const label = (value: string) => value.trim() || t("roadNetwork.unclassified");
 
@@ -266,7 +280,13 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         </Button>
       </header>
 
-      <DailyReportBoard hidden={view === "map"} />
+      <DailyReportBoard hidden={view === "map"} onPackage={setBoardPackage}>
+        <NetworkProgressPanel
+          segments={segments}
+          boardPackage={boardPackage}
+          onSelect={showOnMap}
+        />
+      </DailyReportBoard>
       {view === "split" && !narrow && (
         <div
           className="network-dashboard-divider"
