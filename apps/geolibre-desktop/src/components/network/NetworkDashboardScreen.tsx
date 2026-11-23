@@ -23,7 +23,6 @@ import {
 } from "../../lib/network-dashboard-screen";
 import { NetworkLayersDialog } from "./NetworkLayersDialog";
 import { DailyReportBoard } from "./DailyReportBoard";
-import { NetworkProgressPanel } from "./NetworkProgressPanel";
 import {
   dashboardView,
   dashboardRatio,
@@ -31,6 +30,7 @@ import {
   clampDashboardRatio,
   NETWORK_VIEW_STORAGE,
   NETWORK_RATIO_STORAGE,
+  paddingBesideBoard,
   type NetworkDashboardView,
 } from "../../lib/network-dashboard-layout";
 
@@ -143,7 +143,19 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
             [bounds[0], bounds[1]],
             [bounds[2], bounds[3]],
           ],
-          { padding: 60, maxZoom: 16, duration: 500 },
+          {
+            // In split view the report floats over the map's corner: frame the
+            // lines in the part of the map that stays visible.
+            padding: paddingBesideBoard(
+              map.getContainer().getBoundingClientRect(),
+              document
+                .querySelector<HTMLElement>(".network-dashboard-board:not([hidden])")
+                ?.getBoundingClientRect() ?? null,
+              document.documentElement.dir === "rtl",
+            ),
+            maxZoom: 16,
+            duration: 500,
+          },
         );
       } else camera?.fitBounds(bounds);
     },
@@ -185,19 +197,6 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     }, 50);
     return () => window.clearTimeout(timer);
   }, [segments, view, camera, refitRevision, fitTo]);
-
-  const [boardPackage, setBoardPackage] = useState<string | null>(null);
-  const showOnMap = (segment: NetworkSegment) => {
-    // The user picked a place: later layout changes must not reframe away from it.
-    userMoved.current = true;
-    if (view !== "report") {
-      fitTo([segment]);
-      return;
-    }
-    setView(narrow ? "map" : "split");
-    // Once the map has its cell again.
-    window.setTimeout(() => fitTo([segment]), 80);
-  };
 
   const hover = useLineHover(camera, candidates, segments);
   const label = (value: string) => value.trim() || t("roadNetwork.unclassified");
@@ -280,13 +279,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         </Button>
       </header>
 
-      <DailyReportBoard hidden={view === "map"} onPackage={setBoardPackage}>
-        <NetworkProgressPanel
-          segments={segments}
-          boardPackage={boardPackage}
-          onSelect={showOnMap}
-        />
-      </DailyReportBoard>
+      <DailyReportBoard hidden={view === "map"} />
       {view === "split" && !narrow && (
         <div
           className="network-dashboard-divider"

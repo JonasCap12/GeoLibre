@@ -8,14 +8,13 @@ import {
   NO_REPORT_SOURCE_TOAST,
   dismissSourceHint,
   sourceHintDismissed,
-  boardPackageCode,
-  watchBoardPackage,
 } from "../apps/geolibre-desktop/src/lib/daily-report-board";
 import {
   dashboardView,
   dashboardRatio,
   dashboardPointerRatio,
   clampDashboardRatio,
+  paddingBesideBoard,
 } from "../apps/geolibre-desktop/src/lib/network-dashboard-layout";
 
 const settle = () =>
@@ -267,37 +266,43 @@ describe("daily report source hint", () => {
   });
 });
 
-describe("daily report board package", () => {
-  it("reads the header code and ignores the empty placeholder", () => {
-    assert.equal(boardPackageCode(" XL05 "), "XL05");
-    assert.equal(boardPackageCode("—"), null);
-    assert.equal(boardPackageCode(""), null);
-    assert.equal(boardPackageCode(null), null);
+describe("framing the map beside the floating report", () => {
+  // The owner's window: 1920×958, header 64, report 60% wide at 16:9.
+  const map = { left: 0, top: 64, right: 1920, bottom: 958 };
+  const board = { left: 0, top: 64, right: 1152, bottom: 712 };
+
+  it("frames in the larger open area, beside the report when that is wider", () => {
+    // Beside: 768×894; below: 1920×246.
+    assert.deepEqual(paddingBesideBoard(map, board, false), {
+      top: 60,
+      right: 60,
+      bottom: 60,
+      left: 1212,
+    });
   });
 
-  it("reports the package now and on each change, once per value, until stopped", async () => {
-    const doc = document.implementation.createHTMLDocument();
-    doc.body.innerHTML = '<b id="gTxt">—</b><span id="clock">08:00</span>';
-    const seen: (string | null)[] = [];
-    const stop = watchBoardPackage(doc, (code) => seen.push(code));
-    const header = doc.getElementById("gTxt")!;
-    header.textContent = "XL01";
-    await settle();
-    header.textContent = "XL01";
-    doc.getElementById("clock")!.textContent = "08:01";
-    await settle();
-    header.textContent = "XL05";
-    await settle();
-    stop();
-    header.textContent = "XL02";
-    await settle();
-    assert.deepEqual(seen, [null, "XL01", "XL05"]);
+  it("frames below the report when the report is almost full width", () => {
+    const wide = { ...board, right: 1850, bottom: 500 };
+    assert.deepEqual(paddingBesideBoard(map, wide, false), {
+      top: 496,
+      right: 60,
+      bottom: 60,
+      left: 60,
+    });
   });
 
-  it("does nothing on a board without the header", () => {
-    const doc = document.implementation.createHTMLDocument();
-    const seen: unknown[] = [];
-    watchBoardPackage(doc, (code) => seen.push(code))();
-    assert.deepEqual(seen, []);
+  it("mirrors for right-to-left, where the report sits at the map's right", () => {
+    const rtlBoard = { left: 768, top: 64, right: 1920, bottom: 712 };
+    assert.equal(paddingBesideBoard(map, rtlBoard, true).right, 1212);
+    assert.equal(paddingBesideBoard(map, rtlBoard, true).left, 60);
+  });
+
+  it("pads evenly without a report or when no open area is big enough", () => {
+    const even = { top: 60, right: 60, bottom: 60, left: 60 };
+    assert.deepEqual(paddingBesideBoard(map, null, false), even);
+    assert.deepEqual(
+      paddingBesideBoard(map, { left: 0, top: 64, right: 1880, bottom: 920 }, false),
+      even,
+    );
   });
 });
