@@ -12089,6 +12089,12 @@
       "report": "Chỉ báo cáo",
       "map": "Chỉ bản đồ"
     },
+    "progressPanel": {
+      "title": "Tiến độ theo đoạn tuyến",
+      "hint": "Bấm một dòng để xem đoạn đó trên bản đồ",
+      "show": "Xem {{name}} trên bản đồ",
+      "noProgress": "Chưa có %"
+    },
     "boardTitle": "Bảng báo cáo thi công ngày",
     "splitter": "Điều chỉnh kích thước báo cáo và bản đồ",
     "sourceHint": {
