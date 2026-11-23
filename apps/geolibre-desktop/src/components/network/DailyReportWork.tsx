@@ -11,6 +11,7 @@ import {
 } from "../../lib/daily-report-data";
 import {
   workAtStations,
+  workLocationText,
   type ReportLocation,
   type ReportSelection,
 } from "../../lib/report-map-interaction";
@@ -119,7 +120,7 @@ export function DailyReportWork({
                   selected={
                     !!selected && !!selection?.stations && workAtStations(item, selection.stations)
                   }
-                  location={locate(`${item.group} ${item.name}`)}
+                  location={locate(workLocationText(item))}
                   onLocate={onLocate}
                 />
               ))}

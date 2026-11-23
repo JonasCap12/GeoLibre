@@ -19,6 +19,7 @@ import {
   stretchBetween,
   structureSelection,
   workAtStations,
+  workLocationText,
 } from "../apps/geolibre-desktop/src/lib/report-map-interaction";
 import {
   reportBand,
@@ -290,6 +291,15 @@ describe("chainage geometry", () => {
     assert.equal(locateReportText("Km148+500", r, [], [layer]), null);
     assert.equal(locateReportText("No station", r, lines, [layer]), null);
     assert.equal(JSON.stringify(layer), before);
+  });
+
+  it("locates an item's own station without inventing a range from its enclosing group", () => {
+    const r = report();
+    const item = { ...r.work[0], group: "CVN Km148+300", name: "Trạm BTXM Km148+500" };
+    assert.equal(workLocationText(item), item.name);
+    const located = locateReportText(workLocationText(item), r, lines, [layer])!;
+    assert.equal(located.feature.geometry.type, "Point");
+    assert.equal(workLocationText({ ...item, name: "Đắp nền" }), item.group);
   });
 });
 

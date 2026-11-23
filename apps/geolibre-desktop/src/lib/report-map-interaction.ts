@@ -104,6 +104,11 @@ export function workAtStations(item: BoardWorkItem, stations: readonly number[])
   );
 }
 
+/** An item's own station is more specific than its enclosing group's range. */
+export function workLocationText(item: BoardWorkItem): string {
+  return chainages(item.name).length ? item.name : item.group;
+}
+
 /** A photo explicitly names its front, else its caption's station decides. */
 export function photoFront(photo: BoardPhoto, fronts: readonly BoardFront[]): string | null {
   const explicit = foldText(photo.caption).match(/\bmui\s*0*(\d+)\b/);
