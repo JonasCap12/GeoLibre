@@ -8,8 +8,6 @@ import {
   NO_REPORT_SOURCE_TOAST,
   dismissSourceHint,
   sourceHintDismissed,
-  boardPackageCode,
-  watchBoardPackage,
 } from "../apps/geolibre-desktop/src/lib/daily-report-board";
 import {
   dashboardView,
@@ -264,40 +262,5 @@ describe("daily report source hint", () => {
     assert.doesNotThrow(() => dismissSourceHint(broken));
     assert.equal(sourceHintDismissed(broken), false);
     assert.equal(sourceHintDismissed(null), false);
-  });
-});
-
-describe("daily report board package", () => {
-  it("reads the header code and ignores the empty placeholder", () => {
-    assert.equal(boardPackageCode(" XL05 "), "XL05");
-    assert.equal(boardPackageCode("—"), null);
-    assert.equal(boardPackageCode(""), null);
-    assert.equal(boardPackageCode(null), null);
-  });
-
-  it("reports the package now and on each change, once per value, until stopped", async () => {
-    const doc = document.implementation.createHTMLDocument();
-    doc.body.innerHTML = '<b id="gTxt">—</b><span id="clock">08:00</span>';
-    const seen: (string | null)[] = [];
-    const stop = watchBoardPackage(doc, (code) => seen.push(code));
-    const header = doc.getElementById("gTxt")!;
-    header.textContent = "XL01";
-    await settle();
-    header.textContent = "XL01";
-    doc.getElementById("clock")!.textContent = "08:01";
-    await settle();
-    header.textContent = "XL05";
-    await settle();
-    stop();
-    header.textContent = "XL02";
-    await settle();
-    assert.deepEqual(seen, [null, "XL01", "XL05"]);
-  });
-
-  it("does nothing on a board without the header", () => {
-    const doc = document.implementation.createHTMLDocument();
-    const seen: unknown[] = [];
-    watchBoardPackage(doc, (code) => seen.push(code))();
-    assert.deepEqual(seen, []);
   });
 });

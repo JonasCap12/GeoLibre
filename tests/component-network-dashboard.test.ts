@@ -118,24 +118,6 @@ describe("NetworkDashboardScreen", () => {
     act(() => closeNetworkDashboard());
   });
 
-  it("lists the lines by type under the board and shows a picked one on the map", () => {
-    useAppStore.setState({ layers: [routesLayer()] });
-    const fitted: unknown[] = [];
-    render(
-      createElement(NetworkDashboardScreen, {
-        camera: { fitBounds: (bounds) => void fitted.push(bounds) },
-      }),
-    );
-    act(() => openNetworkDashboard());
-    const panel = screen.getByRole("region", { name: "Progress by section" });
-    const groups = [...panel.querySelectorAll("h3")].map((heading) => heading.textContent);
-    assert.equal(groups.length, 2, "one card per type: Cao tốc and Cầu");
-    assert.ok(groups.some((text) => text?.startsWith("Cao tốc")));
-    fireEvent.click(screen.getByRole("button", { name: /^Cầu Đang thi công/ }));
-    assert.deepEqual(fitted.at(-1), [106, 10, 106, 11]);
-    act(() => closeNetworkDashboard());
-  });
-
   it("frames once after transient views replace the layer objects", async () => {
     useAppStore.setState({ layers: [routesLayer()] });
     const fitted: number[][] = [];

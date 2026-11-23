@@ -89,36 +89,6 @@ export function dismissSourceHint(storage: Pick<Storage, "setItem"> | null): voi
   }
 }
 
-/** The package code the board shows in its header ("XL05"), or null for "—"/empty. */
-export function boardPackageCode(text: string | null | undefined): string | null {
-  const code = (text ?? "").trim();
-  return /[\p{L}\p{N}]/u.test(code) ? code : null;
-}
-
-/**
- * Reports the package the board is showing, now and whenever it changes
- * (manual pick or autoplay). Watches only the header's `#gTxt`, not the whole
- * board: its ticker and clock change constantly.
- */
-export function watchBoardPackage(
-  doc: Document,
-  onPackage: (code: string | null) => void,
-): () => void {
-  const element = doc.getElementById("gTxt");
-  if (!element) return () => {};
-  let last: string | null | undefined;
-  const read = () => {
-    const code = boardPackageCode(element.textContent);
-    if (code === last) return;
-    last = code;
-    onPackage(code);
-  };
-  const observer = new MutationObserver(read);
-  observer.observe(element, { childList: true, characterData: true, subtree: true });
-  read();
-  return () => observer.disconnect();
-}
-
 export const NO_REPORT_SOURCE_TOAST =
   "Lỗi chưa có link dữ liệu (⚙ Cài đặt) và chưa có file trong DuLieu";
 

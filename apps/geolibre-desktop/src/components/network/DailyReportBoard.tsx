@@ -1,12 +1,11 @@
 import { Button } from "@geolibre/ui";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   attachDailyReportAdapter,
   dismissSourceHint,
   readDailyReportSource,
   sourceHintDismissed,
-  watchBoardPackage,
 } from "../../lib/daily-report-board";
 
 function browserStorage(): Storage | null {
@@ -17,18 +16,8 @@ function browserStorage(): Storage | null {
   }
 }
 
-interface DailyReportBoardProps {
-  hidden: boolean;
-  /** The package the board shows ("XL05"), whenever it changes; null before any report. */
-  onPackage?: (code: string | null) => void;
-  /** Fills the space the 16:9 board leaves below it. */
-  children?: ReactNode;
-}
-
-export function DailyReportBoard({ hidden, onPackage, children }: DailyReportBoardProps) {
+export function DailyReportBoard({ hidden }: { hidden: boolean }) {
   const { t } = useTranslation();
-  const packageListener = useRef(onPackage);
-  packageListener.current = onPackage;
   const board = useRef<HTMLIFrameElement>(null);
   const cleanup = useRef<(() => void) | undefined>(undefined);
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -109,20 +98,14 @@ export function DailyReportBoard({ hidden, onPackage, children }: DailyReportBoa
               typeof (host as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker ===
                 "function",
             );
-            const detachAdapter = attachDailyReportAdapter(
+            cleanup.current = attachDailyReportAdapter(
               doc,
               () => readDailyReportSource(host),
               setConfigured,
             );
-            const stopWatching = watchBoardPackage(doc, (code) => packageListener.current?.(code));
-            cleanup.current = () => {
-              detachAdapter();
-              stopWatching();
-            };
           }}
         />
       </div>
-      {children}
     </section>
   );
 }

@@ -12253,12 +12253,6 @@
       "report": "Report only",
       "map": "Map only"
     },
-    "progressPanel": {
-      "title": "Progress by section",
-      "hint": "Click a row to show that section on the map",
-      "show": "Show {{name}} on the map",
-      "noProgress": "No percentage yet"
-    },
     "boardTitle": "Daily construction report board",
     "splitter": "Resize report and map",
     "sourceHint": {

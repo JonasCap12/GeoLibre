@@ -308,11 +308,6 @@ export const UNCLASSIFIED_COLOR = "#94a3b8";
  */
 const NO_DATA = /chua co (bao cao|du lieu|so lieu|thong tin)|no (data|report)|unknown/;
 
-/** Whether a field value only says there is no data yet ("Chưa có báo cáo"). */
-export function isNoDataValue(value: string): boolean {
-  return NO_DATA.test(foldText(value));
-}
-
 /** Known statuses get fixed, meaningful colours (folded text → colour). */
 const STATUS_COLORS: [RegExp, string][] = [
   [/(dang|under).*(thi cong|construction)|^thi cong|in progress|ongoing/, "#dc2626"],
@@ -353,7 +348,7 @@ export function categoryColors(
   for (const value of values) {
     if (colors.has(value)) continue;
     const folded = foldText(value);
-    if (!value.trim() || isNoDataValue(value)) {
+    if (!value.trim() || NO_DATA.test(folded)) {
       colors.set(value, UNCLASSIFIED_COLOR);
       continue;
     }
