@@ -34,6 +34,7 @@ import { useLiveMapUrl } from "../../hooks/useLiveMapUrl";
 import { useProjectHistory } from "../../hooks/useProjectHistory";
 import { useCloudWorkspace } from "../../hooks/useCloudWorkspace";
 import { useScreenshotReadiness } from "../../hooks/useScreenshotReadiness";
+import { useMapReady, type MapReady } from "../../hooks/useMapReady";
 import i18n from "../../i18n";
 import {
   createAppAPI,
@@ -189,10 +190,7 @@ interface DesktopShellProps {
   mapAppAPI: ReturnType<typeof createAppAPI> | null;
   themeMode: ThemeMode;
   onToggleThemeMode: () => void;
-  onMapReady?: (
-    app: ReturnType<typeof createAppAPI>,
-    highlight: (features: import("geojson").FeatureCollection | null) => void,
-  ) => void;
+  onMapReady?: MapReady<ReturnType<typeof createAppAPI>>;
 }
 
 export function DesktopShell({
@@ -326,7 +324,11 @@ export function DesktopShell({
     subscribeGeometryEdit,
     getGeometryEditTargetLayerId,
   );
-  const [mapReadyGeneration, setMapReadyGeneration] = useState(0);
+  const [mapReadyGeneration, handleMapControllerReady] = useMapReady(
+    mapControllerRef,
+    createAppAPI,
+    onMapReady,
+  );
   const cloudWorkspace = useCloudWorkspace(mapControllerRef, mapReadyGeneration > 0);
   const { clearDropMessageLater, setCrsWarning, setDropError, setDropMessage } = useDropStatus();
   useUrlLoadErrorNotices(projectUrlLoadState?.error, dataUrlLoadState?.error);
@@ -491,13 +493,6 @@ export function DesktopShell({
     projectUrlSettled,
     startupProjectSettled,
   });
-
-  const handleMapControllerReady = useCallback(() => {
-    setMapReadyGeneration((generation) => generation + 1);
-    onMapReady?.(createAppAPI(mapControllerRef), (features) =>
-      mapControllerRef.current?.setTransientHighlight?.(features),
-    );
-  }, [onMapReady]);
 
   /**
    * Which engine draws the primary map area (issue #2217). `"cesium"` unmounts
