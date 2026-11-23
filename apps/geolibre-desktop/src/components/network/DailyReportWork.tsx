@@ -75,15 +75,17 @@ export function DailyReportWork({
             aria-current={selected ? "true" : undefined}
             className={`mb-3 rounded-md ${selected ? "outline outline-2 outline-primary outline-offset-2" : ""}`}
           >
-            <header className="sticky top-0 z-10 mb-1 flex items-center gap-2 border-b bg-card py-1">
+            <header
+              className="sticky top-0 z-10 mb-1 flex items-center gap-2 border-b bg-card py-1"
+              onMouseEnter={() => group.front && onHoverFront(group.front)}
+              onMouseLeave={() => onHoverFront(null)}
+            >
               <h3 className="min-w-0 flex-1 text-xs font-bold uppercase tracking-wide text-primary">
                 <button
                   type="button"
                   disabled={!show}
                   aria-label={t("roadNetwork.report.selectFront", { name: label })}
                   className="w-full truncate text-start disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                  onMouseEnter={() => group.front && onHoverFront(group.front)}
-                  onMouseLeave={() => onHoverFront(null)}
                   onFocus={() => group.front && onHoverFront(group.front)}
                   onBlur={() => onHoverFront(null)}
                   onClick={choose}

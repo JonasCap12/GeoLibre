@@ -187,7 +187,16 @@ describe("report/map selection wiring", () => {
     const header = screen.getByRole("button", { name: "Select Mũi 01 and show on map" });
     fireEvent.mouseEnter(header);
     assert.notEqual(useAppStore.getState().layers[0].progressDashboard!.colorExpression, selected);
-    fireEvent.mouseLeave(header);
+    const preview = useAppStore.getState().layers[0].progressDashboard!.colorExpression;
+    const showButton = screen.getAllByRole("button", { name: "Show on map" })[0];
+    fireEvent.mouseLeave(header, { relatedTarget: showButton });
+    fireEvent.mouseEnter(showButton, { relatedTarget: header });
+    assert.equal(
+      useAppStore.getState().layers[0].progressDashboard!.colorExpression,
+      preview,
+      "moving within a front header keeps its temporary preview",
+    );
+    fireEvent.mouseLeave(showButton);
     assert.equal(useAppStore.getState().layers[0].progressDashboard!.colorExpression, selected);
     click([
       {
