@@ -67,6 +67,26 @@ describe("NetworkDashboardScreen", () => {
     assert.equal(document.documentElement.hasAttribute(NETWORK_DASHBOARD_ATTRIBUTE), false);
   });
 
+  it("lays the report around the map and sends an empty browser to the board to load one", async () => {
+    useAppStore.setState({ layers: [routesLayer()] });
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "split");
+    assert.equal(
+      document.querySelector(".network-dashboard-board")?.hasAttribute("hidden"),
+      true,
+      "the original board stays mounted but hidden around the map",
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.ok(screen.getByText(/No daily reports in this browser yet/));
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "report");
+    assert.equal(document.querySelector(".network-dashboard-board")?.hasAttribute("hidden"), false);
+    act(() => closeNetworkDashboard());
+  });
+
   it("persists the selected view across closing and reopening", () => {
     useAppStore.setState({ layers: [routesLayer()] });
     render(createElement(NetworkDashboardScreen, { camera: null }));
@@ -165,7 +185,6 @@ describe("NetworkDashboardScreen", () => {
     let fits = 0;
     const map = {
       resize() {},
-      getContainer: () => document.body,
       fitBounds() {
         fits++;
       },
@@ -199,37 +218,14 @@ describe("NetworkDashboardScreen", () => {
     act(() => events.get("movestart")?.({ originalEvent: new Event("wheel") }));
     fireEvent.click(screen.getByRole("button", { name: "Report + map" }));
     await waitForFit();
-    assert.equal(fits, 3);
-    fireEvent.keyDown(screen.getByRole("separator"), { key: "End" });
-    await waitForFit();
-    assert.equal(fits, 3);
+    assert.equal(fits, 3, "a user move keeps the camera across layout changes");
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
     assert.equal(fits, 4);
-    fireEvent.keyDown(screen.getByRole("separator"), { key: "Home" });
+    fireEvent.click(screen.getByRole("button", { name: "Map only" }));
     await waitForFit();
-    assert.equal(fits, 5);
+    assert.equal(fits, 5, "after Show all, a layout change refits again");
     act(() => closeNetworkDashboard());
     assert.equal(events.size, 0);
-  });
-
-  it("clamps and persists keyboard divider changes in both directions", () => {
-    render(createElement(NetworkDashboardScreen, { camera: null }));
-    act(() => openNetworkDashboard());
-    const divider = screen.getByRole("separator");
-    fireEvent.keyDown(divider, { key: "End" });
-    assert.equal(divider.getAttribute("aria-valuenow"), "80");
-    fireEvent.keyDown(divider, { key: "ArrowRight" });
-    assert.equal(divider.getAttribute("aria-valuenow"), "80");
-    document.documentElement.dir = "rtl";
-    fireEvent.keyDown(divider, { key: "ArrowRight" });
-    assert.equal(divider.getAttribute("aria-valuenow"), "78");
-    document.documentElement.dir = "ltr";
-    assert.equal(localStorage.getItem("geolibre-network-dashboard-ratio"), "78");
-    act(() => closeNetworkDashboard());
-    act(() => openNetworkDashboard());
-    assert.equal(screen.getByRole("separator").getAttribute("aria-valuenow"), "78");
-    act(() => closeNetworkDashboard());
-    assert.equal(document.documentElement.style.getPropertyValue("--nd-split-w"), "");
   });
 
   it("shows two phone views, defaults to map and honors a saved report choice", (t) => {

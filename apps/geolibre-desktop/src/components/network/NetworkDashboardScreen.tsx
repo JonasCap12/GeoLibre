@@ -23,18 +23,18 @@ import {
 } from "../../lib/network-dashboard-screen";
 import { NetworkLayersDialog } from "./NetworkLayersDialog";
 import { DailyReportBoard } from "./DailyReportBoard";
+import { DailyReportPanels } from "./DailyReportPanels";
+import { linesForFront, type BoardFront } from "../../lib/daily-report-data";
 import {
   dashboardView,
-  dashboardRatio,
-  dashboardPointerRatio,
-  clampDashboardRatio,
   NETWORK_VIEW_STORAGE,
-  NETWORK_RATIO_STORAGE,
-  paddingBesideBoard,
   type NetworkDashboardView,
 } from "../../lib/network-dashboard-layout";
 
-/** The daily report board beside the shell's live progress map. */
+/**
+ * The road network dashboard: the live progress map in the middle with the
+ * daily report laid out around it, or the original report board on its own.
+ */
 export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | null }) {
   const open = useSyncExternalStore(subscribeNetworkDashboard, isNetworkDashboardOpen);
   useEffect(() => {
@@ -45,7 +45,6 @@ export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | n
     window.dispatchEvent(new Event("resize"));
     return () => {
       root.removeAttribute(NETWORK_DASHBOARD_ATTRIBUTE);
-      root.style.removeProperty("--nd-split-w");
       window.dispatchEvent(new Event("resize"));
     };
   }, [open]);
@@ -69,7 +68,6 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     [i18n.language],
   );
   const narrow = useDashboardMedia("(max-width: 899px)");
-  const wide = useDashboardMedia("(min-width: 1400px)");
   const [preferredView, setView] = useState<NetworkDashboardView | null>(() => {
     try {
       const saved = localStorage.getItem(NETWORK_VIEW_STORAGE);
@@ -80,18 +78,6 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     return null;
   });
   const view = dashboardView(preferredView, narrow);
-  const [ratio, setRatio] = useState(() => {
-    try {
-      return dashboardRatio(localStorage.getItem(NETWORK_RATIO_STORAGE));
-    } catch {
-      return null;
-    }
-  });
-  const currentRatio = ratio ?? (wide ? 60 : 55);
-  const ratioRef = useRef(currentRatio);
-  ratioRef.current = currentRatio;
-  const dragging = useRef(false);
-  const [refitRevision, setRefitRevision] = useState(0);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute(NETWORK_DASHBOARD_ATTRIBUTE, view);
@@ -104,20 +90,6 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
       /* Optional preference. */
     }
   }, [preferredView]);
-  useEffect(() => {
-    const style = document.documentElement.style;
-    if (ratio === null) style.removeProperty("--nd-split-w");
-    else style.setProperty("--nd-split-w", `${ratio}vw`);
-  }, [ratio]);
-  const finishDivider = () => {
-    dragging.current = false;
-    try {
-      localStorage.setItem(NETWORK_RATIO_STORAGE, String(ratioRef.current));
-    } catch {
-      /* Optional preference. */
-    }
-    setRefitRevision((value) => value + 1);
-  };
   const layers = useAppStore((state) => state.layers);
   const [mode, setMode] = useState<NetworkColorMode>("status");
   const [layersOpen, setLayersOpen] = useState(false);
@@ -143,19 +115,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
             [bounds[0], bounds[1]],
             [bounds[2], bounds[3]],
           ],
-          {
-            // In split view the report floats over the map's corner: frame the
-            // lines in the part of the map that stays visible.
-            padding: paddingBesideBoard(
-              map.getContainer().getBoundingClientRect(),
-              document
-                .querySelector<HTMLElement>(".network-dashboard-board:not([hidden])")
-                ?.getBoundingClientRect() ?? null,
-              document.documentElement.dir === "rtl",
-            ),
-            maxZoom: 16,
-            duration: 500,
-          },
+          { padding: 60, maxZoom: 16, duration: 500 },
         );
       } else camera?.fitBounds(bounds);
     },
@@ -176,7 +136,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     };
   }, [camera]);
   useEffect(() => {
-    const key = `${view}:${refitRevision}`;
+    const key = view;
     if (lastLayout.current !== key) {
       lastLayout.current = key;
       framed.current = null;
@@ -196,7 +156,16 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
       fitTo(segments);
     }, 50);
     return () => window.clearTimeout(timer);
-  }, [segments, view, camera, refitRevision, fitTo]);
+  }, [segments, view, camera, fitTo]);
+
+  const frontLines = (pkg: string, front: BoardFront) => linesForFront(segments, pkg, front);
+  const showFront = (pkg: string, front: BoardFront) => {
+    const lines = frontLines(pkg, front);
+    if (!lines.length) return;
+    // The user picked a place: a later layout change must not reframe away from it.
+    userMoved.current = true;
+    fitTo(lines);
+  };
 
   const hover = useLineHover(camera, candidates, segments);
   const label = (value: string) => value.trim() || t("roadNetwork.unclassified");
@@ -256,7 +225,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
           variant="secondary"
           onClick={() => {
             userMoved.current = false;
-            framed.current = `${view}:${refitRevision}`;
+            framed.current = view;
             fitTo(segments);
           }}
           disabled={segments.length === 0}
@@ -279,53 +248,13 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         </Button>
       </header>
 
-      <DailyReportBoard hidden={view === "map"} />
-      {view === "split" && !narrow && (
-        <div
-          className="network-dashboard-divider"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={t("roadNetwork.splitter")}
-          tabIndex={0}
-          aria-valuemin={35}
-          aria-valuemax={80}
-          aria-valuenow={Math.round(currentRatio)}
-          onPointerDown={(event) => {
-            dragging.current = true;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            event.preventDefault();
-          }}
-          onPointerMove={(event) => {
-            if (!dragging.current) return;
-            const value = dashboardPointerRatio(
-              event.clientX,
-              window.innerWidth,
-              document.documentElement.dir === "rtl",
-            );
-            ratioRef.current = value;
-            setRatio(value);
-          }}
-          onPointerUp={(event) => {
-            if (!dragging.current) return;
-            event.currentTarget.releasePointerCapture(event.pointerId);
-            finishDivider();
-          }}
-          onPointerCancel={() => {
-            if (dragging.current) finishDivider();
-          }}
-          onKeyDown={(event) => {
-            const direction = document.documentElement.dir === "rtl" ? -1 : 1;
-            let value: number;
-            if (event.key === "ArrowLeft") value = currentRatio - 2 * direction;
-            else if (event.key === "ArrowRight") value = currentRatio + 2 * direction;
-            else if (event.key === "Home") value = 35;
-            else if (event.key === "End") value = 80;
-            else return;
-            event.preventDefault();
-            ratioRef.current = clampDashboardRatio(value);
-            setRatio(ratioRef.current);
-            finishDivider();
-          }}
+      {/* Kept mounted off-screen too: it re-reads synced report files on open. */}
+      <DailyReportBoard hidden={view !== "report"} />
+      {view === "split" && (
+        <DailyReportPanels
+          onLoadReports={() => setView("report")}
+          canShowFront={(pkg, front) => frontLines(pkg, front).length > 0}
+          onShowFront={showFront}
         />
       )}
       {view !== "report" && entries.length > 0 && (
