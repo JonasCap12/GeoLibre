@@ -299,6 +299,15 @@ export function collectSegments(layers: readonly GeoLibreLayer[]): NetworkSegmen
   return segments;
 }
 
+/** Lines with no value for the colour field. */
+export const UNCLASSIFIED_COLOR = "#94a3b8";
+
+/**
+ * A value that says there is no data yet ("Chưa có báo cáo") is not a real
+ * category in either mode, so it reads as unclassified (folded text).
+ */
+const NO_DATA = /chua co (bao cao|du lieu|so lieu|thong tin)|no (data|report)|unknown/;
+
 /** Known statuses get fixed, meaningful colours (folded text → colour). */
 const STATUS_COLORS: [RegExp, string][] = [
   [/(dang|under).*(thi cong|construction)|^thi cong|in progress|ongoing/, "#dc2626"],
@@ -321,9 +330,6 @@ const CATEGORY_PALETTE = [
   "#4f46e5",
 ];
 
-/** Lines with no value for the colour field. */
-export const UNCLASSIFIED_COLOR = "#94a3b8";
-
 /** One value of the colour field, with its colour and totals. */
 export interface NetworkCategory {
   value: string;
@@ -341,11 +347,11 @@ export function categoryColors(
   let next = 0;
   for (const value of values) {
     if (colors.has(value)) continue;
-    if (!value.trim()) {
+    const folded = foldText(value);
+    if (!value.trim() || NO_DATA.test(folded)) {
       colors.set(value, UNCLASSIFIED_COLOR);
       continue;
     }
-    const folded = foldText(value);
     const fixed =
       mode === "status" ? STATUS_COLORS.find(([pattern]) => pattern.test(folded))?.[1] : undefined;
     colors.set(value, fixed ?? CATEGORY_PALETTE[next++ % CATEGORY_PALETTE.length]);

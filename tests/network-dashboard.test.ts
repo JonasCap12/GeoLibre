@@ -222,6 +222,26 @@ describe("road network dashboard: figures", () => {
     assert.equal(colors.get(""), UNCLASSIFIED_COLOR);
   });
 
+  it("greys out a value that says there is no report yet, in both modes", () => {
+    for (const mode of ["status", "type"] as const) {
+      const colors = categoryColors(mode, [
+        "Gói XL01",
+        "Chưa có báo cáo",
+        "Chưa có dữ liệu",
+        "No data",
+      ]);
+      for (const value of ["Chưa có báo cáo", "Chưa có dữ liệu", "No data"]) {
+        assert.equal(colors.get(value), UNCLASSIFIED_COLOR, `${mode}: ${value}`);
+      }
+      // A real category keeps a palette colour, and the grey ones do not use up a slot.
+      assert.notEqual(colors.get("Gói XL01"), UNCLASSIFIED_COLOR);
+    }
+    assert.equal(
+      categoryColors("type", ["Chưa có báo cáo", "Gói XL05"]).get("Gói XL05"),
+      categoryColors("type", ["Gói XL05"]).get("Gói XL05"),
+    );
+  });
+
   it("sums the legend's kilometres by category", () => {
     const values = fieldValues(segments, "type");
     assert.equal(values.length, 3);
