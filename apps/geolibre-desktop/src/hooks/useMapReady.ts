@@ -17,5 +17,5 @@ export function useMapReady<T>(
       controller.current?.setTransientHighlight?.(features),
     );
   }, [controller, createApi, onReady]);
-  return [generation, ready] as const;
+  return [generation, ready, setGeneration] as const;
 }

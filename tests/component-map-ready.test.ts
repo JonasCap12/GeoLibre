@@ -15,6 +15,7 @@ describe("the map-ready/highlight bridge", () => {
     const api = (host: typeof controller) => host.current;
     let highlight: ((features: FeatureCollection | null) => void) | undefined;
     let ready: (() => void) | undefined;
+    let reset = (_generation: number) => {};
     const seen: (MapEngine | null)[] = [];
     const onReady = (
       app: MapEngine | null,
@@ -24,8 +25,9 @@ describe("the map-ready/highlight bridge", () => {
       highlight = bridge;
     };
     function Probe() {
-      const [generation, next] = useMapReady(controller, api, onReady);
+      const [generation, next, setGeneration] = useMapReady(controller, api, onReady);
       ready = next;
+      reset = setGeneration;
       return createElement("button", { onClick: next }, `Ready ${generation}`);
     }
     render(createElement(Probe));
@@ -41,6 +43,13 @@ describe("the map-ready/highlight bridge", () => {
     assert.ok(screen.getByRole("button", { name: "Ready 2" }));
     assert.equal(seen[1], controller.current);
     assert.deepEqual(calls, ["first", "replacement"]);
+    act(() => reset(0));
+    assert.ok(screen.getByRole("button", { name: "Ready 0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ready 0" }));
+    assert.ok(
+      screen.getByRole("button", { name: "Ready 1" }),
+      "a renderer handoff can reset readiness before the next engine loads",
+    );
     controller.current = null;
     assert.doesNotThrow(() => oldHighlight(null));
   });

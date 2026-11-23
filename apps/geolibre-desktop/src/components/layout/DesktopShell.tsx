@@ -324,7 +324,7 @@ export function DesktopShell({
     subscribeGeometryEdit,
     getGeometryEditTargetLayerId,
   );
-  const [mapReadyGeneration, handleMapControllerReady] = useMapReady(
+  const [mapReadyGeneration, handleMapControllerReady, setMapReadyGeneration] = useMapReady(
     mapControllerRef,
     createAppAPI,
     onMapReady,
