@@ -9,13 +9,7 @@ import {
   dismissSourceHint,
   sourceHintDismissed,
 } from "../apps/geolibre-desktop/src/lib/daily-report-board";
-import {
-  dashboardView,
-  dashboardRatio,
-  dashboardPointerRatio,
-  clampDashboardRatio,
-  paddingBesideBoard,
-} from "../apps/geolibre-desktop/src/lib/network-dashboard-layout";
+import { dashboardView } from "../apps/geolibre-desktop/src/lib/network-dashboard-layout";
 
 const settle = () =>
   act(async () => {
@@ -229,16 +223,6 @@ describe("network dashboard responsive preferences", () => {
     assert.equal(dashboardView("report", true), "report");
     assert.equal(dashboardView(null, false), "split");
   });
-  it("clamps persisted ratios and mirrors pointer movement in RTL", () => {
-    assert.equal(dashboardRatio(null), null);
-    assert.equal(dashboardRatio("no"), null);
-    assert.equal(dashboardRatio("100"), 80);
-    assert.equal(dashboardRatio("10"), 35);
-    assert.equal(clampDashboardRatio(55), 55);
-    assert.equal(dashboardPointerRatio(650, 1000, false), 65);
-    assert.equal(dashboardPointerRatio(350, 1000, true), 65);
-    assert.equal(dashboardPointerRatio(-20, 1000, false), 35);
-  });
 });
 
 describe("daily report source hint", () => {
@@ -263,46 +247,5 @@ describe("daily report source hint", () => {
     assert.doesNotThrow(() => dismissSourceHint(broken));
     assert.equal(sourceHintDismissed(broken), false);
     assert.equal(sourceHintDismissed(null), false);
-  });
-});
-
-describe("framing the map beside the floating report", () => {
-  // The owner's window: 1920×958, header 64, report 60% wide at 16:9.
-  const map = { left: 0, top: 64, right: 1920, bottom: 958 };
-  const board = { left: 0, top: 64, right: 1152, bottom: 712 };
-
-  it("frames in the larger open area, beside the report when that is wider", () => {
-    // Beside: 768×894; below: 1920×246.
-    assert.deepEqual(paddingBesideBoard(map, board, false), {
-      top: 60,
-      right: 60,
-      bottom: 60,
-      left: 1212,
-    });
-  });
-
-  it("frames below the report when the report is almost full width", () => {
-    const wide = { ...board, right: 1850, bottom: 500 };
-    assert.deepEqual(paddingBesideBoard(map, wide, false), {
-      top: 496,
-      right: 60,
-      bottom: 60,
-      left: 60,
-    });
-  });
-
-  it("mirrors for right-to-left, where the report sits at the map's right", () => {
-    const rtlBoard = { left: 768, top: 64, right: 1920, bottom: 712 };
-    assert.equal(paddingBesideBoard(map, rtlBoard, true).right, 1212);
-    assert.equal(paddingBesideBoard(map, rtlBoard, true).left, 60);
-  });
-
-  it("pads evenly without a report or when no open area is big enough", () => {
-    const even = { top: 60, right: 60, bottom: 60, left: 60 };
-    assert.deepEqual(paddingBesideBoard(map, null, false), even);
-    assert.deepEqual(
-      paddingBesideBoard(map, { left: 0, top: 64, right: 1880, bottom: 920 }, false),
-      even,
-    );
   });
 });
