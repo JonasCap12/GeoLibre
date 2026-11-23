@@ -76,6 +76,8 @@ export function DailyReportWork({
             className={`mb-3 rounded-md ${selected ? "outline outline-2 outline-primary outline-offset-2" : ""}`}
           >
             <header
+              role="group"
+              aria-label={label}
               className="sticky top-0 z-10 mb-1 flex items-center gap-2 border-b bg-card py-1"
               onMouseEnter={() => group.front && onHoverFront(group.front)}
               onMouseLeave={() => onHoverFront(null)}
