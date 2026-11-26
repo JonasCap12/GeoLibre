@@ -7,6 +7,7 @@ import {
   readDailyReportSource,
   sourceHintDismissed,
 } from "../../lib/daily-report-board";
+import { offloadBoardParsing, type BoardWindow } from "../../lib/daily-report-worker";
 
 function browserStorage(): Storage | null {
   try {
@@ -98,11 +99,17 @@ export function DailyReportBoard({ hidden }: { hidden: boolean }) {
               typeof (host as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker ===
                 "function",
             );
-            cleanup.current = attachDailyReportAdapter(
+            const detach = attachDailyReportAdapter(
               doc,
               () => readDailyReportSource(host),
               setConfigured,
             );
+            // Manual Excel imports parse in a worker, so large files no longer freeze the board.
+            const restoreParser = offloadBoardParsing(host as unknown as BoardWindow);
+            cleanup.current = () => {
+              detach();
+              restoreParser();
+            };
           }}
         />
       </div>
