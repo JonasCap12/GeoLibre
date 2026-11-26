@@ -12122,6 +12122,22 @@
       "today": "Hôm nay",
       "tomorrow": "Ngày mai"
     },
+    "structure": {
+      "done": "Hoàn thành",
+      "active": "Đang thi công",
+      "reportDate": "Báo cáo {{date}}",
+      "progress": "Tiến độ",
+      "measured": "Tính trên {{measured}}/{{total}} hạng mục có số liệu",
+      "noDesign": "chưa có KL thiết kế",
+      "noDone": "chưa có lũy kế",
+      "more_other": "+{{count}} hạng mục khác",
+      "week": "Tuần qua",
+      "weekNone": "không tăng khối lượng",
+      "stalled_other": "Lũy kế không đổi {{count}} ngày",
+      "stalledLong_other": "Lũy kế không đổi ít nhất {{count}} ngày",
+      "noItems": "Báo cáo ngày {{date}} không có hạng mục của công trình này",
+      "clickHint": "Bấm để xem chi tiết trong báo cáo"
+    },
     "boardTitle": "Bảng báo cáo thi công ngày",
     "sourceHint": {
       "title": "Nạp báo cáo ngày để bắt đầu",
