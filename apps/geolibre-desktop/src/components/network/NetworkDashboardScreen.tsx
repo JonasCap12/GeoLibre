@@ -25,8 +25,12 @@ import { DailyReportPanels } from "./DailyReportPanels";
 import { linesForFront, type BoardReport } from "../../lib/daily-report-data";
 import { frontToday, type ReportSelection } from "../../lib/report-map-interaction";
 import { reportDashboardView, reportLegend, reportLineProgress } from "../../lib/report-map-view";
+import { structureCard } from "../../lib/structure-card";
+import { StructureHoverCard } from "./StructureHoverCard";
 import { useBoardReports } from "./useBoardReports";
+import { useReportHistory } from "./useReportHistory";
 import { useReportMapSelection } from "./useReportMapSelection";
+import { useStructureHover } from "./useStructureHover";
 import {
   dashboardView,
   NETWORK_VIEW_STORAGE,
@@ -169,6 +173,11 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
   useDashboardViews(candidates, segments, mode, colors, board.report, interaction.emphasis);
 
   const hover = useLineHover(camera, candidates, segments);
+  const structureHover = useStructureHover(camera, layers);
+  const history = useReportHistory(board.index, board.reports);
+  const structure = structureHover
+    ? structureCard(structureHover.name, structureHover.properties, board.reports, history)
+    : null;
   const label = (value: string) =>
     mode === "report"
       ? value === "unknown"
@@ -336,7 +345,14 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         </div>
       )}
 
-      {view !== "report" && hover && (
+      {view !== "report" && structureHover && structure && (
+        <StructureHoverCard
+          card={structure}
+          pointer={structureHover}
+          showClickHint={view === "split" && structure.fromReport}
+        />
+      )}
+      {view !== "report" && hover && !structureHover && (
         <div
           role="tooltip"
           className="pointer-events-none fixed z-50 max-w-xs rounded-md border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg"
