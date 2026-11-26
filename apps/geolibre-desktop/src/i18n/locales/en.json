@@ -12213,7 +12213,8 @@
     "colorBy": "Color lines by",
     "mode": {
       "status": "Status",
-      "type": "Type"
+      "type": "Type",
+      "report": "By report"
     },
     "legend": {
       "status": "Lines by status",
@@ -12271,6 +12272,11 @@
       "office": "Office work",
       "general": "General work",
       "showOnMap": "Show on map",
+      "selectFront": "Select {{name}} and show on map",
+      "locateWork": "Locate {{name}} on map",
+      "locatePhoto": "Locate photo on map",
+      "unknownProgress": "Unknown progress",
+      "progressBand": "{{range}}%",
       "resources": "Staff, equipment and issues",
       "issues": "Issues",
       "photos": "Site photos",
@@ -12279,6 +12285,25 @@
       "cumulative": "Done",
       "today": "Today",
       "tomorrow": "Tomorrow"
+    },
+    "structure": {
+      "done": "Completed",
+      "active": "In progress",
+      "reportDate": "Report {{date}}",
+      "progress": "Progress",
+      "measured": "From {{measured}} of {{total}} items with figures",
+      "noDesign": "no design quantity",
+      "noDone": "no done quantity yet",
+      "more_one": "+{{count}} more item",
+      "more_other": "+{{count}} more items",
+      "week": "Past week",
+      "weekNone": "no quantity added",
+      "stalled_one": "Done quantity unchanged for {{count}} day",
+      "stalled_other": "Done quantity unchanged for {{count}} days",
+      "stalledLong_one": "Done quantity unchanged for at least {{count}} day",
+      "stalledLong_other": "Done quantity unchanged for at least {{count}} days",
+      "noItems": "The {{date}} report has no work for this structure",
+      "clickHint": "Click to see it in the report"
     },
     "boardTitle": "Daily construction report board",
     "sourceHint": {

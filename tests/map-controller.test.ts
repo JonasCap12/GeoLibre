@@ -272,6 +272,51 @@ function internals(controller: MapController): MapControllerInternals {
   return controller as unknown as MapControllerInternals;
 }
 
+describe("temporary geometry using the selection highlight", () => {
+  it("restores the current selection, survives layer sync, and never adds a project layer", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+    const layer = pointLayer("selected");
+    controller.highlightFeature(layer, "0");
+    const overlay = {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          properties: {},
+          geometry: {
+            type: "LineString" as const,
+            coordinates: [
+              [106, 10],
+              [106, 10.01],
+            ],
+          },
+        },
+      ],
+    };
+    controller.setTransientHighlight(overlay);
+    controller.clearFeatureHighlight();
+    assert.equal(
+      fake.setDataCalls.at(-1)?.data,
+      overlay,
+      "selection updates cannot overwrite the temporary highlight",
+    );
+    controller.syncLayers([layer]);
+    assert.equal(fake.setDataCalls.at(-1)?.data, overlay);
+    assert.deepEqual(internals(controller).syncedLayers, [layer]);
+    controller.setTransientHighlight(null);
+    assert.deepEqual(fake.setDataCalls.at(-1)?.data, { type: "FeatureCollection", features: [] });
+    controller.highlightFeature(layer, "0");
+    controller.setTransientHighlight(overlay);
+    controller.setTransientHighlight(null);
+    assert.deepEqual(
+      fake.setDataCalls.at(-1)?.data,
+      layer.geojson,
+      "clearing the override restores the ordinary feature selection",
+    );
+  });
+});
+
 function pointLayer(
   id: string,
   patch: Partial<GeoLibreLayer> = {},

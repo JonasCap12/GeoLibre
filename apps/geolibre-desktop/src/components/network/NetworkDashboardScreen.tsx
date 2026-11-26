@@ -8,10 +8,8 @@ import {
   collectSegments,
   fieldValues,
   isNetworkCandidate,
-  layerView,
   readLayerConfig,
   segmentsBounds,
-  shownIndexes,
   type NetworkColorMode,
   type NetworkSegment,
 } from "../../lib/network-dashboard";
@@ -24,7 +22,15 @@ import {
 import { NetworkLayersDialog } from "./NetworkLayersDialog";
 import { DailyReportBoard } from "./DailyReportBoard";
 import { DailyReportPanels } from "./DailyReportPanels";
-import { linesForFront, type BoardFront } from "../../lib/daily-report-data";
+import { linesForFront, type BoardReport } from "../../lib/daily-report-data";
+import { frontToday, type ReportSelection } from "../../lib/report-map-interaction";
+import { reportDashboardView, reportLegend, reportLineProgress } from "../../lib/report-map-view";
+import { structureCard } from "../../lib/structure-card";
+import { StructureHoverCard } from "./StructureHoverCard";
+import { useBoardReports } from "./useBoardReports";
+import { useReportHistory } from "./useReportHistory";
+import { useReportMapSelection } from "./useReportMapSelection";
+import { useStructureHover } from "./useStructureHover";
 import {
   dashboardView,
   NETWORK_VIEW_STORAGE,
@@ -47,16 +53,6 @@ export function NetworkDashboardScreen({ camera }: { camera: DashboardCamera | n
       root.removeAttribute(NETWORK_DASHBOARD_ATTRIBUTE);
       window.dispatchEvent(new Event("resize"));
     };
-  }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !document.querySelector("[role=dialog]")) {
-        closeNetworkDashboard();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, [open]);
   return open ? <Dashboard camera={camera} /> : null;
 }
@@ -91,17 +87,21 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     }
   }, [preferredView]);
   const layers = useAppStore((state) => state.layers);
-  const [mode, setMode] = useState<NetworkColorMode>("status");
+  const [preferredMode, setMode] = useState<NetworkColorMode | "report">("report");
+  const mode = preferredMode === "report" && view !== "split" ? "status" : preferredMode;
+  const board = useBoardReports();
   const [layersOpen, setLayersOpen] = useState(false);
 
   const candidates = useMemo(() => layers.filter(isNetworkCandidate), [layers]);
   const segments = useMemo(() => collectSegments(candidates), [candidates]);
-  const entries = useMemo(() => fieldValues(segments, mode), [segments, mode]);
+  const entries = useMemo(
+    () => (mode === "report" ? reportLegend(segments, board.report) : fieldValues(segments, mode)),
+    [segments, mode, board.report],
+  );
   const colors = useMemo(
     () => new Map(entries.map((entry) => [entry.value, entry.color])),
     [entries],
   );
-  useDashboardViews(candidates, segments, mode, colors);
 
   const fitTo = useCallback(
     (lines: readonly NetworkSegment[]) => {
@@ -158,17 +158,46 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     return () => window.clearTimeout(timer);
   }, [segments, view, camera, fitTo]);
 
-  const frontLines = (pkg: string, front: BoardFront) => linesForFront(segments, pkg, front);
-  const showFront = (pkg: string, front: BoardFront) => {
-    const lines = frontLines(pkg, front);
-    if (!lines.length) return;
-    // The user picked a place: a later layout change must not reframe away from it.
+  const fitSelection = (lines: readonly NetworkSegment[]) => {
     userMoved.current = true;
     fitTo(lines);
   };
+  const interaction = useReportMapSelection(
+    view === "split",
+    camera,
+    layers,
+    segments,
+    board,
+    fitSelection,
+  );
+  useDashboardViews(candidates, segments, mode, colors, board.report, interaction.emphasis);
 
   const hover = useLineHover(camera, candidates, segments);
-  const label = (value: string) => value.trim() || t("roadNetwork.unclassified");
+  const structureHover = useStructureHover(camera, layers);
+  const history = useReportHistory(board.index, board.reports);
+  const structure = structureHover
+    ? structureCard(structureHover.name, structureHover.properties, board.reports, history)
+    : null;
+  const label = (value: string) =>
+    mode === "report"
+      ? value === "unknown"
+        ? t("roadNetwork.report.unknownProgress")
+        : t("roadNetwork.report.progressBand", {
+            range:
+              value === "80"
+                ? `≥ ${km(80)}`
+                : value === "0"
+                  ? `< ${km(20)}`
+                  : `${km(Number(value))}–<${km(Number(value) + 20)}`,
+          })
+      : value.trim() || t("roadNetwork.unclassified");
+  const hoveredReport =
+    hover && mode === "report" ? reportLineProgress(hover.segment, board.report) : null;
+  const reportDay = board.report
+    ? new Intl.DateTimeFormat(i18n.language, { timeZone: "UTC" }).format(
+        new Date(`${board.report.date}T00:00:00Z`),
+      )
+    : "";
 
   return (
     <>
@@ -203,7 +232,10 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
           aria-label={t("roadNetwork.colorBy")}
           className="flex overflow-hidden rounded-md border border-header-foreground/40 text-xs"
         >
-          {(["status", "type"] as const).map((value) => (
+          {(view === "split"
+            ? (["status", "type", "report"] as const)
+            : (["status", "type"] as const)
+          ).map((value) => (
             <button
               key={value}
               type="button"
@@ -252,17 +284,35 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
       <DailyReportBoard hidden={view !== "report"} />
       {view === "split" && (
         <DailyReportPanels
+          reports={{
+            ...board,
+            choosePackage: (pkg) => {
+              interaction.clear();
+              board.choosePackage(pkg);
+            },
+          }}
+          selection={interaction.selection}
           onLoadReports={() => setView("report")}
-          canShowFront={(pkg, front) => frontLines(pkg, front).length > 0}
-          onShowFront={showFront}
+          canShowFront={(pkg, front) => linesForFront(segments, pkg, front).length > 0}
+          onShowFront={interaction.onShowFront}
+          onHoverFront={interaction.onHoverFront}
+          locate={interaction.locate}
+          onLocate={(location) => {
+            userMoved.current = true;
+            interaction.onLocate(location);
+          }}
         />
       )}
       {view !== "report" && entries.length > 0 && (
         <section
           className="network-dashboard-legend rounded-md border bg-card/95 p-2 text-xs shadow-sm"
-          aria-label={t(`roadNetwork.legend.${mode}`)}
+          aria-label={
+            mode === "report" ? t("roadNetwork.mode.report") : t(`roadNetwork.legend.${mode}`)
+          }
         >
-          <h2 className="mb-1 font-semibold">{t(`roadNetwork.legend.${mode}`)}</h2>
+          <h2 className="mb-1 font-semibold">
+            {mode === "report" ? t("roadNetwork.mode.report") : t(`roadNetwork.legend.${mode}`)}
+          </h2>
           <ul className="space-y-1">
             {entries.map((entry) => (
               <li key={entry.value} className="flex items-center gap-2">
@@ -295,36 +345,63 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
         </div>
       )}
 
-      {view !== "report" && hover && (
+      {view !== "report" && structureHover && structure && (
+        <StructureHoverCard
+          card={structure}
+          pointer={structureHover}
+          showClickHint={view === "split" && structure.fromReport}
+        />
+      )}
+      {view !== "report" && hover && !structureHover && (
         <div
           role="tooltip"
           className="pointer-events-none fixed z-50 max-w-xs rounded-md border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg"
           style={{ left: hover.x + 12, top: hover.y + 12 }}
         >
           <p className="font-semibold">{hover.segment.name}</p>
-          {hover.segment.status.trim() && (
-            <p>
-              {t("roadNetwork.mode.status")}: {hover.segment.status.trim()}
-            </p>
+          {mode === "report" ? (
+            <>
+              <p>{reportDay}</p>
+              <p>
+                {t("roadNetwork.kpi.progress")}:{" "}
+                {hoveredReport?.percent == null
+                  ? t("roadNetwork.report.unknownProgress")
+                  : `${km(hoveredReport.percent)}%`}
+              </p>
+              {hoveredReport && board.report && (
+                <p className="mt-1">
+                  {t("roadNetwork.report.today")}:{" "}
+                  {frontToday(board.report, hoveredReport.front) || "—"}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              {hover.segment.status.trim() && (
+                <p>
+                  {t("roadNetwork.mode.status")}: {hover.segment.status.trim()}
+                </p>
+              )}
+              {hover.segment.type.trim() && (
+                <p>
+                  {t("roadNetwork.mode.type")}: {hover.segment.type.trim()}
+                </p>
+              )}
+              {hover.segment.progress !== null && (
+                <p>
+                  {t("roadNetwork.kpi.progress")}: {km(hover.segment.progress)}%
+                  {hover.segment.plan !== null &&
+                    ` · ${t("roadNetwork.kpi.plan")}: ${km(hover.segment.plan)}%`}
+                </p>
+              )}
+              {hover.segment.year !== null && (
+                <p>
+                  {t("roadNetwork.year")}: {hover.segment.year}
+                </p>
+              )}
+              <p>{km(hover.segment.km)} km</p>
+            </>
           )}
-          {hover.segment.type.trim() && (
-            <p>
-              {t("roadNetwork.mode.type")}: {hover.segment.type.trim()}
-            </p>
-          )}
-          {hover.segment.progress !== null && (
-            <p>
-              {t("roadNetwork.kpi.progress")}: {km(hover.segment.progress)}%
-              {hover.segment.plan !== null &&
-                ` · ${t("roadNetwork.kpi.plan")}: ${km(hover.segment.plan)}%`}
-            </p>
-          )}
-          {hover.segment.year !== null && (
-            <p>
-              {t("roadNetwork.year")}: {hover.segment.year}
-            </p>
-          )}
-          <p>{km(hover.segment.km)} km</p>
         </div>
       )}
 
@@ -341,24 +418,25 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
 function useDashboardViews(
   candidates: readonly GeoLibreLayer[],
   segments: readonly NetworkSegment[],
-  mode: NetworkColorMode,
+  mode: NetworkColorMode | "report",
   colors: ReadonlyMap<string, string>,
+  report: BoardReport | null,
+  emphasis: ReportSelection | null,
 ) {
   const applied = useRef(new Set<string>());
   useEffect(() => {
-    const shown = shownIndexes(segments);
     const store = useAppStore.getState();
     for (const layer of candidates) {
       const config = readLayerConfig(layer);
       const view = config.included
-        ? layerView(config, mode, colors, shown.get(layer.id) ?? [])
+        ? reportDashboardView(layer.id, config, segments, mode, colors, report, emphasis)
         : undefined;
       if (JSON.stringify(view) === JSON.stringify(layer.progressDashboard)) continue;
       store.updateLayer(layer.id, { progressDashboard: view });
       if (view) applied.current.add(layer.id);
       else applied.current.delete(layer.id);
     }
-  }, [candidates, segments, mode, colors]);
+  }, [candidates, segments, mode, colors, report, emphasis]);
   useEffect(
     () => () => {
       const store = useAppStore.getState();

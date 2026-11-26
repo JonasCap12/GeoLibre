@@ -59,8 +59,16 @@ export interface BoardReport {
   staff: BoardCount[];
   equipment: { name: string; rows: BoardCount[] }[];
   work: BoardWorkItem[];
+  muiRows: BoardFrontSummary[];
   issues: string[];
   photos: BoardPhoto[];
+}
+
+export interface BoardFrontSummary {
+  front: string;
+  planned: number | null;
+  done: number | null;
+  rateInFile: number | null;
 }
 
 /** Each package's report dates, oldest first. */
@@ -146,6 +154,13 @@ export function parseBoardReport(value: unknown): BoardReport | null {
           status: text(work.status),
         },
       ];
+    }),
+    muiRows: list(raw.muiRows).flatMap((item) => {
+      const row = record(item);
+      const front = text(row.mui);
+      return front
+        ? [{ front, planned: num(row.bvtk), done: num(row.lk), rateInFile: num(row.rateFile) }]
+        : [];
     }),
     issues: list(raw.issues).map(text).filter(Boolean),
     photos: list(raw.photos).map((item) => {
@@ -269,7 +284,8 @@ const fold = (value: string) =>
 const words = (value: string) =>
   fold(value)
     .split(/[^a-z0-9]+/)
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((word) => (/^\d+$/.test(word) ? String(Number(word)) : word));
 
 /**
  * The map lines that draw one work front: their name carries both the package

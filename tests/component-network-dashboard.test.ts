@@ -51,7 +51,7 @@ describe("NetworkDashboardScreen", () => {
     assert.equal(frame.getAttribute("src"), "/daily-report/index.html");
     assert.equal(frame.getAttribute("allow"), "fullscreen");
     assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "split");
-    assert.ok(screen.getByRole("region", { name: "Lines by status" }));
+    assert.ok(screen.getByRole("region", { name: "By report" }));
     assert.equal(screen.queryByText("Total length"), null);
     assert.ok(useAppStore.getState().layers[0].progressDashboard);
     assert.equal(useAppStore.getState().isDirty, false);

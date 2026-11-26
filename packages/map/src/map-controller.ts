@@ -1417,6 +1417,7 @@ export class MapController implements MapEngine {
     this.syncLayerControlState();
     this.syncClusterZoomListener(layers);
     this.syncPendingNativeFilterListener(layers);
+    if (this.transientHighlight) this.syncHighlight(this.transientHighlight);
   }
 
   /**
@@ -2111,6 +2112,20 @@ export class MapController implements MapEngine {
     return results;
   }
 
+  private selectionHighlight: FeatureCollection = EMPTY_HIGHLIGHT;
+  private transientHighlight: FeatureCollection | null = null;
+
+  /** Reuses the selection overlay without introducing any project layer or history entry. */
+  setTransientHighlight(features: FeatureCollection | null): void {
+    this.transientHighlight = features;
+    this.syncHighlight(features ?? this.selectionHighlight);
+  }
+
+  private syncSelectionHighlight(features: FeatureCollection): void {
+    this.selectionHighlight = features;
+    this.syncHighlight(this.transientHighlight ?? features);
+  }
+
   highlightFeature(
     layer: GeoLibreLayer | undefined,
     featureId: string | string[] | null,
@@ -2123,7 +2138,7 @@ export class MapController implements MapEngine {
     );
 
     if (!layer?.geojson || ids.length === 0) {
-      this.syncHighlight(EMPTY_HIGHLIGHT);
+      this.syncSelectionHighlight(EMPTY_HIGHLIGHT);
       return;
     }
 
@@ -2137,7 +2152,7 @@ export class MapController implements MapEngine {
       .map((id) => featureById.get(id))
       .filter((feature): feature is Feature => feature?.geometry != null);
     if (features.length === 0) {
-      this.syncHighlight(EMPTY_HIGHLIGHT);
+      this.syncSelectionHighlight(EMPTY_HIGHLIGHT);
       return;
     }
 
@@ -2145,7 +2160,7 @@ export class MapController implements MapEngine {
       type: "FeatureCollection",
       features: features as Feature<Geometry>[],
     };
-    this.syncHighlight(featureCollection);
+    this.syncSelectionHighlight(featureCollection);
 
     if (options.fit) {
       this.fitFeature(featureCollection);
@@ -2153,7 +2168,7 @@ export class MapController implements MapEngine {
   }
 
   clearFeatureHighlight(): void {
-    this.syncHighlight(EMPTY_HIGHLIGHT);
+    this.syncSelectionHighlight(EMPTY_HIGHLIGHT);
   }
 
   /** Current map projection, normalized to the two values we persist. */
