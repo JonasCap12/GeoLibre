@@ -1,86 +1,20 @@
 import { Button } from "@geolibre/ui";
-import { ChevronLeft, ChevronRight, CloudSun, Upload, Users, Wrench, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  CloudSun,
+  MapPin,
+  Upload,
+  Users,
+  Wrench,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  firstPackage,
-  frontRange,
-  latestDate,
-  readPhotos,
-  readReport,
-  readReportIndex,
-  stepDate,
-  workByFront,
-  workRate,
-  type BoardFront,
-  type BoardReport,
-  type BoardWorkItem,
-  type ReportIndex,
-} from "../../lib/daily-report-data";
-
-/** The board's stored reports, re-read whenever the board writes (BroadcastChannel "bcn"). */
-function useBoardReports() {
-  const [index, setIndex] = useState<ReportIndex | null>(null);
-  const [pkg, setPkg] = useState<string | null>(null);
-  const [date, setDate] = useState<string | null>(null);
-  const [report, setReport] = useState<BoardReport | null>(null);
-  const [revision, setRevision] = useState(0);
-
-  useEffect(() => {
-    let channel: BroadcastChannel | null = null;
-    try {
-      channel = new BroadcastChannel("bcn");
-      channel.onmessage = () => setRevision((value) => value + 1);
-    } catch {
-      /* Without the channel the panels refresh when the dashboard reopens. */
-    }
-    return () => channel?.close();
-  }, []);
-
-  useEffect(() => {
-    let live = true;
-    void readReportIndex(window).then((next) => {
-      if (!live) return;
-      setIndex(next ?? {});
-    });
-    return () => {
-      live = false;
-    };
-  }, [revision]);
-
-  // Keep the choice while it still exists; otherwise the first package, latest day.
-  const shownPkg = pkg && index?.[pkg] ? pkg : index ? firstPackage(index) : null;
-  const shownDate =
-    date && shownPkg && index?.[shownPkg]?.includes(date)
-      ? date
-      : latestDate(index ?? {}, shownPkg);
-
-  useEffect(() => {
-    let live = true;
-    if (!shownPkg || !shownDate) {
-      setReport(null);
-      return;
-    }
-    void readReport(window, shownPkg, shownDate).then((next) => {
-      if (live) setReport(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, [shownPkg, shownDate, revision]);
-
-  return {
-    index,
-    pkg: shownPkg,
-    date: shownDate,
-    report: report && report.pkg === shownPkg && report.date === shownDate ? report : null,
-    choosePackage: (next: string) => {
-      setPkg(next);
-      setDate(null);
-    },
-    chooseDate: setDate,
-  };
-}
+import { readPhotos, stepDate, type BoardReport } from "../../lib/daily-report-data";
+import { orderedPhotos } from "../../lib/report-map-interaction";
+import { DailyReportWork, type ReportWorkActions } from "./DailyReportWork";
+import type { useBoardReports } from "./useBoardReports";
 
 /** Object URLs for a report's photos, revoked when the report changes. */
 function usePhotoUrls(report: BoardReport | null): Map<string, string> {
@@ -110,12 +44,10 @@ function usePhotoUrls(report: BoardReport | null): Map<string, string> {
   return urls;
 }
 
-interface DailyReportPanelsProps {
+interface DailyReportPanelsProps extends ReportWorkActions {
+  reports: ReturnType<typeof useBoardReports>;
   /** Open the original board, where reports are loaded. */
   onLoadReports: () => void;
-  /** Whether the map has lines for a front, and showing them. */
-  canShowFront: (pkg: string, front: BoardFront) => boolean;
-  onShowFront: (pkg: string, front: BoardFront) => void;
 }
 
 /** The daily report laid out around the map: top bar, work, resources, photos. */
@@ -123,9 +55,14 @@ export function DailyReportPanels({
   onLoadReports,
   canShowFront,
   onShowFront,
+  reports,
+  selection,
+  onHoverFront,
+  locate,
+  onLocate,
 }: DailyReportPanelsProps) {
   const { t, i18n } = useTranslation();
-  const { index, pkg, date, report, choosePackage, chooseDate } = useBoardReports();
+  const { index, pkg, date, report, choosePackage, chooseDate } = reports;
   const photoUrls = usePhotoUrls(report);
   const [enlarged, setEnlarged] = useState<number | null>(null);
   const number = useMemo(
@@ -142,7 +79,10 @@ export function DailyReportPanels({
     });
     return (iso: string) => format.format(new Date(`${iso}T00:00:00Z`));
   }, [i18n.language]);
-  const groups = useMemo(() => (report ? workByFront(report) : []), [report]);
+  const photos = useMemo(
+    () => (report ? orderedPhotos(report, selection?.pkg === pkg ? selection.frontId : null) : []),
+    [report, selection, pkg],
+  );
   const packages = Object.keys(index ?? {}).sort();
   const earlier = stepDate(index ?? {}, pkg, date, -1);
   const later = stepDate(index ?? {}, pkg, date, 1);
@@ -177,6 +117,7 @@ export function DailyReportPanels({
   }
 
   const photo = enlarged !== null ? report?.photos[enlarged] : undefined;
+  const photoLocation = photo ? locate(photo.caption) : null;
   return (
     <>
       <section
@@ -249,44 +190,16 @@ export function DailyReportPanels({
         </div>
       </section>
 
-      <section
-        className="daily-report-work overflow-y-auto border-e bg-card p-3 text-sm"
-        aria-label={t("roadNetwork.report.work")}
-      >
-        <h2 className="mb-2 font-semibold">{t("roadNetwork.report.work")}</h2>
-        {groups.length === 0 && (
-          <p className="text-xs text-muted-foreground">{t("roadNetwork.report.none")}</p>
-        )}
-        {groups.map((group) => (
-          <section key={group.id} className="mb-3">
-            <header className="sticky top-0 z-10 mb-1 flex items-center gap-2 border-b bg-card py-1">
-              <h3 className="min-w-0 flex-1 truncate text-xs font-bold uppercase tracking-wide text-primary">
-                {group.front?.name ??
-                  t(group.isOffice ? "roadNetwork.report.office" : "roadNetwork.report.general")}
-                {group.front && frontRange(group.front) && (
-                  <span className="ms-2 font-normal normal-case text-muted-foreground">
-                    {frontRange(group.front)}
-                  </span>
-                )}
-              </h3>
-              {group.front && pkg && canShowFront(pkg, group.front) && (
-                <button
-                  type="button"
-                  className="shrink-0 text-xs text-primary hover:underline"
-                  onClick={() => onShowFront(pkg, group.front!)}
-                >
-                  {t("roadNetwork.report.showOnMap")}
-                </button>
-              )}
-            </header>
-            <ul className="space-y-2">
-              {group.items.map((item, i) => (
-                <WorkRow key={`${item.group}|${item.name}|${i}`} item={item} number={number} />
-              ))}
-            </ul>
-          </section>
-        ))}
-      </section>
+      <DailyReportWork
+        report={report}
+        selection={selection}
+        canShowFront={canShowFront}
+        onShowFront={onShowFront}
+        onHoverFront={onHoverFront}
+        locate={locate}
+        onLocate={onLocate}
+        number={number}
+      />
 
       <section
         className="daily-report-side space-y-4 overflow-y-auto border-s bg-card p-3 text-sm"
@@ -337,10 +250,13 @@ export function DailyReportPanels({
           <p className="text-xs text-muted-foreground">{t("roadNetwork.report.noPhotos")}</p>
         ) : (
           <ul className="flex min-h-0 flex-1 gap-2 overflow-x-auto">
-            {report?.photos.map((item, i) => {
+            {photos.map(({ photo: item, index: i, dimmed }) => {
               const url = item.id ? photoUrls.get(item.id) : undefined;
               return (
-                <li key={`${item.id ?? "photo"}-${i}`} className="h-full shrink-0">
+                <li
+                  key={`${item.id ?? "photo"}-${i}`}
+                  className={`h-full shrink-0 ${dimmed ? "opacity-35" : ""}`}
+                >
                   <button
                     type="button"
                     className="flex h-full w-48 flex-col overflow-hidden rounded-md border bg-background text-start"
@@ -382,6 +298,20 @@ export function DailyReportPanels({
           />
           {photo.caption && (
             <p className="max-w-3xl text-center text-sm text-white">{photo.caption}</p>
+          )}
+          {photoLocation && (
+            <Button
+              variant="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                onLocate(photoLocation);
+                setEnlarged(null);
+              }}
+              aria-label={t("roadNetwork.report.locatePhoto")}
+            >
+              <MapPin className="h-4 w-4 me-1.5" />
+              {t("roadNetwork.report.showOnMap")}
+            </Button>
           )}
           <Button
             size="icon"
@@ -428,55 +358,6 @@ function Figure({
         <p className="font-semibold tabular-nums">{children}</p>
       </div>
     </div>
-  );
-}
-
-function WorkRow({ item, number }: { item: BoardWorkItem; number: (value: number) => string }) {
-  const { t } = useTranslation();
-  const rate = workRate(item);
-  const done =
-    item.done !== null
-      ? `${number(item.done)}${item.planned ? ` / ${number(item.planned)}` : ""} ${item.unit}`.trim()
-      : item.doneText;
-  return (
-    <li className="rounded-md border bg-background p-2">
-      {item.group && item.group !== item.name && (
-        <p className="truncate text-[11px] font-semibold text-muted-foreground">{item.group}</p>
-      )}
-      <p className="font-medium leading-snug">{item.name}</p>
-      {(done || rate !== null) && (
-        <div className="mt-1 flex items-center gap-2 text-xs">
-          <span className="min-w-0 flex-1 truncate text-muted-foreground">
-            {done && `${t("roadNetwork.report.cumulative")}: ${done}`}
-          </span>
-          {rate !== null && (
-            <>
-              <span className="h-1.5 w-16 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-                <span
-                  className="block h-full rounded-full bg-primary"
-                  style={{ width: `${Math.min(Math.max(rate, 0), 1) * 100}%` }}
-                />
-              </span>
-              <span className="w-10 text-end font-semibold tabular-nums">
-                {number(rate * 100)}%
-              </span>
-            </>
-          )}
-        </div>
-      )}
-      {item.today && (
-        <p className="mt-1 text-xs">
-          <span className="font-semibold">{t("roadNetwork.report.today")}: </span>
-          {item.today}
-        </p>
-      )}
-      {item.tomorrow && (
-        <p className="text-xs text-muted-foreground">
-          <span className="font-semibold">{t("roadNetwork.report.tomorrow")}: </span>
-          {item.tomorrow}
-        </p>
-      )}
-    </li>
   );
 }
 

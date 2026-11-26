@@ -179,6 +179,8 @@ export interface MapEngine {
     options?: { fit?: boolean },
   ): void;
   clearFeatureHighlight(): void;
+  /** Override the selection highlight with a temporary geometry; null restores the selection. */
+  setTransientHighlight?(features: FeatureCollection | null): void;
   /** Draw a temporary search marker or cell outline; dispose clears only this result. */
   showSearchResult(geometry: Point | Polygon): () => void;
   /**
