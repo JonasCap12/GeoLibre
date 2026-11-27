@@ -89,6 +89,22 @@ export function dismissSourceHint(storage: Pick<Storage, "setItem"> | null): voi
   }
 }
 
+/**
+ * A dialog is open in the page or in a same-origin frame, such as the board's
+ * review or settings dialog. Keys like Escape belong to that dialog then.
+ */
+export function dialogOpen(doc: Document): boolean {
+  if (doc.querySelector("[role=dialog]")) return true;
+  for (const frame of doc.querySelectorAll("iframe")) {
+    try {
+      if (frame.contentDocument?.querySelector("[role=dialog]")) return true;
+    } catch {
+      /* A cross-origin frame is not ours to inspect. */
+    }
+  }
+  return false;
+}
+
 export const NO_REPORT_SOURCE_TOAST =
   "Lỗi chưa có link dữ liệu (⚙ Cài đặt) và chưa có file trong DuLieu";
 

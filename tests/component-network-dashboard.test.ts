@@ -7,8 +7,12 @@ import type { GeoLibreLayer } from "@geolibre/core";
 // Loaded after the harness so its CSS imports and Vite globals are handled.
 const { NetworkDashboardScreen } =
   await import("../apps/geolibre-desktop/src/components/network/NetworkDashboardScreen");
-const { openNetworkDashboard, closeNetworkDashboard, NETWORK_DASHBOARD_ATTRIBUTE } =
-  await import("../apps/geolibre-desktop/src/lib/network-dashboard-screen");
+const {
+  openNetworkDashboard,
+  closeNetworkDashboard,
+  isNetworkDashboardOpen,
+  NETWORK_DASHBOARD_ATTRIBUTE,
+} = await import("../apps/geolibre-desktop/src/lib/network-dashboard-screen");
 
 /** One degree of latitude: ~111.2 km. */
 const ONE_DEGREE = [
@@ -156,6 +160,47 @@ describe("NetworkDashboardScreen", () => {
     dialog.remove();
     await settleReview();
     assert.equal(currentView(), "report");
+    act(() => closeNetworkDashboard());
+  });
+
+  it("hands focus and Escape to the board's review instead of closing the dashboard", async () => {
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    const board = fakeBoard();
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    const review = board.doc.createElement("div");
+    review.id = "upOv";
+    review.innerHTML = '<div role="dialog"><button data-x>Đóng</button></div>';
+    let focused = 0;
+    review.querySelector("button")!.focus = () => {
+      focused++;
+    };
+    board.doc.body.appendChild(review);
+    await settleReview();
+    assert.equal(currentView(), "report");
+    assert.equal(focused, 1, "keyboard focus moves into the review");
+    // Focus can still be in the dashboard (a click outside the frame): Escape must not close it.
+    fireEvent.keyDown(window, { key: "Escape" });
+    assert.equal(isNetworkDashboardOpen(), true);
+    assert.equal(currentView(), "report");
+    review.remove();
+    await settleReview();
+    assert.equal(currentView(), "split");
+    fireEvent.keyDown(window, { key: "Escape" });
+    assert.equal(isNetworkDashboardOpen(), false, "with no dialog open, Escape closes as before");
+  });
+
+  it("forgets a cancelled picker, so a later board dialog does not take over the view", async () => {
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    const board = fakeBoard();
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    board.doc.getElementById("fileIn")!.dispatchEvent(new Event("cancel"));
+    const dialog = board.doc.createElement("div");
+    dialog.id = "upOv";
+    board.doc.body.appendChild(dialog);
+    await settleReview();
+    assert.equal(currentView(), "split");
     act(() => closeNetworkDashboard());
   });
 
