@@ -29,13 +29,14 @@ const report = (goi: string, date = "2026-11-19", rate = 0.7) => ({
     { part: "C", grp: "CVN Km149+300", name: "Footing", mui: "M02" },
   ],
 });
-function installReports() {
-  const docs: Record<string, unknown> = {
+function installReports(
+  docs: Record<string, unknown> = {
     "bcn/meta": { idx: { XL01: ["2026-11-18", "2026-11-19"], XL02: ["2026-11-19"] } },
     "bcn_XL01/2026-11-19": report("XL01"),
     "bcn_XL01/2026-11-18": report("XL01", "2026-11-18", 0.3),
     "bcn_XL02/2026-11-19": report("XL02"),
-  };
+  },
+) {
   const previous = window.indexedDB;
   Object.defineProperty(window, "indexedDB", {
     configurable: true,
@@ -119,6 +120,46 @@ const flush = () =>
   });
 
 describe("report/map selection wiring", () => {
+  it("refreshes panels through bcn after apply and opens the populated top-bar picker", async (test) => {
+    const docs: Record<string, unknown> = { "bcn/meta": { idx: {} } };
+    test.after(installReports(docs));
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    await waitFor(() => assert.ok(screen.getByText(/No daily reports in this browser yet/)));
+    const frame = screen.getByTitle("Daily construction report board") as HTMLIFrameElement;
+    const doc = document.implementation.createHTMLDocument("board");
+    doc.body.innerHTML = '<input type="file" id="fileIn" hidden>';
+    Object.defineProperty(frame, "contentDocument", { configurable: true, value: doc });
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: window });
+    fireEvent.load(frame);
+    let picks = 0;
+    doc.getElementById("fileIn")!.onclick = () => {
+      picks++;
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    assert.equal(picks, 1);
+    const review = doc.createElement("div");
+    review.id = "upOv";
+    doc.body.appendChild(review);
+    await flush();
+    assert.equal(document.documentElement.getAttribute("data-network-dashboard"), "report");
+    // Model the board's apply: it writes its docs, broadcasts, then closes review.
+    docs["bcn/meta"] = { idx: { XL01: ["2026-11-19"] } };
+    docs["bcn_XL01/2026-11-19"] = report("XL01");
+    const channel = new BroadcastChannel("bcn");
+    test.after(() => channel.close());
+    channel.postMessage({ key: "bcn/meta" });
+    review.remove();
+    await waitFor(() => assert.ok(screen.getByText("Road work")));
+    assert.equal(document.documentElement.getAttribute("data-network-dashboard"), "split");
+    assert.ok(screen.getByRole("button", { name: "XL01" }));
+    localStorage.setItem("bcn-links", '{"XL01":"https://example.sharepoint.com/report.xlsx"}');
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    assert.equal(picks, 2, "populated top bar also opens the picker synchronously");
+    assert.equal(document.documentElement.getAttribute("data-network-dashboard"), "split");
+    act(() => closeNetworkDashboard());
+  });
+
   it("map line and point clicks select/scroll report groups, hover restores selection, locate uses the controller, and clear leaves project/history intact", async (test) => {
     test.after(installReports());
     const layers = routes();

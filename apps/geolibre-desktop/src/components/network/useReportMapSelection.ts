@@ -4,6 +4,7 @@ import {
   type GeoLibreLayer,
 } from "@geolibre/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { dialogOpen } from "../../lib/daily-report-board";
 import { linesForFront, type BoardFront } from "../../lib/daily-report-data";
 import { readLayerConfig, type NetworkSegment } from "../../lib/network-dashboard";
 import { closeNetworkDashboard } from "../../lib/network-dashboard-screen";
@@ -101,7 +102,8 @@ export function useReportMapSelection(
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || document.querySelector("[role=dialog]")) return;
+      // The board's own dialogs (its review after "Nạp báo cáo") close on Escape themselves.
+      if (event.key !== "Escape" || dialogOpen(document)) return;
       if (enabled && (selection || hovered || location)) {
         event.preventDefault();
         clear();

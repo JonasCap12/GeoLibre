@@ -46,7 +46,7 @@ function usePhotoUrls(report: BoardReport | null): Map<string, string> {
 
 interface DailyReportPanelsProps extends ReportWorkActions {
   reports: ReturnType<typeof useBoardReports>;
-  /** Open the original board, where reports are loaded. */
+  /** Open the original board's file picker for a manual import. */
   onLoadReports: () => void;
 }
 
