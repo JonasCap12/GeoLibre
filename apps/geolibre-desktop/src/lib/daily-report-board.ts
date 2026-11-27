@@ -97,11 +97,13 @@ export function attachDailyReportAdapter(
   doc: Document,
   readSource: () => Promise<boolean | null>,
   onSource: (configured: boolean | null) => void,
+  onReviewChange?: (open: boolean) => void,
 ): () => void {
   let disposed = false;
   let configured: boolean | null = null;
   let replaying = false;
   let settingsOpen = Boolean(doc.getElementById("setOv"));
+  let reviewOpen = Boolean(doc.getElementById("upOv"));
   let refreshId = 0;
   const removeOrphanToast = () => {
     if (configured !== false) return;
@@ -144,6 +146,11 @@ export function attachDailyReportAdapter(
     const open = Boolean(doc.getElementById("setOv"));
     if (settingsOpen && !open) void refresh();
     settingsOpen = open;
+    const review = Boolean(doc.getElementById("upOv"));
+    if (review !== reviewOpen) {
+      reviewOpen = review;
+      onReviewChange?.(review);
+    }
   });
   observer.observe(doc.body, { childList: true, subtree: true });
   doc.addEventListener("click", click, true);

@@ -28,6 +28,7 @@ import { reportDashboardView, reportLegend, reportLineProgress } from "../../lib
 import { structureCard } from "../../lib/structure-card";
 import { StructureHoverCard } from "./StructureHoverCard";
 import { useBoardReports } from "./useBoardReports";
+import { useDailyReportImport } from "./useDailyReportImport";
 import { useReportHistory } from "./useReportHistory";
 import { useReportMapSelection } from "./useReportMapSelection";
 import { useStructureHover } from "./useStructureHover";
@@ -73,7 +74,8 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
     }
     return null;
   });
-  const view = dashboardView(preferredView, narrow);
+  const reportImport = useDailyReportImport();
+  const view = reportImport.reviewing ? "report" : dashboardView(preferredView, narrow);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute(NETWORK_DASHBOARD_ATTRIBUTE, view);
@@ -220,7 +222,10 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
                 type="button"
                 aria-pressed={view === value}
                 className={`px-2 py-1.5 font-medium ${view === value ? "bg-header-foreground text-header" : "hover:bg-header-foreground/10"}`}
-                onClick={() => setView(value)}
+                onClick={() => {
+                  reportImport.chooseView();
+                  setView(value);
+                }}
               >
                 {t(`roadNetwork.view.${value}`)}
               </button>
@@ -281,7 +286,11 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
       </header>
 
       {/* Kept mounted off-screen too: it re-reads synced report files on open. */}
-      <DailyReportBoard hidden={view !== "report"} />
+      <DailyReportBoard
+        hidden={view !== "report"}
+        frame={reportImport.frame}
+        onReviewChange={reportImport.onReviewChange}
+      />
       {view === "split" && (
         <DailyReportPanels
           reports={{
@@ -292,7 +301,7 @@ function Dashboard({ camera }: { camera: DashboardCamera | null }) {
             },
           }}
           selection={interaction.selection}
-          onLoadReports={() => setView("report")}
+          onLoadReports={reportImport.loadReports}
           canShowFront={(pkg, front) => linesForFront(segments, pkg, front).length > 0}
           onShowFront={interaction.onShowFront}
           onHoverFront={interaction.onHoverFront}

@@ -41,6 +41,27 @@ function routesLayer(): GeoLibreLayer {
   } as unknown as GeoLibreLayer;
 }
 
+function fakeBoard() {
+  const frame = screen.getByTitle("Daily construction report board") as HTMLIFrameElement;
+  const doc = document.implementation.createHTMLDocument("board");
+  doc.body.innerHTML = '<input id="fileIn" type="file" multiple hidden>';
+  Object.defineProperty(frame, "contentDocument", { configurable: true, value: doc });
+  Object.defineProperty(frame, "contentWindow", { configurable: true, value: window });
+  let picks = 0;
+  doc.getElementById("fileIn")!.onclick = () => {
+    picks++;
+  };
+  fireEvent.load(frame);
+  return { doc, picks: () => picks };
+}
+
+const settleReview = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+
+const currentView = () => document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE);
+
 describe("NetworkDashboardScreen", () => {
   it("embeds the board only while open, applies real map views and cleans up", () => {
     useAppStore.setState({ layers: [routesLayer()], isDirty: false });
@@ -67,10 +88,11 @@ describe("NetworkDashboardScreen", () => {
     assert.equal(document.documentElement.hasAttribute(NETWORK_DASHBOARD_ATTRIBUTE), false);
   });
 
-  it("lays the report around the map and sends an empty browser to the board to load one", async () => {
+  it("opens the empty-state picker synchronously and restores split after either review close", async () => {
     useAppStore.setState({ layers: [routesLayer()] });
     render(createElement(NetworkDashboardScreen, { camera: null }));
     act(() => openNetworkDashboard());
+    const board = fakeBoard();
     assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "split");
     assert.equal(
       document.querySelector(".network-dashboard-board")?.hasAttribute("hidden"),
@@ -82,9 +104,75 @@ describe("NetworkDashboardScreen", () => {
     });
     assert.ok(screen.getByText(/No daily reports in this browser yet/));
     fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
-    assert.equal(document.documentElement.getAttribute(NETWORK_DASHBOARD_ATTRIBUTE), "report");
-    assert.equal(document.querySelector(".network-dashboard-board")?.hasAttribute("hidden"), false);
+    assert.equal(board.picks(), 1, "picker opens before the click handler returns");
+    assert.equal(currentView(), "split", "cancelling the picker leaves the view alone");
+    await settleReview();
+    assert.equal(currentView(), "split");
+    for (const close of ["apply", "cancel"]) {
+      if (close === "cancel") fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+      const dialog = board.doc.createElement("div");
+      dialog.id = "upOv";
+      board.doc.body.appendChild(dialog);
+      await settleReview();
+      assert.equal(currentView(), "report");
+      assert.equal(
+        document.querySelector(".network-dashboard-board")?.hasAttribute("hidden"),
+        false,
+      );
+      assert.notEqual(localStorage.getItem("geolibre-network-dashboard-view"), "report");
+      dialog.remove();
+      await settleReview();
+      assert.equal(currentView(), "split", close);
+    }
     act(() => closeNetworkDashboard());
+  });
+
+  it("keeps a manually chosen report view when the board's own review closes", async () => {
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    const board = fakeBoard();
+    fireEvent.click(screen.getByRole("button", { name: "Report only" }));
+    const dialog = board.doc.createElement("div");
+    dialog.id = "upOv";
+    board.doc.body.appendChild(dialog);
+    await settleReview();
+    dialog.remove();
+    await settleReview();
+    assert.equal(currentView(), "report");
+    act(() => closeNetworkDashboard());
+  });
+
+  it("honours an explicit view choice during a panel-requested review", async () => {
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    const board = fakeBoard();
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    const dialog = board.doc.createElement("div");
+    dialog.id = "upOv";
+    board.doc.body.appendChild(dialog);
+    await settleReview();
+    assert.equal(currentView(), "report");
+    fireEvent.click(screen.getByRole("button", { name: "Report only" }));
+    dialog.remove();
+    await settleReview();
+    assert.equal(currentView(), "report");
+    act(() => closeNetworkDashboard());
+  });
+
+  it("uses the picker with a synced source and ignores review changes after unmount", async () => {
+    localStorage.setItem("bcn-links", '{"XL01":"https://example.sharepoint.com/report.xlsx"}');
+    render(createElement(NetworkDashboardScreen, { camera: null }));
+    act(() => openNetworkDashboard());
+    const board = fakeBoard();
+    fireEvent.click(screen.getByRole("button", { name: "Load reports" }));
+    assert.equal(board.picks(), 1);
+    assert.equal(currentView(), "split");
+    act(() => closeNetworkDashboard());
+    const dialog = board.doc.createElement("div");
+    dialog.id = "upOv";
+    board.doc.body.appendChild(dialog);
+    await settleReview();
+    assert.equal(currentView(), null);
   });
 
   it("persists the selected view across closing and reopening", () => {

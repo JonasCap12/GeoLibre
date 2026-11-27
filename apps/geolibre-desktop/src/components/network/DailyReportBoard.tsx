@@ -1,5 +1,5 @@
 import { Button } from "@geolibre/ui";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import {
   attachDailyReportAdapter,
@@ -17,9 +17,17 @@ function browserStorage(): Storage | null {
   }
 }
 
-export function DailyReportBoard({ hidden }: { hidden: boolean }) {
+export function DailyReportBoard({
+  hidden,
+  frame,
+  onReviewChange,
+}: {
+  hidden: boolean;
+  frame: RefObject<HTMLIFrameElement | null>;
+  onReviewChange: (open: boolean) => void;
+}) {
   const { t } = useTranslation();
-  const board = useRef<HTMLIFrameElement>(null);
+  const board = frame;
   const cleanup = useRef<(() => void) | undefined>(undefined);
   const [configured, setConfigured] = useState<boolean | null>(null);
   // Once reports are loaded by hand, the header button already opens the picker,
@@ -33,7 +41,7 @@ export function DailyReportBoard({ hidden }: { hidden: boolean }) {
       observer.disconnect();
       cleanup.current?.();
     };
-  }, []);
+  }, [board]);
   return (
     <section
       className="network-dashboard-board bg-background"
@@ -103,6 +111,7 @@ export function DailyReportBoard({ hidden }: { hidden: boolean }) {
               doc,
               () => readDailyReportSource(host),
               setConfigured,
+              onReviewChange,
             );
             // Manual Excel imports parse in a worker, so large files no longer freeze the board.
             const restoreParser = offloadBoardParsing(host as unknown as BoardWindow);
